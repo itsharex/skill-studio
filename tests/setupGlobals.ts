@@ -54,6 +54,11 @@ if (typeof Element !== "undefined") {
   Element.prototype.scrollIntoView ??= () => {};
 }
 
+// Radix 的浮层定位会用到它，jsdom 没有实现
+if (typeof document !== "undefined" && !document.elementFromPoint) {
+  document.elementFromPoint = () => null;
+}
+
 if (typeof window !== "undefined" && !window.matchMedia) {
   window.matchMedia = vi.fn().mockImplementation((query: string) => ({
     matches: false,

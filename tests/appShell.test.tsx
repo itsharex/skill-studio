@@ -1,60 +1,77 @@
-import { render, screen } from "@testing-library/react";
+import { screen, waitFor } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
-import { beforeEach, describe, expect, it, vi } from "vitest";
-import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
-import { ThemeProvider } from "@/components/theme-provider";
+import { describe, expect, it } from "vitest";
 import App from "@/App";
+import { claudeAgent, codexAgent, handlers } from "./mocks/tauri";
+import { renderWithProviders } from "./utils/render";
 
-vi.mock("@tauri-apps/api/core", () => ({
-  invoke: vi.fn().mockResolvedValue(undefined),
-}));
-
-function renderApp() {
-  const client = new QueryClient({
-    defaultOptions: { queries: { retry: false } },
-  });
-  return render(
-    <QueryClientProvider client={client}>
-      <ThemeProvider>
-        <App />
-      </ThemeProvider>
-    </QueryClientProvider>,
-  );
+function withAgents() {
+  handlers.set("list_agents", () => [claudeAgent, codexAgent]);
 }
 
 describe("窗口壳与侧栏导航", () => {
-  beforeEach(() => {
-    localStorage.clear();
-  });
-
-  it("首次启动默认停在「全局 Skill」并高亮该项", () => {
-    renderApp();
-    // 用 aria-current 判定选中项，不依赖具体的 Tailwind class
-    const active = screen.getByRole("button", { current: "page" });
+  it("首次启动默认停在「全局 Skill」并高亮该项", async () => {
+    withAgents();
+    renderWithProviders(<App />);
+    const active = await screen.findByRole("button", { current: "page" });
     expect(active.textContent).toBe("全局 Skill");
   });
 
-  it("点击侧栏切换视图，并把选择持久化到 localStorage", async () => {
-    const user = userEvent.setup();
-    renderApp();
-    await user.click(screen.getByRole("button", { name: "Codex" }));
+  it("侧栏按 agent 列表动态生成", async () => {
+    withAgents();
+    renderWithProviders(<App />);
+    await waitFor(() => {
+      expect(
+        screen.getByRole("button", { name: /Claude Code/ }),
+      ).toBeInTheDocument();
+      expect(screen.getByRole("button", { name: /Codex/ })).toBeInTheDocument();
+    });
+  });
 
-    // 顶栏标题与占位内容都应更新为 Codex
+  it("未安装的 agent 在侧栏标注出来", async () => {
+    handlers.set("list_agents", () => [
+      claudeAgent,
+      { ...codexAgent, detected: false },
+    ]);
+    renderWithProviders(<App />);
+    const codexNav = await screen.findByRole("button", { name: /Codex/ });
+    expect(codexNav.textContent).toContain("未装");
+  });
+
+  it("点击侧栏切换视图，并把选择持久化到 localStorage", async () => {
+    withAgents();
+    const user = userEvent.setup();
+    renderWithProviders(<App />);
+    await user.click(await screen.findByRole("button", { name: /Codex/ }));
+
     expect(screen.getByRole("heading", { level: 1 }).textContent).toBe("Codex");
     expect(localStorage.getItem("skill-studio-view")).toBe("agent:codex");
   });
 
-  it("恢复上次停留的视图", () => {
+  it("恢复上次停留的视图", async () => {
+    withAgents();
     localStorage.setItem("skill-studio-view", "groups");
-    renderApp();
-    expect(screen.getByRole("heading", { level: 1 }).textContent).toBe("分组");
+    renderWithProviders(<App />);
+    await waitFor(() =>
+      expect(screen.getByRole("heading", { level: 1 }).textContent).toBe(
+        "分组",
+      ),
+    );
   });
 
   it("主题切换会写入 localStorage 并给 <html> 加上对应 class", async () => {
+    withAgents();
     const user = userEvent.setup();
-    renderApp();
+    renderWithProviders(<App />);
     await user.click(screen.getByRole("button", { name: "深色" }));
     expect(localStorage.getItem("skill-studio-theme")).toBe("dark");
     expect(document.documentElement.classList.contains("dark")).toBe(true);
+  });
+
+  it("启动期错误会以横幅提示，而不是静默吞掉", async () => {
+    withAgents();
+    handlers.set("get_init_error", () => "配置文件损坏，请从 backups/ 恢复");
+    renderWithProviders(<App />);
+    expect(await screen.findByText(/配置文件损坏/)).toBeInTheDocument();
   });
 });
