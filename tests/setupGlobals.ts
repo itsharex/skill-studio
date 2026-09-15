@@ -1,6 +1,8 @@
 // jsdom 缺少 Radix 依赖的若干浏览器 API，必须在测试前 polyfill。
 import { vi } from "vitest";
 
+// 让回调立即触发反而会和 floating-ui 形成自激循环（实测单个菜单要 50s+），
+// 所以这里保持惰性 stub。Radix 浮层的交互不在 jsdom 里测，见 tests/libraryPage.test.tsx 的说明。
 class ResizeObserverStub {
   observe() {}
   unobserve() {}

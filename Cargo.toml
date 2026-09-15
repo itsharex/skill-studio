@@ -28,4 +28,16 @@ codegen-units = 1
 lto           = "thin"
 opt-level     = "s"
 panic         = "unwind"
-strip         = "symbols"
+strip         = "debuginfo"
+
+# 构建脚本与 proc-macro 必须单独放行。
+# 它们在 macOS 上是要被 dyld 加载的 .dylib，一旦被 strip，新版 Apple 链接器会产出
+# mis-aligned LINKEDIT string pool，加载直接失败，表现为编译期报
+# "can't find crate for xxx_derive"。debug 构建不 strip，所以只在 release 暴露。
+# 顺带一个好处：proc-macro 不做优化，编译快很多。
+# 注：lto 不能写在 build-override 里，Cargo 说它对 proc-macro 本就不生效。
+[profile.release.build-override]
+opt-level     = 0
+codegen-units = 16
+strip         = "none"
+debug         = false
