@@ -17,9 +17,14 @@ pub fn set_window_theme(app: tauri::AppHandle, theme: String) -> Result<(), Stri
         .map_err(|e| format!("设置窗口主题失败: {e}"))
 }
 
-/// 后端初始化期的错误暂存，供前端在首屏拉取。
-/// 目前恒为 None，等 store 接入后会返回配置加载失败的详情。
+/// 启动期错误。前端首屏拉取，非空则渲染恢复界面而不是主界面。
 #[tauri::command]
 pub fn get_init_error() -> Option<String> {
-    None
+    crate::init_status::get()
+}
+
+/// 应用版本，用于设置页展示
+#[tauri::command]
+pub fn get_app_version() -> String {
+    env!("CARGO_PKG_VERSION").to_string()
 }

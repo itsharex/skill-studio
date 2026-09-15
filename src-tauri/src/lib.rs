@@ -1,33 +1,20 @@
 mod commands;
 mod error;
+mod init_status;
 mod state;
+mod watcher;
 
 pub use error::{AppError, AppResult};
 pub use state::AppState;
 
+use skill_studio_core::fs::paths;
+use skill_studio_core::models::agent::AGENTS;
+use skill_studio_core::services::store::Store;
 use tauri::Manager;
-
-fn config_dir() -> std::path::PathBuf {
-    // 测试逃生阀：Windows 上 dirs::home_dir() 走 Known Folder API，
-    // 不受 HOME/USERPROFILE 影响，测试无法隔离真实用户目录。
-    if let Ok(dir) = std::env::var("SKILL_STUDIO_TEST_HOME") {
-        let trimmed = dir.trim();
-        if !trimmed.is_empty() {
-            return std::path::PathBuf::from(trimmed).join(".skill-studio");
-        }
-    }
-    // 不要直接读 HOME：它可能被 Git/Cygwin/MSYS 注入，导致配置路径漂移。
-    dirs::home_dir()
-        .unwrap_or_else(|| {
-            log::warn!("无法获取用户主目录，回退到当前目录");
-            std::path::PathBuf::from(".")
-        })
-        .join(".skill-studio")
-}
 
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
-    let dir = config_dir();
+    let config_dir = paths::config_dir();
 
     tauri::Builder::default()
         .plugin(tauri_plugin_opener::init())
@@ -38,7 +25,7 @@ pub fn run() {
             tauri_plugin_log::Builder::new()
                 .target(tauri_plugin_log::Target::new(
                     tauri_plugin_log::TargetKind::Folder {
-                        path: dir.join("logs"),
+                        path: config_dir.join("logs"),
                         file_name: Some("skill-studio".into()),
                     },
                 ))
@@ -46,14 +33,75 @@ pub fn run() {
                     tauri_plugin_log::TargetKind::Stdout,
                 ))
                 .level(log::LevelFilter::Info)
+                .max_file_size(20 * 1024 * 1024)
+                .rotation_strategy(tauri_plugin_log::RotationStrategy::KeepSome(4))
                 .build(),
         )
-        .manage(AppState::new(dir))
         .invoke_handler(tauri::generate_handler![
+            // 窗口 / 元信息
             commands::set_window_theme,
             commands::get_init_error,
+            commands::get_app_version,
+            // agent
+            commands::list_agents,
+            // skill
+            commands::scan_skills,
+            commands::register_skills,
+            commands::unregister_skills,
+            commands::set_skill_enabled,
+            commands::adopt_to_hub,
+            commands::prune_missing,
+            // 分组
+            commands::list_groups,
+            commands::create_group,
+            commands::update_group,
+            commands::delete_group,
+            commands::set_group_skills,
+            commands::reorder_groups,
+            commands::apply_group,
+            // 项目
+            commands::list_projects,
+            commands::create_project,
+            commands::update_project,
+            commands::delete_project,
+            commands::apply_project,
+            commands::unapply_project,
+            commands::write_project_gitignore,
+            commands::pick_directory,
+            // 设置
+            commands::get_config,
+            commands::get_settings,
+            commands::update_settings,
+            commands::list_backups,
+            commands::restore_backup,
+            commands::get_config_dir,
+            commands::reveal_path,
         ])
-        .setup(|app| {
+        .setup(move |app| {
+            // 配置加载失败不能直接 panic —— 用户的分组数据可能只是文件坏了，
+            // 要让界面起来并引导去 backups/ 恢复。
+            match AppState::bootstrap(Store::new(config_dir.clone())) {
+                Ok(state) => {
+                    let dirs = watch_targets(&state);
+                    app.manage(state);
+                    // watcher 必须被持有，drop 掉就停止监听
+                    if let Some(w) = watcher::spawn(app.handle().clone(), dirs) {
+                        app.manage(WatcherHandle(std::sync::Mutex::new(w)));
+                    }
+                }
+                Err(err) => {
+                    init_status::set(format!(
+                        "配置加载失败：{err}。可在 {} 里找回历史备份。",
+                        config_dir.join("backups").display()
+                    ));
+                    // 兜底：用默认配置让界面能起来，但不落盘覆盖坏文件
+                    let fallback =
+                        AppState::bootstrap(Store::new(config_dir.join(".recovery-scratch")))
+                            .expect("兜底配置目录初始化失败");
+                    app.manage(fallback);
+                }
+            }
+
             // 窗口在 tauri.conf.json 里是 visible: false，等前端挂载好再显示，
             // 避免深色模式下先闪一帧白底。
             if let Some(window) = app.get_webview_window("main") {
@@ -63,4 +111,21 @@ pub fn run() {
         })
         .run(tauri::generate_context!())
         .expect("启动 Skill Studio 失败");
+}
+
+/// 持有 watcher，保证监听在应用生命周期内不被回收
+struct WatcherHandle(#[allow(dead_code)] std::sync::Mutex<notify::RecommendedWatcher>);
+
+/// 要监听的目录：各 agent 的全部全局根 + Hub
+fn watch_targets(state: &AppState) -> Vec<std::path::PathBuf> {
+    let config = state.config();
+    let overrides = &config.settings.agent_dir_overrides;
+    let mut dirs: Vec<std::path::PathBuf> = AGENTS
+        .iter()
+        .flat_map(|a| a.resolved_global_roots(overrides))
+        .collect();
+    dirs.push(state.studio().store().hub_dir(&config));
+    dirs.sort();
+    dirs.dedup();
+    dirs
 }
