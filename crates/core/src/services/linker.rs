@@ -530,7 +530,7 @@ mod tests {
         let inside = hub.join("nested");
         assert!(ensure_distinct_roots(&hub, &[inside]).is_err());
         assert!(ensure_distinct_roots(&hub, &[tmp.path().join("other")]).is_ok());
-        assert!(ensure_distinct_roots(&hub, &[hub.clone()]).is_err());
+        assert!(ensure_distinct_roots(&hub, std::slice::from_ref(&hub)).is_err());
     }
 
     #[cfg(unix)]
