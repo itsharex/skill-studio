@@ -7,5 +7,6 @@ pub use atomic::{
 };
 pub use paths::{
     backups_dir, comparable_path_key, config_dir, config_file, env_dir_override, home_dir,
-    hub_skills_dir, normalize_path_lexically, path_is_within, paths_alias, paths_overlap,
+    hub_skills_dir, is_same_path, normalize_path_lexically, path_is_within, paths_alias,
+    paths_overlap,
 };

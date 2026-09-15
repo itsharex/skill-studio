@@ -32,6 +32,8 @@ pub enum LinkMode {
 pub enum LinkStatus {
     /// 目标不存在
     NotLinked,
+    /// 真身就在这个 agent 的目录里 —— 它天然可用，但不能作为"注册"被移除
+    Source,
     /// symlink / junction，且指向正确
     Linked,
     /// 复制且与源一致
@@ -47,7 +49,8 @@ pub enum LinkStatus {
 }
 
 impl LinkStatus {
-    /// 是否由本工具管理（决定能否安全移除）
+    /// 是否由本工具管理（决定能否安全移除）。
+    /// `Source` 不算 —— 移除它等于删用户的 skill 真身。
     pub fn is_managed(self) -> bool {
         matches!(
             self,
@@ -55,9 +58,12 @@ impl LinkStatus {
         )
     }
 
-    /// 是否算"已注册"（UI 计数用）
+    /// 该 agent 是否能用上这个 skill（UI 计数用）
     pub fn is_registered(self) -> bool {
-        matches!(self, Self::Linked | Self::Copied | Self::CopyStale)
+        matches!(
+            self,
+            Self::Source | Self::Linked | Self::Copied | Self::CopyStale
+        )
     }
 
     /// 是否需要用户关注
@@ -173,6 +179,10 @@ mod tests {
     #[test]
     fn status_classification_is_consistent() {
         assert!(LinkStatus::Linked.is_managed() && LinkStatus::Linked.is_registered());
+        // 真身所在的 agent 天然可用，但不能被当作注册移除
+        assert!(LinkStatus::Source.is_registered());
+        assert!(!LinkStatus::Source.is_managed());
+        assert!(!LinkStatus::Source.needs_attention());
         assert!(LinkStatus::Copied.is_registered());
         assert!(LinkStatus::CopyStale.is_registered() && LinkStatus::CopyStale.needs_attention());
         // Foreign 是用户自己放的，既不算本工具管理，也不算注册

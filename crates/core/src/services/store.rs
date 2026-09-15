@@ -1,0 +1,282 @@
+//! `AppConfig` 的读写。原子写入 + 备份轮转。
+//!
+//! 分组和项目绑定是用户手工攒出来的，丢了很痛，所以每次写入前先把旧文件轮转到
+//! `backups/`，并且写入本身走 `atomic_write`（tmp + fsync + rename）。
+
+use std::path::{Path, PathBuf};
+
+use crate::error::{Error, Result};
+use crate::fs::{atomic, paths};
+use crate::models::config::{AppConfig, CONFIG_VERSION};
+
+/// 备份文件名前缀
+const BACKUP_PREFIX: &str = "config-";
+
+/// 配置读写的落点。测试里指向临时目录，运行时指向 `~/.skill-studio`。
+#[derive(Debug, Clone)]
+pub struct Store {
+    dir: PathBuf,
+}
+
+impl Default for Store {
+    fn default() -> Self {
+        Self::new(paths::config_dir())
+    }
+}
+
+impl Store {
+    pub fn new(dir: PathBuf) -> Self {
+        Self { dir }
+    }
+
+    pub fn dir(&self) -> &Path {
+        &self.dir
+    }
+
+    pub fn config_path(&self) -> PathBuf {
+        self.dir.join("config.json")
+    }
+
+    pub fn backups_dir(&self) -> PathBuf {
+        self.dir.join("backups")
+    }
+
+    /// Hub 目录：默认 `<dir>/skills`，可被设置覆盖。
+    pub fn hub_dir(&self, config: &AppConfig) -> PathBuf {
+        config
+            .settings
+            .hub_dir
+            .clone()
+            .unwrap_or_else(|| self.dir.join("skills"))
+    }
+
+    /// 读配置。文件不存在时返回默认值（首次启动）。
+    ///
+    /// 解析失败**不**静默回落到默认值 —— 那会让用户的分组凭空消失。
+    /// 直接报错，由上层提示用户去 `backups/` 找回。
+    pub fn load(&self) -> Result<AppConfig> {
+        let path = self.config_path();
+        match atomic::read_json_file::<AppConfig>(&path)? {
+            Some(mut config) => {
+                self.migrate(&mut config)?;
+                Ok(config)
+            }
+            None => Ok(AppConfig::default()),
+        }
+    }
+
+    /// 配置结构迁移。目前只有 v1，留好入口。
+    fn migrate(&self, config: &mut AppConfig) -> Result<()> {
+        if config.version > CONFIG_VERSION {
+            return Err(Error::config(format!(
+                "配置版本 {} 高于本程序支持的 {}，请升级 Skill Studio；\
+                 强行写入会损坏配置",
+                config.version, CONFIG_VERSION
+            )));
+        }
+        if config.version < CONFIG_VERSION {
+            log::info!(
+                "配置版本 {} -> {}，执行迁移",
+                config.version,
+                CONFIG_VERSION
+            );
+            config.version = CONFIG_VERSION;
+        }
+        Ok(())
+    }
+
+    /// 写配置：先轮转备份，再原子写入。
+    pub fn save(&self, config: &AppConfig) -> Result<()> {
+        self.rotate_backup(config.settings.backup_keep)?;
+        atomic::write_json_file(&self.config_path(), config)
+    }
+
+    /// 把当前 config.json 复制一份到 backups/，并只保留最近 `keep` 份。
+    /// 备份失败不阻塞主流程 —— 保住写入比保住备份重要。
+    fn rotate_backup(&self, keep: usize) -> Result<()> {
+        let current = self.config_path();
+        if !current.is_file() || keep == 0 {
+            return Ok(());
+        }
+        let backups = self.backups_dir();
+        if let Err(e) = std::fs::create_dir_all(&backups) {
+            log::warn!("创建备份目录失败，跳过备份: {e}");
+            return Ok(());
+        }
+        let stamp = chrono::Local::now().format("%Y%m%d-%H%M%S%.3f");
+        let target = backups.join(format!("{BACKUP_PREFIX}{stamp}.json"));
+        if let Err(e) = std::fs::copy(&current, &target) {
+            log::warn!("写备份失败，跳过: {e}");
+            return Ok(());
+        }
+        self.prune_backups(keep);
+        Ok(())
+    }
+
+    fn prune_backups(&self, keep: usize) {
+        let Ok(entries) = std::fs::read_dir(self.backups_dir()) else {
+            return;
+        };
+        let mut files: Vec<PathBuf> = entries
+            .filter_map(|e| e.ok())
+            .map(|e| e.path())
+            .filter(|p| {
+                p.file_name()
+                    .and_then(|n| n.to_str())
+                    .is_some_and(|n| n.starts_with(BACKUP_PREFIX) && n.ends_with(".json"))
+            })
+            .collect();
+        // 文件名里的时间戳是定长的，字典序等于时间序
+        files.sort();
+        while files.len() > keep {
+            let oldest = files.remove(0);
+            let _ = std::fs::remove_file(oldest);
+        }
+    }
+
+    /// 列出备份，最新在前
+    pub fn list_backups(&self) -> Vec<PathBuf> {
+        let Ok(entries) = std::fs::read_dir(self.backups_dir()) else {
+            return Vec::new();
+        };
+        let mut files: Vec<PathBuf> = entries
+            .filter_map(|e| e.ok())
+            .map(|e| e.path())
+            .filter(|p| {
+                p.file_name()
+                    .and_then(|n| n.to_str())
+                    .is_some_and(|n| n.starts_with(BACKUP_PREFIX) && n.ends_with(".json"))
+            })
+            .collect();
+        files.sort();
+        files.reverse();
+        files
+    }
+
+    /// 从备份恢复。恢复前会把当前配置再备份一次，避免误操作不可逆。
+    pub fn restore_backup(&self, backup: &Path) -> Result<AppConfig> {
+        let restored: AppConfig = atomic::read_json_file(backup)?
+            .ok_or_else(|| Error::NotFound(backup.display().to_string()))?;
+        self.save(&restored)?;
+        Ok(restored)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::models::group::Group;
+
+    fn store() -> (tempfile::TempDir, Store) {
+        let tmp = tempfile::tempdir().unwrap();
+        let s = Store::new(tmp.path().to_path_buf());
+        (tmp, s)
+    }
+
+    #[test]
+    fn load_returns_default_when_file_missing() {
+        let (_t, s) = store();
+        let cfg = s.load().unwrap();
+        assert_eq!(cfg.version, CONFIG_VERSION);
+        assert!(cfg.groups.is_empty());
+    }
+
+    #[test]
+    fn save_then_load_roundtrips() {
+        let (_t, s) = store();
+        let mut cfg = AppConfig::default();
+        cfg.groups.push(Group::new("g1".into(), "前端".into()));
+        s.save(&cfg).unwrap();
+
+        let back = s.load().unwrap();
+        assert_eq!(back.groups.len(), 1);
+        assert_eq!(back.groups[0].name, "前端");
+    }
+
+    #[test]
+    fn corrupt_config_errors_instead_of_silently_resetting() {
+        // 静默回落到默认值会让用户的分组凭空消失，必须报错
+        let (_t, s) = store();
+        std::fs::write(s.config_path(), "{ this is not json").unwrap();
+        let err = s.load().unwrap_err().to_string();
+        assert!(err.contains("config.json"), "{err}");
+    }
+
+    #[test]
+    fn newer_config_version_is_refused() {
+        let (_t, s) = store();
+        std::fs::write(
+            s.config_path(),
+            format!(r#"{{"version": {}}}"#, CONFIG_VERSION + 5),
+        )
+        .unwrap();
+        let err = s.load().unwrap_err().to_string();
+        assert!(err.contains("高于"), "{err}");
+    }
+
+    #[test]
+    fn save_rotates_backups_and_respects_keep() {
+        let (_t, s) = store();
+        let mut cfg = AppConfig::default();
+        cfg.settings.backup_keep = 3;
+
+        // 第一次写没有旧文件可备份
+        s.save(&cfg).unwrap();
+        assert!(s.list_backups().is_empty());
+
+        for i in 0..6 {
+            cfg.groups = vec![Group::new(format!("g{i}"), format!("组{i}"))];
+            s.save(&cfg).unwrap();
+        }
+        let backups = s.list_backups();
+        assert_eq!(backups.len(), 3, "只保留最近 3 份，实际 {}", backups.len());
+    }
+
+    #[test]
+    fn backup_keep_zero_disables_backups() {
+        let (_t, s) = store();
+        let mut cfg = AppConfig::default();
+        cfg.settings.backup_keep = 0;
+        s.save(&cfg).unwrap();
+        s.save(&cfg).unwrap();
+        assert!(s.list_backups().is_empty());
+    }
+
+    #[test]
+    fn restore_backup_brings_old_state_back() {
+        let (_t, s) = store();
+        let mut cfg = AppConfig::default();
+        cfg.groups.push(Group::new("g1".into(), "旧".into()));
+        s.save(&cfg).unwrap();
+
+        // 改成新状态，旧状态进备份
+        cfg.groups = vec![Group::new("g2".into(), "新".into())];
+        s.save(&cfg).unwrap();
+
+        let backups = s.list_backups();
+        assert_eq!(backups.len(), 1);
+        let restored = s.restore_backup(&backups[0]).unwrap();
+        assert_eq!(restored.groups[0].name, "旧");
+        assert_eq!(s.load().unwrap().groups[0].name, "旧");
+    }
+
+    #[test]
+    fn restore_missing_backup_errors() {
+        let (_t, s) = store();
+        let err = s
+            .restore_backup(Path::new("/nope/backup.json"))
+            .unwrap_err();
+        assert!(matches!(err, Error::NotFound(_)), "{err}");
+    }
+
+    #[test]
+    fn hub_dir_defaults_under_store_and_honors_override() {
+        let (t, s) = store();
+        let cfg = AppConfig::default();
+        assert_eq!(s.hub_dir(&cfg), t.path().join("skills"));
+
+        let mut cfg2 = AppConfig::default();
+        cfg2.settings.hub_dir = Some(PathBuf::from("/custom/hub"));
+        assert_eq!(s.hub_dir(&cfg2), PathBuf::from("/custom/hub"));
+    }
+}

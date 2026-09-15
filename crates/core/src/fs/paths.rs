@@ -121,6 +121,15 @@ pub fn path_is_within(base: &Path, path: &Path) -> bool {
     path_key.starts_with(&prefix)
 }
 
+/// 两个路径是否**字面上**是同一个路径（纯词法，不解析 symlink）。
+///
+/// 判断"真身是不是就在这个位置"必须用它，不能用 `paths_alias`：目标一旦是指向源的
+/// 符号链接，`paths_alias` 会解析后认为二者相同，于是把一个注册误判成真身本体，
+/// 导致它既不能被移除也不能被重新注册。
+pub fn is_same_path(left: &Path, right: &Path) -> bool {
+    comparable_path_key(left) == comparable_path_key(right)
+}
+
 /// 两个路径是否指向同一个目标（解析 symlink 后比较）。
 pub fn paths_alias(left: &Path, right: &Path) -> bool {
     if comparable_path_key(left) == comparable_path_key(right) {
@@ -234,6 +243,20 @@ mod tests {
         assert!(paths_overlap(Path::new("/a/b"), Path::new("/a/b")));
         assert!(paths_overlap(Path::new("/a"), Path::new("/a/b")));
         assert!(!paths_overlap(Path::new("/a/b"), Path::new("/a/c")));
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn is_same_path_does_not_follow_symlinks() {
+        let dir = tempfile::tempdir().unwrap();
+        let real = dir.path().join("real");
+        std::fs::create_dir(&real).unwrap();
+        let link = dir.path().join("link");
+        std::os::unix::fs::symlink(&real, &link).unwrap();
+        // 解析后是同一个，但字面上不是 —— 这个区别是链接引擎正确性的关键
+        assert!(paths_alias(&real, &link));
+        assert!(!is_same_path(&real, &link));
+        assert!(is_same_path(&real, &real));
     }
 
     #[cfg(unix)]

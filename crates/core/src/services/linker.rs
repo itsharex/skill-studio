@@ -283,7 +283,7 @@ pub fn register(
     force: bool,
 ) -> Result<Registered> {
     validate_sync_source(source)?;
-    if paths::paths_alias(source, dest) {
+    if paths::is_same_path(source, dest) {
         return Err(Error::invalid(format!(
             "源与目标是同一路径，无需注册: {}",
             source.display()
@@ -543,6 +543,19 @@ mod tests {
         assert!(is_symlink_or_junction(&f.dest));
         // 通过链接能读到源内容
         assert!(f.dest.join("SKILL.md").is_file());
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn re_registering_an_existing_symlink_is_idempotent() {
+        // 回归：曾用 paths_alias 判定「源与目标同一路径」，目标一旦是指向源的软链
+        // 就会被误判成真身本体，重复注册直接报错、也无法移除。
+        let f = fixture();
+        register(&f.source, &f.dest, LinkMode::Symlink, "id1", false).unwrap();
+        let again = register(&f.source, &f.dest, LinkMode::Symlink, "id1", false)
+            .expect("重复注册应当成功");
+        assert_eq!(again.status, LinkStatus::Linked);
+        assert!(unregister(&f.source, &f.dest, false).unwrap());
     }
 
     #[cfg(unix)]
