@@ -7,6 +7,7 @@
 pub mod error;
 pub mod fs;
 pub mod models;
+pub mod services;
 
 pub use error::{Error, Result};
 pub use models::*;

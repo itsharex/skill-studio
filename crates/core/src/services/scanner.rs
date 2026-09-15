@@ -1,0 +1,560 @@
+//! 扫描 skill 目录、解析 `SKILL.md` frontmatter、计算内容哈希。
+
+use std::collections::BTreeMap;
+use std::fs;
+use std::path::{Path, PathBuf};
+
+use serde::{Deserialize, Serialize};
+use sha2::{Digest, Sha256};
+
+use crate::error::{Error, Result};
+use crate::models::agent::AgentDescriptor;
+
+/// 复制模式的元数据边车文件名。
+///
+/// 复制出来的目录没有回溯到源的信息，无法判断是否过期，也无法区分"我们复制的"
+/// 和"用户自己放的"。这个文件就是那条回溯线索。
+pub const COPY_SIDECAR: &str = ".skill-studio-copy.json";
+
+/// `SKILL.md` 是识别一个 skill 目录的唯一锚点
+pub const SKILL_FILE: &str = "SKILL.md";
+
+/// 上传到 claude.ai / Skills API 时**只允许**这 6 个字段，多一个是硬报错。
+/// Agent Skills 标准本身也只要求 name + description。
+const PORTABLE_KEYS: &[&str] = &[
+    "name",
+    "description",
+    "license",
+    "compatibility",
+    "metadata",
+    "allowed-tools",
+];
+
+/// 目录项的分类
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(tag = "kind", rename_all = "camelCase")]
+pub enum EntryKind {
+    /// 真目录，且含 SKILL.md —— 可以作为 skill 真身
+    RealSkill,
+    /// 符号链接（或 Windows junction），指向别处
+    #[serde(rename_all = "camelCase")]
+    Link { target: Option<PathBuf> },
+    /// 有复制边车，说明是本工具复制过来的
+    #[serde(rename_all = "camelCase")]
+    ManagedCopy {
+        source_path: PathBuf,
+        source_hash: String,
+    },
+    /// 真目录但没有 SKILL.md —— 不是 skill，扫描时忽略
+    NotASkill,
+}
+
+/// 扫描到的一个目录项
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ScannedEntry {
+    pub name: String,
+    pub path: PathBuf,
+    pub root: PathBuf,
+    pub agent_id: String,
+    pub kind: EntryKind,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub frontmatter: Option<Frontmatter>,
+}
+
+/// `SKILL.md` 的 frontmatter
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct Frontmatter {
+    pub name: Option<String>,
+    pub description: Option<String>,
+    /// 非可移植字段（Claude Code 专有等）。注册到 Codex 后会被忽略，
+    /// 上传到 claude.ai 会直接报错，所以要提示用户。
+    #[serde(default)]
+    pub extra_keys: Vec<String>,
+    /// frontmatter 存在但 YAML 解析失败
+    #[serde(default)]
+    pub malformed: bool,
+}
+
+/// 复制边车的内容
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct CopySidecar {
+    pub skill_id: String,
+    pub source_path: PathBuf,
+    pub source_hash: String,
+    pub copied_at: i64,
+}
+
+/// 解析 `SKILL.md` 的 frontmatter。
+///
+/// 容错到底：读不到、没有 frontmatter、YAML 坏掉，都不报错 —— 一个坏 skill
+/// 不该让整次扫描失败，调用方会回落到目录名。
+pub fn parse_frontmatter(skill_md: &Path) -> Frontmatter {
+    let Ok(raw) = fs::read_to_string(skill_md) else {
+        return Frontmatter::default();
+    };
+    // 某些编辑器会写 BOM；frontmatter 只有在 `---` 位于**首行**时才生效
+    let content = raw.trim_start_matches('\u{feff}');
+    if !content.starts_with("---") {
+        return Frontmatter::default();
+    }
+    // 首个 `---` 之后再找闭合的 `---`
+    let rest = &content[3..];
+    let Some(end) = find_closing_fence(rest) else {
+        return Frontmatter::default();
+    };
+    let block = &rest[..end];
+
+    match serde_yaml::from_str::<BTreeMap<String, serde_yaml::Value>>(block) {
+        Ok(map) => {
+            let as_string = |key: &str| -> Option<String> {
+                map.get(key).and_then(|v| match v {
+                    serde_yaml::Value::String(s) if !s.trim().is_empty() => {
+                        Some(s.trim().to_string())
+                    }
+                    _ => None,
+                })
+            };
+            let extra_keys = map
+                .keys()
+                .filter(|k| !PORTABLE_KEYS.contains(&k.as_str()))
+                .cloned()
+                .collect();
+            Frontmatter {
+                name: as_string("name"),
+                description: as_string("description"),
+                extra_keys,
+                malformed: false,
+            }
+        }
+        Err(_) => Frontmatter {
+            malformed: true,
+            ..Default::default()
+        },
+    }
+}
+
+/// 找 frontmatter 的闭合围栏：必须独占一行
+fn find_closing_fence(rest: &str) -> Option<usize> {
+    let mut offset = 0usize;
+    for line in rest.split_inclusive('\n') {
+        if line.trim_end_matches(['\r', '\n']).trim() == "---" && offset > 0 {
+            return Some(offset);
+        }
+        offset += line.len();
+    }
+    None
+}
+
+/// 计算目录内容哈希（SHA-256 前 32 位十六进制）。
+///
+/// 用于复制模式的 drift 检测。规则：
+/// - 按相对路径排序，保证跨平台结果一致
+/// - 路径和内容长度都进哈希，避免拼接歧义
+/// - 跳过复制边车自身（它含哈希，会自我循环）
+/// - **跳过一切符号链接**：目录 symlink 不递归（防环），文件 symlink 不读取
+///   （可能指到目录外，把意料之外的内容算进哈希）
+pub fn dir_content_hash(dir: &Path) -> Result<String> {
+    let mut files = Vec::new();
+    collect_files(dir, dir, &mut files, 0)?;
+    files.sort();
+
+    let mut hasher = Sha256::new();
+    for rel in &files {
+        let full = dir.join(rel);
+        let bytes = fs::read(&full).map_err(|e| Error::io(&full, e))?;
+        let rel_key = rel.to_string_lossy().replace('\\', "/");
+        hasher.update((rel_key.len() as u64).to_le_bytes());
+        hasher.update(rel_key.as_bytes());
+        hasher.update((bytes.len() as u64).to_le_bytes());
+        hasher.update(&bytes);
+    }
+    let digest = hasher.finalize();
+    Ok(digest.iter().take(16).map(|b| format!("{b:02x}")).collect())
+}
+
+const MAX_SCAN_DEPTH: usize = 16;
+
+fn collect_files(root: &Path, dir: &Path, out: &mut Vec<PathBuf>, depth: usize) -> Result<()> {
+    if depth > MAX_SCAN_DEPTH {
+        return Ok(());
+    }
+    let entries = fs::read_dir(dir).map_err(|e| Error::io(dir, e))?;
+    for entry in entries {
+        let entry = entry.map_err(|e| Error::io(dir, e))?;
+        let path = entry.path();
+        // 无条件跳过 symlink：防目录环，也防文件 symlink 把目录外内容算进来
+        let meta = match path.symlink_metadata() {
+            Ok(m) => m,
+            Err(_) => continue,
+        };
+        if meta.file_type().is_symlink() {
+            continue;
+        }
+        if meta.is_dir() {
+            collect_files(root, &path, out, depth + 1)?;
+        } else if meta.is_file() {
+            if path.file_name().is_some_and(|n| n == COPY_SIDECAR) {
+                continue;
+            }
+            if let Ok(rel) = path.strip_prefix(root) {
+                out.push(rel.to_path_buf());
+            }
+        }
+    }
+    Ok(())
+}
+
+/// 是否为符号链接或 Windows junction。
+///
+/// `mklink /J` 建的 junction **不会**被 Rust 的 `FileType::is_symlink()` 报告
+/// （cc-switch 就漏了这一点），Windows 上要额外查 reparse point 属性。
+pub fn is_symlink_or_junction(path: &Path) -> bool {
+    let Ok(meta) = path.symlink_metadata() else {
+        return false;
+    };
+    if meta.file_type().is_symlink() {
+        return true;
+    }
+    #[cfg(windows)]
+    {
+        use std::os::windows::fs::MetadataExt;
+        const FILE_ATTRIBUTE_REPARSE_POINT: u32 = 0x400;
+        return meta.file_attributes() & FILE_ATTRIBUTE_REPARSE_POINT != 0;
+    }
+    #[cfg(not(windows))]
+    false
+}
+
+/// 读取复制边车
+pub fn read_copy_sidecar(dir: &Path) -> Option<CopySidecar> {
+    let raw = fs::read_to_string(dir.join(COPY_SIDECAR)).ok()?;
+    serde_json::from_str(&raw).ok()
+}
+
+/// 分类一个目录项
+pub fn classify_entry(path: &Path) -> EntryKind {
+    if is_symlink_or_junction(path) {
+        return EntryKind::Link {
+            target: fs::read_link(path).ok(),
+        };
+    }
+    if !path.is_dir() {
+        return EntryKind::NotASkill;
+    }
+    if let Some(sidecar) = read_copy_sidecar(path) {
+        return EntryKind::ManagedCopy {
+            source_path: sidecar.source_path,
+            source_hash: sidecar.source_hash,
+        };
+    }
+    if path.join(SKILL_FILE).is_file() {
+        EntryKind::RealSkill
+    } else {
+        EntryKind::NotASkill
+    }
+}
+
+/// 扫描一个全局 / 项目 skill 根目录。根目录不存在时返回空列表，不报错。
+pub fn scan_root(root: &Path, agent: &AgentDescriptor) -> Result<Vec<ScannedEntry>> {
+    let entries = match fs::read_dir(root) {
+        Ok(e) => e,
+        Err(err) if err.kind() == std::io::ErrorKind::NotFound => return Ok(Vec::new()),
+        Err(err) => return Err(Error::io(root, err)),
+    };
+
+    let mut out = Vec::new();
+    for entry in entries {
+        let entry = entry.map_err(|e| Error::io(root, e))?;
+        let name = entry.file_name().to_string_lossy().to_string();
+        if name.starts_with('.') {
+            continue;
+        }
+        // Claude Code 的 `synced` 是 claude.ai 同步专用保留名，必须跳过
+        if agent.is_reserved_dir(&name) {
+            log::debug!("跳过保留目录 {name}（{} 专用）", agent.id);
+            continue;
+        }
+        let path = entry.path();
+        let kind = classify_entry(&path);
+        if matches!(kind, EntryKind::NotASkill) {
+            continue;
+        }
+        let frontmatter = {
+            let skill_md = path.join(SKILL_FILE);
+            if skill_md.is_file() {
+                Some(parse_frontmatter(&skill_md))
+            } else {
+                None
+            }
+        };
+        out.push(ScannedEntry {
+            name,
+            path,
+            root: root.to_path_buf(),
+            agent_id: agent.id.to_string(),
+            kind,
+            frontmatter,
+        });
+    }
+    out.sort_by(|a, b| a.name.cmp(&b.name));
+    Ok(out)
+}
+
+/// 源目录是否可以作为同步源。
+///
+/// **不变式：源必须含 `SKILL.md`。** 空的源目录绝不能去替换目标 —— 否则会把
+/// 用户 agent 里的真 skill 抹掉。cc-switch 为此专门写了回归测试。
+pub fn validate_sync_source(source: &Path) -> Result<()> {
+    if !source.is_dir() {
+        return Err(Error::invalid(format!("源不是目录: {}", source.display())));
+    }
+    if !source.join(SKILL_FILE).is_file() {
+        return Err(Error::invalid(format!(
+            "源目录缺少 {SKILL_FILE}，拒绝同步以避免清空目标: {}",
+            source.display()
+        )));
+    }
+    Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::models::agent::find_agent;
+
+    fn write_skill(dir: &Path, body: &str) {
+        fs::create_dir_all(dir).unwrap();
+        fs::write(dir.join(SKILL_FILE), body).unwrap();
+    }
+
+    #[test]
+    fn parses_name_and_description() {
+        let d = tempfile::tempdir().unwrap();
+        let s = d.path().join("pdf");
+        write_skill(
+            &s,
+            "---\nname: pdf-tools\ndescription: 处理 PDF\n---\n\n正文",
+        );
+        let fm = parse_frontmatter(&s.join(SKILL_FILE));
+        assert_eq!(fm.name.as_deref(), Some("pdf-tools"));
+        assert_eq!(fm.description.as_deref(), Some("处理 PDF"));
+        assert!(fm.extra_keys.is_empty());
+        assert!(!fm.malformed);
+    }
+
+    #[test]
+    fn frontmatter_only_counts_when_fence_is_first_line() {
+        let d = tempfile::tempdir().unwrap();
+        let s = d.path().join("x");
+        // 前面有一行正文，则 --- 不构成 frontmatter
+        write_skill(&s, "# 标题\n---\nname: nope\n---\n");
+        let fm = parse_frontmatter(&s.join(SKILL_FILE));
+        assert!(fm.name.is_none());
+    }
+
+    #[test]
+    fn strips_utf8_bom_before_checking_fence() {
+        let d = tempfile::tempdir().unwrap();
+        let s = d.path().join("x");
+        write_skill(&s, "\u{feff}---\nname: bom-ok\n---\n");
+        assert_eq!(
+            parse_frontmatter(&s.join(SKILL_FILE)).name.as_deref(),
+            Some("bom-ok")
+        );
+    }
+
+    #[test]
+    fn collects_non_portable_keys() {
+        let d = tempfile::tempdir().unwrap();
+        let s = d.path().join("x");
+        // context / agent / model 是 Claude Code 专有；allowed-tools 属可移植集合
+        write_skill(
+            &s,
+            "---\nname: x\ndescription: d\ncontext: fork\nagent: Explore\nmodel: inherit\nallowed-tools: Read\n---\n",
+        );
+        let fm = parse_frontmatter(&s.join(SKILL_FILE));
+        let mut extra = fm.extra_keys.clone();
+        extra.sort();
+        assert_eq!(extra, vec!["agent", "context", "model"]);
+    }
+
+    #[test]
+    fn malformed_yaml_is_flagged_not_fatal() {
+        let d = tempfile::tempdir().unwrap();
+        let s = d.path().join("x");
+        write_skill(&s, "---\nname: [unclosed\n---\n");
+        let fm = parse_frontmatter(&s.join(SKILL_FILE));
+        assert!(fm.malformed);
+        assert!(fm.name.is_none());
+    }
+
+    #[test]
+    fn missing_file_yields_empty_frontmatter() {
+        let fm = parse_frontmatter(Path::new("/definitely/not/here/SKILL.md"));
+        assert_eq!(fm, Frontmatter::default());
+    }
+
+    #[test]
+    fn content_hash_is_stable_and_content_sensitive() {
+        let d = tempfile::tempdir().unwrap();
+        let a = d.path().join("a");
+        write_skill(&a, "---\nname: a\n---\nbody");
+        let h1 = dir_content_hash(&a).unwrap();
+        let h2 = dir_content_hash(&a).unwrap();
+        assert_eq!(h1, h2);
+        assert_eq!(h1.len(), 32);
+
+        fs::write(a.join(SKILL_FILE), "---\nname: a\n---\nchanged").unwrap();
+        assert_ne!(dir_content_hash(&a).unwrap(), h1);
+    }
+
+    #[test]
+    fn content_hash_ignores_the_copy_sidecar() {
+        let d = tempfile::tempdir().unwrap();
+        let a = d.path().join("a");
+        write_skill(&a, "---\nname: a\n---\n");
+        let before = dir_content_hash(&a).unwrap();
+        fs::write(a.join(COPY_SIDECAR), r#"{"skillId":"x"}"#).unwrap();
+        assert_eq!(dir_content_hash(&a).unwrap(), before, "边车不应影响哈希");
+    }
+
+    #[test]
+    fn content_hash_covers_nested_files() {
+        let d = tempfile::tempdir().unwrap();
+        let a = d.path().join("a");
+        write_skill(&a, "---\nname: a\n---\n");
+        let before = dir_content_hash(&a).unwrap();
+        fs::create_dir_all(a.join("scripts")).unwrap();
+        fs::write(a.join("scripts/run.sh"), "echo hi").unwrap();
+        assert_ne!(dir_content_hash(&a).unwrap(), before);
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn content_hash_skips_symlinks_and_survives_cycles() {
+        let d = tempfile::tempdir().unwrap();
+        let a = d.path().join("a");
+        write_skill(&a, "---\nname: a\n---\n");
+        let before = dir_content_hash(&a).unwrap();
+        // 自指环：不跳过 symlink 就会栈溢出
+        std::os::unix::fs::symlink(&a, a.join("loop")).unwrap();
+        std::os::unix::fs::symlink("/etc/hosts", a.join("outside")).unwrap();
+        assert_eq!(dir_content_hash(&a).unwrap(), before);
+    }
+
+    #[test]
+    fn validate_sync_source_rejects_dir_without_skill_md() {
+        let d = tempfile::tempdir().unwrap();
+        let empty = d.path().join("empty");
+        fs::create_dir_all(&empty).unwrap();
+        let err = validate_sync_source(&empty).unwrap_err().to_string();
+        assert!(err.contains(SKILL_FILE), "{err}");
+
+        let ok = d.path().join("ok");
+        write_skill(&ok, "---\nname: ok\n---\n");
+        assert!(validate_sync_source(&ok).is_ok());
+    }
+
+    #[test]
+    fn scan_root_returns_empty_for_missing_dir() {
+        let claude = find_agent("claude-code").unwrap();
+        let out = scan_root(Path::new("/definitely/not/here"), claude).unwrap();
+        assert!(out.is_empty());
+    }
+
+    #[test]
+    fn scan_root_skips_reserved_synced_dir_for_claude() {
+        let d = tempfile::tempdir().unwrap();
+        write_skill(&d.path().join("real"), "---\nname: real\n---\n");
+        write_skill(&d.path().join("synced"), "---\nname: synced\n---\n");
+        write_skill(&d.path().join("Synced-Extra"), "---\nname: x\n---\n");
+
+        let claude = find_agent("claude-code").unwrap();
+        let names: Vec<_> = scan_root(d.path(), claude)
+            .unwrap()
+            .into_iter()
+            .map(|e| e.name)
+            .collect();
+        assert!(names.contains(&"real".to_string()));
+        assert!(!names.contains(&"synced".to_string()), "synced 必须跳过");
+        // 只跳过精确同名，不是前缀匹配
+        assert!(names.contains(&"Synced-Extra".to_string()));
+
+        // Codex 没有保留名，synced 会被正常扫到
+        let codex = find_agent("codex").unwrap();
+        let codex_names: Vec<_> = scan_root(d.path(), codex)
+            .unwrap()
+            .into_iter()
+            .map(|e| e.name)
+            .collect();
+        assert!(codex_names.contains(&"synced".to_string()));
+    }
+
+    #[test]
+    fn scan_root_ignores_dirs_without_skill_md_and_dotfiles() {
+        let d = tempfile::tempdir().unwrap();
+        write_skill(&d.path().join("good"), "---\nname: good\n---\n");
+        fs::create_dir_all(d.path().join("not-a-skill")).unwrap();
+        fs::create_dir_all(d.path().join(".hidden")).unwrap();
+        fs::write(d.path().join("loose.md"), "x").unwrap();
+
+        let claude = find_agent("claude-code").unwrap();
+        let entries = scan_root(d.path(), claude).unwrap();
+        assert_eq!(entries.len(), 1);
+        assert_eq!(entries[0].name, "good");
+        assert_eq!(entries[0].kind, EntryKind::RealSkill);
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn scan_root_classifies_symlinks_as_links() {
+        let d = tempfile::tempdir().unwrap();
+        let src = d.path().join("src");
+        write_skill(&src, "---\nname: src\n---\n");
+        let root = d.path().join("root");
+        fs::create_dir_all(&root).unwrap();
+        std::os::unix::fs::symlink(&src, root.join("linked")).unwrap();
+
+        let claude = find_agent("claude-code").unwrap();
+        let entries = scan_root(&root, claude).unwrap();
+        assert_eq!(entries.len(), 1);
+        match &entries[0].kind {
+            EntryKind::Link { target } => {
+                assert_eq!(target.as_deref(), Some(src.as_path()));
+            }
+            other => panic!("应识别为 Link，实际 {other:?}"),
+        }
+    }
+
+    #[test]
+    fn classify_detects_managed_copy_via_sidecar() {
+        let d = tempfile::tempdir().unwrap();
+        let a = d.path().join("a");
+        write_skill(&a, "---\nname: a\n---\n");
+        let sidecar = CopySidecar {
+            skill_id: "abc".into(),
+            source_path: PathBuf::from("/src/a"),
+            source_hash: "deadbeef".into(),
+            copied_at: 1,
+        };
+        fs::write(
+            a.join(COPY_SIDECAR),
+            serde_json::to_string(&sidecar).unwrap(),
+        )
+        .unwrap();
+
+        match classify_entry(&a) {
+            EntryKind::ManagedCopy {
+                source_path,
+                source_hash,
+            } => {
+                assert_eq!(source_path, PathBuf::from("/src/a"));
+                assert_eq!(source_hash, "deadbeef");
+            }
+            other => panic!("应识别为 ManagedCopy，实际 {other:?}"),
+        }
+    }
+}
