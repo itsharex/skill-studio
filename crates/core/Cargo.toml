@@ -1,0 +1,28 @@
+[package]
+name         = "skill-studio-core"
+edition      = { workspace = true }
+rust-version = { workspace = true }
+version      = { workspace = true }
+license      = { workspace = true }
+description  = "Core logic for Skill Studio: agent registry, skill scanning, link engine"
+
+[dependencies]
+serde      = { workspace = true }
+serde_json = { workspace = true }
+serde_yaml = { workspace = true }
+thiserror  = { workspace = true }
+anyhow     = { workspace = true }
+dirs       = { workspace = true }
+sha2       = { workspace = true }
+log        = { workspace = true }
+chrono     = { workspace = true }
+indexmap   = { workspace = true }
+once_cell  = { workspace = true }
+toml_edit  = { workspace = true }
+
+[target.'cfg(windows)'.dependencies]
+windows-sys = { version = "0.61", features = ["Win32_Storage_FileSystem", "Win32_Foundation"] }
+
+[dev-dependencies]
+tempfile    = { workspace = true }
+serial_test = "3"
