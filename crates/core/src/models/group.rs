@@ -1,0 +1,103 @@
+use serde::{Deserialize, Serialize};
+
+/// 分组。纯元数据，不持有任何文件。
+///
+/// 应用语义是**一次性 Add / Remove**（等同 cc-switch 生态里 Skills Manager 的
+/// Presets）：点一下把组内 skill 批量注册或批量移除，不做持续对账，
+/// 因此永远不会误删用户手动添加的 skill。
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct Group {
+    pub id: String,
+    pub name: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub description: Option<String>,
+    /// lucide 图标名，前端按名字取图标
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub icon: Option<String>,
+    #[serde(default)]
+    pub sort_order: i32,
+    /// 成员 skill 的 ID，顺序可由用户拖拽调整
+    #[serde(default)]
+    pub skill_ids: Vec<String>,
+}
+
+/// 分组应用到某个 agent 的方式
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "lowercase")]
+pub enum GroupApplyMode {
+    /// 把组内 skill 注册到该 agent，组外的一律不动
+    Add,
+    /// 只移除组内 skill 的注册，且只移除本工具管理的
+    Remove,
+}
+
+impl Group {
+    pub fn new(id: String, name: String) -> Self {
+        Self {
+            id,
+            name,
+            description: None,
+            icon: None,
+            sort_order: 0,
+            skill_ids: Vec::new(),
+        }
+    }
+
+    pub fn contains(&self, skill_id: &str) -> bool {
+        self.skill_ids.iter().any(|s| s == skill_id)
+    }
+
+    /// 幂等添加，重复调用不会产生重复成员
+    pub fn add_skill(&mut self, skill_id: String) -> bool {
+        if self.contains(&skill_id) {
+            return false;
+        }
+        self.skill_ids.push(skill_id);
+        true
+    }
+
+    pub fn remove_skill(&mut self, skill_id: &str) -> bool {
+        let before = self.skill_ids.len();
+        self.skill_ids.retain(|s| s != skill_id);
+        self.skill_ids.len() != before
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn add_skill_is_idempotent() {
+        let mut g = Group::new("g1".into(), "前端".into());
+        assert!(g.add_skill("s1".into()));
+        assert!(!g.add_skill("s1".into()));
+        assert_eq!(g.skill_ids.len(), 1);
+    }
+
+    #[test]
+    fn remove_skill_reports_whether_it_changed() {
+        let mut g = Group::new("g1".into(), "前端".into());
+        g.add_skill("s1".into());
+        assert!(g.remove_skill("s1"));
+        assert!(!g.remove_skill("s1"));
+        assert!(g.skill_ids.is_empty());
+    }
+
+    #[test]
+    fn apply_mode_serializes_lowercase() {
+        assert_eq!(
+            serde_json::to_string(&GroupApplyMode::Add).unwrap(),
+            "\"add\""
+        );
+    }
+
+    #[test]
+    fn optional_fields_are_omitted_when_empty() {
+        let g = Group::new("g1".into(), "前端".into());
+        let json = serde_json::to_string(&g).unwrap();
+        assert!(!json.contains("description"), "{json}");
+        assert!(!json.contains("icon"), "{json}");
+    }
+}

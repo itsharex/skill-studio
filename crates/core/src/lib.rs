@@ -4,16 +4,13 @@
 //! 的全部逻辑都在这里，`cargo test -p skill-studio-core` 不需要起 GUI 就能跑完。
 //! `src-tauri` 只做一层 `#[tauri::command]` 转发。
 
+pub mod error;
+pub mod fs;
+pub mod models;
+
+pub use error::{Error, Result};
+pub use models::*;
+
 pub fn core_version() -> &'static str {
     env!("CARGO_PKG_VERSION")
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn exposes_its_version() {
-        assert!(!core_version().is_empty());
-    }
 }
