@@ -2,7 +2,7 @@ mod commands;
 mod error;
 mod state;
 
-pub use error::AppError;
+pub use error::{AppError, AppResult};
 pub use state::AppState;
 
 use tauri::Manager;
