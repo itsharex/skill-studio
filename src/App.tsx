@@ -1,3 +1,7 @@
+import {
+  NavigationGuard,
+  useNavigationGuard,
+} from "@/components/common/NavigationGuard";
 import { InstallSkillsPage } from "@/pages/InstallSkillsPage";
 import { PageToolsContext } from "@/components/common/PageTools";
 import { useEffect, useMemo, useRef, useState } from "react";
@@ -41,6 +45,14 @@ const STATIC_TITLES: Record<StaticView, string> = {
 };
 
 export default function App() {
+  return (
+    <NavigationGuard>
+      <AppContent />
+    </NavigationGuard>
+  );
+}
+function AppContent() {
+  const requestNavigation = useNavigationGuard();
   const { data: agents = [] } = useAgents();
   const queryClient = useQueryClient();
   useSkillsAutoRefresh();
@@ -137,7 +149,11 @@ export default function App() {
       case "settings":
         return <SettingsPage />;
       default:
-        return <LibraryPage onAdd={() => setView("install")} />;
+        return (
+          <LibraryPage
+            onAdd={() => requestNavigation(() => setView("install"))}
+          />
+        );
     }
   };
 
@@ -170,7 +186,9 @@ export default function App() {
                   className="h-9 w-9 rounded-xl text-muted-foreground"
                   title="返回"
                   aria-label="返回"
-                  onClick={() => setView(backTarget.current)}
+                  onClick={() =>
+                    requestNavigation(() => setView(backTarget.current))
+                  }
                 >
                   <ArrowLeft className="h-4 w-4" />
                 </Button>
@@ -189,7 +207,7 @@ export default function App() {
                   className="h-8 w-8 text-muted-foreground"
                   title="设置"
                   aria-label="设置"
-                  onClick={() => setView("settings")}
+                  onClick={() => requestNavigation(() => setView("settings"))}
                 >
                   <SettingsIcon className="h-4 w-4" />
                 </Button>
@@ -221,7 +239,9 @@ export default function App() {
                   <NavSwitcher
                     sections={sections}
                     active={view}
-                    onSelect={setView}
+                    onSelect={(next) => {
+                      if (next !== view) requestNavigation(() => setView(next));
+                    }}
                   />
                 </nav>
                 <div ref={setAddHost} />

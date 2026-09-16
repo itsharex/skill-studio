@@ -1,5 +1,9 @@
 import { PageTools } from "@/components/common/PageTools";
-import { useQueuedDraft } from "@/hooks/useQueuedDraft";
+import {
+  NavigationGuard,
+  useNavigationGuard,
+  useUnsavedProject,
+} from "@/components/common/NavigationGuard";
 import { useMemo, useState } from "react";
 import {
   ArrowLeft,
@@ -28,11 +32,6 @@ import {
   SelectTrigger,
   SelectValue,
 } from "@/components/ui/select";
-import {
-  Tooltip,
-  TooltipContent,
-  TooltipTrigger,
-} from "@/components/ui/tooltip";
 import { AgentIcon } from "@/components/common/AgentIcon";
 import { ConfirmDialog } from "@/components/common/ConfirmDialog";
 import { EmptyState } from "@/components/common/EmptyState";
@@ -56,6 +55,14 @@ import {
 import type { LinkMode, ProjectBinding } from "@/types";
 
 export function ProjectsPage() {
+  return (
+    <NavigationGuard>
+      <ProjectsContent />
+    </NavigationGuard>
+  );
+}
+function ProjectsContent() {
+  const requestNavigation = useNavigationGuard();
   const { data: projects = [] } = useProjects();
   const createProject = useCreateProject();
   const deleteProject = useDeleteProject();
@@ -73,15 +80,19 @@ export function ProjectsPage() {
     <PageTools
       query={query}
       onQueryChange={(v) => {
-        setQuery(v);
-        setDetail(null);
+        requestNavigation(() => {
+          setQuery(v);
+          setDetail(null);
+        });
       }}
       placeholder="搜索项目…"
       createLabel="添加项目"
       onCreate={() => {
-        setDetail(null);
-        setForm({ name: "", root: "" });
-        setCreating(true);
+        requestNavigation(() => {
+          setDetail(null);
+          setForm({ name: "", root: "" });
+          setCreating(true);
+        });
       }}
     />
   );
@@ -93,7 +104,7 @@ export function ProjectsPage() {
         <ProjectDetail
           key={active.id}
           project={active}
-          onBack={() => setDetail(null)}
+          onBack={() => requestNavigation(() => setDetail(null))}
         />
       </>
     );
@@ -286,9 +297,19 @@ function ProjectDetail({
     }),
     [project.agentIds, project.skillIds, project.groupIds, project.linkMode],
   );
-  const draft = useQueuedDraft(remote, (next) =>
-    update.mutateAsync({ projectId: project.id, ...next }),
-  );
+  const [value, setValue] = useState(remote);
+  const [saved, setSaved] = useState(remote);
+  const [error, setError] = useState<string | null>(null);
+  const fingerprint = (v: typeof value) =>
+    JSON.stringify({
+      ...v,
+      agentIds: [...v.agentIds].sort(),
+      skillIds: [...v.skillIds].sort(),
+      groupIds: [...v.groupIds].sort(),
+    });
+  const dirty = fingerprint(value) !== fingerprint(saved);
+  useUnsavedProject(dirty, writing);
+  const draft = { value, edit: setValue };
 
   const projectAgents = useMemo(
     () => agents.filter((a) => a.supportsProjectSkills),
@@ -302,6 +323,7 @@ function ProjectDetail({
   }, [skills, query]);
 
   const toggle = (key: "agentIds" | "skillIds" | "groupIds", id: string) =>
+    !writing &&
     draft.edit((previous) => ({
       ...previous,
       [key]: previous[key].includes(id)
@@ -315,17 +337,7 @@ function ProjectDetail({
   return (
     <div className="flex min-h-0 flex-1 flex-col">
       <div className="flex items-center gap-3 py-4">
-        <Button
-          variant="outline"
-          size="icon"
-          onClick={() =>
-            void draft
-              .flush()
-              .then(onBack)
-              .catch(() => {})
-          }
-          title="返回"
-        >
+        <Button variant="outline" size="icon" onClick={onBack} title="返回">
           <ArrowLeft className="h-4 w-4" />
         </Button>
         <div className="min-w-0 flex-1">
@@ -343,19 +355,19 @@ function ProjectDetail({
         </Button>
         <Button
           size="sm"
-          disabled={
-            draft.value.agentIds.length === 0 ||
-            (draft.value.skillIds.length === 0 &&
-              draft.value.groupIds.length === 0) ||
-            writing ||
-            apply.isPending
-          }
+          disabled={writing || apply.isPending}
           onClick={() => {
             setWriting(true);
-            void draft
-              .flush()
+            setError(null);
+            void update
+              .mutateAsync({ projectId: project.id, ...value })
               .then(() => apply.mutateAsync(project.id))
-              .catch(() => {})
+              .then((report) => {
+                if (report.failed.length)
+                  throw new Error("部分 skill 写入失败，请检查后重试");
+                setSaved(value);
+              })
+              .catch((e) => setError(String(e)))
               .finally(() => setWriting(false));
           }}
         >
@@ -364,38 +376,15 @@ function ProjectDetail({
         </Button>
       </div>
 
-      <div role="status" className="text-xs text-muted-foreground">
-        {draft.pending
-          ? "正在保存选择…"
-          : draft.error
-            ? `保存失败，选择已保留：${draft.error}`
-            : "选择会自动保存"}
-        {draft.error && (
-          <Button
-            variant="outline"
-            size="sm"
-            onClick={() => void draft.flush().catch(() => {})}
-          >
-            重试保存
-          </Button>
-        )}
-      </div>
-      <div className="min-h-0 flex-1 space-y-6 overflow-y-auto pb-6">
+      {error && (
+        <p role="alert" className="text-sm text-destructive">
+          写入失败，修改已保留：{error}
+        </p>
+      )}
+      {/* Leave room for focus rings inside the scroll viewport without shifting the fields. */}
+      <div className="-mx-1 min-h-0 flex-1 space-y-6 overflow-y-auto px-1 pb-6 pt-1">
         <section className="space-y-2">
-          <div className="flex items-center gap-2">
-            <h3 className="text-sm font-semibold">生效的 agent</h3>
-            <Tooltip>
-              <TooltipTrigger asChild>
-                <span className="cursor-default text-[11px] text-muted-foreground">
-                  写入位置
-                </span>
-              </TooltipTrigger>
-              <TooltipContent>
-                Claude Code 写 <code>.claude/skills</code>， Codex 写{" "}
-                <code>.agents/skills</code>（不是 .codex/skills）
-              </TooltipContent>
-            </Tooltip>
-          </div>
+          <h3 className="text-sm font-semibold">agent</h3>
           <ListContainer>
             {projectAgents.map((a, i) => (
               <ListItemRow
@@ -424,6 +413,7 @@ function ProjectDetail({
           <div className="flex items-center gap-3">
             <Select
               value={draft.value.linkMode}
+              disabled={writing}
               onValueChange={(v) =>
                 draft.edit((previous) => ({
                   ...previous,

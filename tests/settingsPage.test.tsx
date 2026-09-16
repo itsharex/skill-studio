@@ -1,0 +1,41 @@
+import { fireEvent, screen, waitFor } from "@testing-library/react";
+import userEvent from "@testing-library/user-event";
+import { it, expect } from "vitest";
+import { SettingsPage } from "@/pages/SettingsPage";
+import { renderWithProviders } from "./utils/render";
+import { handlers, calls, defaultSettings } from "./mocks/tauri";
+
+it("only saves backup retention as an integer within 0..100 and never saves an empty input as zero", async () => {
+  let settings = defaultSettings();
+  handlers.set("get_settings", () => settings);
+  handlers.set("update_settings", ({ patch }) => {
+    settings = { ...settings, ...patch };
+    return settings;
+  });
+  const user = userEvent.setup();
+  renderWithProviders(<SettingsPage />);
+  await user.click(await screen.findByRole("tab", { name: "维护" }));
+  const input = screen.getByRole("spinbutton", { name: "配置备份保留份数" });
+  for (const value of ["101", "-1", "1.5", ""]) {
+    fireEvent.change(input, { target: { value } });
+  }
+  expect(calls.filter((c) => c.command === "update_settings")).toHaveLength(0);
+  fireEvent.change(input, { target: { value: "25" } });
+  await waitFor(() =>
+    expect(calls.filter((c) => c.command === "update_settings")).toHaveLength(
+      1,
+    ),
+  );
+  expect(settings.backupKeep).toBe(25);
+});
+
+it("backup restore requires confirmation and cancel does not restore", async () => {
+  handlers.set("list_backups", () => ["/tmp/config-2026.json"]);
+  const user = userEvent.setup();
+  renderWithProviders(<SettingsPage />);
+  await user.click(await screen.findByRole("tab", { name: "维护" }));
+  await user.click(await screen.findByRole("button", { name: "恢复" }));
+  expect(await screen.findByRole("dialog")).toHaveTextContent("从备份恢复配置");
+  await user.click(screen.getByRole("button", { name: "取消" }));
+  expect(calls.filter((c) => c.command === "restore_backup")).toHaveLength(0);
+});

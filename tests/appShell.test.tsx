@@ -250,3 +250,22 @@ it.each([false, true])(
     ).toBeNull();
   },
 );
+
+it("guards project drafts when leaving through the top navigation and search", async () => {
+  withAgents();
+  localStorage.setItem("skill-studio-view", "projects");
+  handlers.set("list_projects", () => [makeProject()]);
+  handlers.set("scan_skills", () => [makeSkill({ id: "a", name: "Alpha" })]);
+  renderWithProviders(<App />);
+  fireEvent.click(await screen.findByText("webapp"));
+  fireEvent.click(await screen.findByRole("checkbox", { name: "Alpha" }));
+  const header = within(screen.getByRole("banner"));
+  fireEvent.click(header.getByRole("button", { name: "设置" }));
+  expect(await screen.findByRole("dialog")).toHaveTextContent("放弃未保存");
+  fireEvent.click(screen.getByRole("button", { name: "继续编辑" }));
+  fireEvent.change(header.getByRole("textbox"), { target: { value: "other" } });
+  expect(await screen.findByRole("dialog")).toHaveTextContent("放弃未保存");
+  fireEvent.click(screen.getByRole("button", { name: "放弃修改并离开" }));
+  expect(screen.queryByRole("checkbox", { name: "Alpha" })).toBeNull();
+  expect(calls.filter((c) => c.command === "update_project")).toHaveLength(0);
+});

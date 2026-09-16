@@ -1,7 +1,19 @@
 import { ThemeToggle } from "@/components/common/ThemeToggle";
 import { Switch } from "@/components/ui/switch";
-import { useEffect, useState } from "react";
-import { FolderOpen, History, Sparkles } from "lucide-react";
+import { useEffect, useState, type ReactNode } from "react";
+import {
+  FolderOpen,
+  History,
+  Sparkles,
+  Palette,
+  Layers,
+  Link2,
+  Database,
+  FolderCog,
+  Settings2,
+  ShieldCheck,
+  Info,
+} from "lucide-react";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
@@ -15,7 +27,6 @@ import {
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { AgentIcon } from "@/components/common/AgentIcon";
 import { ConfirmDialog } from "@/components/common/ConfirmDialog";
-import { ListContainer, ListItemRow } from "@/components/common/ListItemRow";
 import { projectsApi, settingsApi, systemApi } from "@/lib/api";
 import {
   useAgents,
@@ -29,6 +40,63 @@ import {
 import type { LinkMode } from "@/types";
 
 type SettingsTab = "general" | "directories" | "maintenance" | "about";
+
+function SettingsSection({
+  title,
+  icon,
+  children,
+}: {
+  title: string;
+  icon: ReactNode;
+  children: ReactNode;
+}) {
+  return (
+    <section className="space-y-3">
+      <h3 className="flex items-center gap-2 border-b border-border/60 pb-3 text-sm font-semibold">
+        <span className="text-blue-500 [&>svg]:h-4 [&>svg]:w-4">{icon}</span>
+        {title}
+      </h3>
+      <div className="space-y-3">{children}</div>
+    </section>
+  );
+}
+function SettingCard({
+  title,
+  description,
+  icon,
+  children,
+  details,
+}: {
+  title: ReactNode;
+  description?: ReactNode;
+  icon: ReactNode;
+  children?: ReactNode;
+  details?: ReactNode;
+}) {
+  return (
+    <div className="rounded-xl border border-border-default bg-card px-5 py-4">
+      <div className="flex items-center gap-4">
+        <div className="flex h-10 w-10 shrink-0 items-center justify-center rounded-lg border border-border-default bg-background text-blue-500 [&>svg]:h-5 [&>svg]:w-5">
+          {icon}
+        </div>
+        <div className="min-w-0 flex-1">
+          <div className="text-sm font-medium">{title}</div>
+          {description && (
+            <div className="mt-1 text-xs leading-relaxed text-muted-foreground">
+              {description}
+            </div>
+          )}
+        </div>
+        {children && (
+          <div className="flex shrink-0 items-center gap-2">{children}</div>
+        )}
+      </div>
+      {details && (
+        <div className="mt-4 border-t border-border/60 pt-4">{details}</div>
+      )}
+    </div>
+  );
+}
 
 /**
  * 设置页。布局对齐 cc-switch：上方一条分段标签栏、下方内容区，**没有侧栏**
@@ -82,44 +150,55 @@ export function SettingsPage() {
           <TabsTrigger value="about">关于</TabsTrigger>
         </TabsList>
 
-        <div className="min-h-0 flex-1 overflow-y-auto pb-8">
-          <TabsContent value="general" className="space-y-6">
-            <section className="space-y-2">
-              <h3 className="text-sm font-semibold">外观</h3>
-              <ThemeToggle />
-            </section>
-            <section className="flex items-center justify-between gap-4">
-              <div>
-                <label
-                  htmlFor="preserve-manual"
-                  className="text-sm font-semibold"
-                >
-                  切换分组时保留手动安装的 skill
-                </label>
-                <p className="mt-1 text-xs text-muted-foreground">
-                  关闭后暂时停用分组外的手动
-                  skill，停用分组时恢复，不删除文件。下次启用或重新应用分组时生效。
-                </p>
-              </div>
-              <Switch
-                id="preserve-manual"
-                checked={settings.preserveManualSkills ?? true}
-                disabled={update.isPending}
-                onCheckedChange={(value) =>
-                  update.mutate({ preserveManualSkills: value })
+        <div className="-mx-1 min-h-0 flex-1 overflow-y-auto px-1 pb-8 pt-1">
+          <TabsContent value="general" className="space-y-7">
+            <SettingsSection title="外观" icon={<Palette />}>
+              <SettingCard
+                title="主题模式"
+                description="选择浅色、深色，或跟随系统外观。"
+                icon={<Palette />}
+              >
+                <ThemeToggle />
+              </SettingCard>
+            </SettingsSection>
+            <SettingsSection title="分组与安装" icon={<Layers />}>
+              <SettingCard
+                title={
+                  <label htmlFor="preserve-manual">
+                    切换分组时保留手动安装的 skill
+                  </label>
                 }
-              />
-            </section>
-            <section className="space-y-2">
-              <h3 className="text-sm font-semibold">默认链接方式</h3>
-              <div className="flex items-start gap-3">
+                description="关闭后，分组外的手动 skill 会暂时停用，停用分组时恢复。文件不会删除；下次启用或重新应用分组时生效。"
+                icon={<ShieldCheck />}
+              >
+                <Switch
+                  id="preserve-manual"
+                  checked={settings.preserveManualSkills ?? true}
+                  disabled={update.isPending}
+                  onCheckedChange={(value) =>
+                    update.mutate({ preserveManualSkills: value })
+                  }
+                />
+              </SettingCard>
+              <SettingCard
+                title="默认链接方式"
+                description="用于 Agent 安装。自动模式优先使用软链，失败时回退为复制；项目使用各自的链接设置。"
+                icon={<Link2 />}
+                details={
+                  <p className="text-xs leading-relaxed text-muted-foreground">
+                    软链共享 Hub
+                    中的文件，修改后同步生效。复制生成独立文件，源文件更新后需要重新写入。
+                  </p>
+                }
+              >
                 <Select
                   value={settings.defaultLinkMode}
+                  disabled={update.isPending}
                   onValueChange={(v) =>
                     update.mutate({ defaultLinkMode: v as LinkMode })
                   }
                 >
-                  <SelectTrigger className="w-48 shrink-0">
+                  <SelectTrigger className="w-44" aria-label="默认链接方式">
                     <SelectValue />
                   </SelectTrigger>
                   <SelectContent>
@@ -128,226 +207,237 @@ export function SettingsPage() {
                     <SelectItem value="copy">文件复制</SelectItem>
                   </SelectContent>
                 </Select>
-                <p className="text-xs leading-relaxed text-muted-foreground">
-                  软链改一处全生效、不占空间；复制各 agent
-                  互不影响，但源变更后需要重新复制。 自动模式在软链失败时（例如
-                  Windows 未开开发者模式）会自动回退为复制。
-                  <span className="block pt-1">
-                    项目级 skill 有自己的设置，默认复制。
-                  </span>
-                </p>
-              </div>
-            </section>
+              </SettingCard>
+            </SettingsSection>
           </TabsContent>
 
-          <TabsContent value="directories" className="space-y-6">
-            <section className="space-y-2">
-              <h3 className="text-sm font-semibold">Agent 目录覆盖</h3>
-              <p className="text-xs leading-relaxed text-muted-foreground">
-                默认按环境变量（<code>CLAUDE_CONFIG_DIR</code> /{" "}
-                <code>CODEX_HOME</code>） 或标准位置解析。如果这些变量只写在
-                shell 配置里、图形界面进程读不到， 可以在这里显式指定 ——
-                这里的设置优先级最高。
-              </p>
-              <ListContainer>
-                {agents.map((a, i) => {
-                  const override = settings.agentDirOverrides[a.id];
-                  return (
-                    <ListItemRow key={a.id} isLast={i === agents.length - 1}>
-                      <AgentIcon
-                        agentId={a.id}
-                        className="h-4 w-4 shrink-0 text-muted-foreground"
-                      />
-                      <div className="min-w-0 flex-1">
-                        <p className="text-sm font-medium">{a.displayName}</p>
-                        <p className="truncate font-mono text-[11px] text-muted-foreground">
-                          {override ?? a.configDir}
-                          {!override && (
-                            <span className="pl-1 font-sans">（默认）</span>
-                          )}
-                        </p>
-                      </div>
-                      <Button
-                        variant="outline"
-                        size="sm"
-                        onClick={() => void pickAgentDir(a.id)}
-                      >
-                        <FolderOpen className="h-3.5 w-3.5" />
-                        选择
-                      </Button>
-                      {override && (
-                        <Button
-                          variant="ghost"
-                          size="sm"
-                          onClick={() => clearAgentDir(a.id)}
-                        >
-                          恢复默认
-                        </Button>
-                      )}
-                    </ListItemRow>
-                  );
-                })}
-              </ListContainer>
-            </section>
-
-            <section className="space-y-2">
-              <h3 className="text-sm font-semibold">Hub 目录</h3>
-              <p className="text-xs leading-relaxed text-muted-foreground">
-                收编到 Hub 的 skill 真身存放位置。留空则用默认的{" "}
-                <code>~/.skill-studio/skills</code>。Hub 目录不能与任何 agent 的
-                skills 目录重叠，否则同步会自我覆盖。
-              </p>
-              <div className="flex gap-2">
-                <Input
-                  value={settings.hubDir ?? ""}
-                  placeholder="~/.skill-studio/skills（默认）"
-                  onChange={(e) =>
-                    update.mutate(
-                      e.target.value.trim()
-                        ? { hubDir: e.target.value }
-                        : { clearHubDir: true },
-                    )
-                  }
-                />
+          <TabsContent value="directories" className="space-y-7">
+            <SettingsSection title="Skill Studio 存储" icon={<Database />}>
+              <SettingCard
+                title="Hub 目录"
+                icon={<Layers />}
+                description="安装、导入和收编的 skill 存放在这里。留空使用默认目录，不能与 Agent 的 skills 目录重叠。"
+                details={
+                  <div className="flex items-center gap-2">
+                    <Input
+                      aria-label="Hub 目录"
+                      value={settings.hubDir ?? ""}
+                      placeholder="~/.skill-studio/skills（默认）"
+                      onChange={(e) =>
+                        update.mutate(
+                          e.target.value.trim()
+                            ? { hubDir: e.target.value }
+                            : { clearHubDir: true },
+                        )
+                      }
+                    />
+                    <Button
+                      variant="outline"
+                      size="sm"
+                      disabled={update.isPending}
+                      onClick={async () => {
+                        const picked = await projectsApi.pickDirectory();
+                        if (picked) update.mutate({ hubDir: picked });
+                      }}
+                    >
+                      <FolderOpen className="h-4 w-4" />
+                      选择目录
+                    </Button>
+                  </div>
+                }
+              />
+              <SettingCard
+                title="配置目录"
+                icon={<Settings2 />}
+                description={
+                  <>
+                    <span className="block">
+                      保存分组、项目、来源记录和配置备份。
+                    </span>
+                    <span className="mt-1 block break-all font-mono text-[11px]">
+                      {configDir || "正在读取…"}
+                    </span>
+                  </>
+                }
+              >
                 <Button
                   variant="outline"
-                  size="icon"
-                  onClick={async () => {
-                    const picked = await projectsApi.pickDirectory();
-                    if (picked) update.mutate({ hubDir: picked });
-                  }}
+                  size="sm"
+                  disabled={!configDir}
+                  onClick={() => void systemApi.revealPath(configDir)}
                 >
                   <FolderOpen className="h-4 w-4" />
+                  打开
                 </Button>
-              </div>
-            </section>
-
-            <section className="space-y-2">
-              <h3 className="text-sm font-semibold">配置目录</h3>
-              <ListContainer>
-                <ListItemRow isLast>
-                  <div className="min-w-0 flex-1">
-                    <p className="text-sm font-medium">
-                      Skill Studio 自己的配置
-                    </p>
-                    <p className="truncate font-mono text-[11px] text-muted-foreground">
-                      {configDir}
-                    </p>
-                  </div>
-                  <Button
-                    variant="outline"
-                    size="sm"
-                    disabled={!configDir}
-                    onClick={() => void systemApi.revealPath(configDir)}
-                  >
-                    <FolderOpen className="h-3.5 w-3.5" />
-                    打开
-                  </Button>
-                </ListItemRow>
-              </ListContainer>
-            </section>
-          </TabsContent>
-
-          <TabsContent value="maintenance" className="space-y-6">
-            <section className="space-y-2">
-              <h3 className="text-sm font-semibold">维护</h3>
-              <ListContainer>
-                <ListItemRow>
-                  <div className="min-w-0 flex-1">
-                    <p className="text-sm font-medium">清理失效引用</p>
-                    <p className="text-xs text-muted-foreground">
-                      skill 真身被删掉后，分组成员与注册记录里会留下悬空引用
-                    </p>
-                  </div>
-                  <Button
-                    variant="outline"
-                    size="sm"
-                    disabled={prune.isPending}
-                    onClick={() => prune.mutate()}
-                  >
-                    <Sparkles className="h-3.5 w-3.5" />
-                    清理
-                  </Button>
-                </ListItemRow>
-                <ListItemRow isLast>
-                  <div className="min-w-0 flex-1">
-                    <p className="text-sm font-medium">配置备份保留份数</p>
-                    <p className="text-xs text-muted-foreground">
-                      每次写入前先备份，超出份数自动清理最旧的
-                    </p>
-                  </div>
-                  <Input
-                    type="number"
-                    min={0}
-                    max={100}
-                    value={settings.backupKeep}
-                    className="w-20"
-                    onChange={(e) => {
-                      const n = Number(e.target.value);
-                      if (Number.isFinite(n) && n >= 0) {
-                        update.mutate({ backupKeep: n });
-                      }
-                    }}
-                  />
-                </ListItemRow>
-              </ListContainer>
-            </section>
-
-            <section className="space-y-2">
-              <div className="flex items-center gap-2">
-                <h3 className="text-sm font-semibold">配置备份</h3>
-                <Badge variant="outline" className="h-4 px-1.5 text-[10px]">
-                  {backups.length}
-                </Badge>
-              </div>
-              {backups.length === 0 ? (
-                <p className="text-xs text-muted-foreground">
-                  还没有备份。第二次写入配置时会产生第一份。
-                </p>
-              ) : (
-                <ListContainer>
-                  {backups.slice(0, 10).map((path, i) => (
-                    <ListItemRow
-                      key={path}
-                      isLast={i === Math.min(backups.length, 10) - 1}
-                    >
-                      <History className="h-4 w-4 shrink-0 text-muted-foreground" />
-                      <p className="min-w-0 flex-1 truncate font-mono text-[11px]">
-                        {path.split(/[/\\]/).pop()}
-                      </p>
-                      <Button
-                        variant="outline"
-                        size="sm"
-                        onClick={() => setRestoring(path)}
-                      >
-                        恢复
-                      </Button>
-                    </ListItemRow>
-                  ))}
-                </ListContainer>
-              )}
-            </section>
-          </TabsContent>
-
-          <TabsContent value="about" className="space-y-3">
-            <div className="space-y-1">
-              <h3 className="text-sm font-semibold">
-                Skill Studio {version ? `v${version}` : ""}
-              </h3>
-              <p className="text-xs text-muted-foreground">
-                跨 agent 的 Agent Skill 管理器
+              </SettingCard>
+            </SettingsSection>
+            <SettingsSection title="Agent 目录覆盖" icon={<FolderCog />}>
+              <p className="text-xs leading-relaxed text-muted-foreground">
+                默认使用环境变量或标准目录。若 Agent
+                安装在其他位置，可在此指定配置目录。
               </p>
-            </div>
-            <p className="max-w-2xl text-xs leading-relaxed text-muted-foreground">
-              停用 skill 走各 agent 自己的配置开关（Claude 的{" "}
-              <code>skillOverrides</code>、Codex 的{" "}
-              <code>[[skills.config]]</code>
-              ）， 不删文件，随时可恢复。
-            </p>
-            <p className="max-w-2xl text-xs leading-relaxed text-muted-foreground">
-              每个 Agent 同时启用一个分组；手动安装的 skill
-              按通用设置保留或暂时停用，文件不会被删除。
-            </p>
+              {agents.map((a) => {
+                const override = settings.agentDirOverrides[a.id];
+                return (
+                  <SettingCard
+                    key={a.id}
+                    icon={<AgentIcon agentId={a.id} />}
+                    title={
+                      <span className="flex items-center gap-2">
+                        {a.displayName}
+                        <Badge variant="outline" className="text-[10px]">
+                          {override ? "自定义" : "默认"}
+                        </Badge>
+                      </span>
+                    }
+                    description={
+                      <span className="break-all font-mono text-[11px]">
+                        {override ?? a.configDir}
+                      </span>
+                    }
+                  >
+                    {override && (
+                      <Button
+                        variant="ghost"
+                        size="sm"
+                        disabled={update.isPending}
+                        onClick={() => clearAgentDir(a.id)}
+                      >
+                        恢复默认
+                      </Button>
+                    )}
+                    <Button
+                      variant="outline"
+                      size="sm"
+                      disabled={update.isPending}
+                      onClick={() => void pickAgentDir(a.id)}
+                    >
+                      <FolderOpen className="h-4 w-4" />
+                      选择目录
+                    </Button>
+                  </SettingCard>
+                );
+              })}
+            </SettingsSection>
+          </TabsContent>
+
+          <TabsContent value="maintenance" className="space-y-7">
+            <SettingsSection title="数据维护" icon={<Sparkles />}>
+              <SettingCard
+                title="清理失效引用"
+                icon={<Sparkles />}
+                description="清理已不存在的 skill 在分组和注册记录中留下的引用。"
+              >
+                <Button
+                  variant="outline"
+                  size="sm"
+                  disabled={prune.isPending}
+                  onClick={() => prune.mutate()}
+                >
+                  {prune.isPending ? "清理中…" : "清理"}
+                </Button>
+              </SettingCard>
+            </SettingsSection>
+            <SettingsSection title="配置备份" icon={<History />}>
+              <SettingCard
+                title="配置备份保留份数"
+                icon={<ShieldCheck />}
+                description="写入配置前自动备份，超过保留数量时清理最旧的备份。"
+              >
+                <Input
+                  aria-label="配置备份保留份数"
+                  type="number"
+                  min={0}
+                  max={100}
+                  value={settings.backupKeep}
+                  className="w-20 text-center"
+                  onChange={(e) => {
+                    const n = Number(e.target.value);
+                    if (
+                      e.target.value.trim() &&
+                      Number.isInteger(n) &&
+                      n >= 0 &&
+                      n <= 100
+                    )
+                      update.mutate({ backupKeep: n });
+                  }}
+                />
+              </SettingCard>
+              <div className="overflow-hidden rounded-xl border border-border-default bg-card">
+                <div className="flex items-center justify-between gap-3 border-b border-border/60 px-5 py-4">
+                  <span className="text-sm font-medium">可恢复的备份</span>
+                  <Badge variant="outline">{backups.length} 份</Badge>
+                </div>
+                {backups.length === 0 ? (
+                  <p className="px-5 py-8 text-center text-xs text-muted-foreground">
+                    暂无备份。配置更新后会自动生成。
+                  </p>
+                ) : (
+                  <div className="divide-y divide-border/60">
+                    {backups.slice(0, 10).map((path) => (
+                      <div
+                        key={path}
+                        className="flex items-center gap-3 px-5 py-3"
+                      >
+                        <History className="h-4 w-4 shrink-0 text-muted-foreground" />
+                        <p
+                          title={path}
+                          className="min-w-0 flex-1 truncate font-mono text-xs"
+                        >
+                          {path.split(/[/\\]/).pop()}
+                        </p>
+                        <Button
+                          variant="outline"
+                          size="sm"
+                          disabled={restore.isPending}
+                          onClick={() => setRestoring(path)}
+                        >
+                          恢复
+                        </Button>
+                      </div>
+                    ))}
+                  </div>
+                )}
+                {backups.length > 10 && (
+                  <p className="border-t px-5 py-3 text-xs text-muted-foreground">
+                    显示最近 10 份备份。
+                  </p>
+                )}
+              </div>
+            </SettingsSection>
+          </TabsContent>
+
+          <TabsContent value="about" className="space-y-7">
+            <SettingsSection title="关于应用" icon={<Info />}>
+              <div className="rounded-xl border border-border-default bg-card p-6">
+                <div className="flex items-center gap-4">
+                  <div className="flex h-12 w-12 items-center justify-center rounded-xl bg-blue-500 text-white">
+                    <Layers className="h-6 w-6" />
+                  </div>
+                  <div>
+                    <h3 className="text-lg font-semibold text-blue-500">
+                      Skill Studio
+                    </h3>
+                    <p className="mt-1 text-xs text-muted-foreground">
+                      {version ? `版本 ${version}` : "跨 Agent 的 Skill 管理器"}
+                    </p>
+                  </div>
+                </div>
+                <p className="mt-5 text-sm leading-relaxed text-muted-foreground">
+                  集中管理你的 skill，为不同 Agent 组合所需能力。
+                </p>
+              </div>
+              <SettingCard
+                title="Skill Hub"
+                icon={<Layers />}
+                description="汇总、安装和导入 skill，保留来源信息，统一管理文件。"
+              />
+              <SettingCard
+                title="Agent 与项目"
+                icon={<FolderCog />}
+                description="在 Agent 中切换 skill 分组，为项目选择独立的 skill 组合。手动安装的 skill 按通用设置保留或暂时停用。"
+              />
+            </SettingsSection>
           </TabsContent>
         </div>
       </Tabs>
