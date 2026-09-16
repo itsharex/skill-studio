@@ -227,10 +227,14 @@ pub(crate) fn copy_tree(src: &Path, dst: &Path) -> Result<()> {
             } else if meta.is_dir() {
                 walk(root, target, &from, &to, depth + 1)?;
             } else if meta.is_file() {
-                fs::copy(&from, &to).map_err(|e| Error::io(&from, e))?;
-                fs::File::open(&to)
-                    .and_then(|file| file.sync_all())
-                    .map_err(|e| Error::io(&to, e))?;
+                let mut input = fs::File::open(&from).map_err(|e| Error::io(&from, e))?;
+                let mut output = fs::File::create(&to).map_err(|e| Error::io(&to, e))?;
+                std::io::copy(&mut input, &mut output).map_err(|e| Error::io(&to, e))?;
+                // Windows FlushFileBuffers requires a writable handle. Apply
+                // source permissions only after flushing, including read-only files.
+                output.sync_all().map_err(|e| Error::io(&to, e))?;
+                drop(output);
+                fs::set_permissions(&to, meta.permissions()).map_err(|e| Error::io(&to, e))?;
             } else {
                 return Err(Error::invalid(format!(
                     "不支持的文件类型: {}",
