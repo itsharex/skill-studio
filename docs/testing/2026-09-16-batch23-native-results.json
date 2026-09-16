@@ -1,0 +1,203 @@
+{
+  "started": "2026-09-16T03:43:44.023Z",
+  "checks": [
+    {
+      "name": "native app initialized without recovery fallback",
+      "pass": true
+    },
+    {
+      "name": "real sample discovered and protected skill remains visible",
+      "pass": true,
+      "detail": [
+        {
+          "name": "ss-e2e-bad-yaml",
+          "origin": {
+            "kind": "inPlace",
+            "ownerAgent": "codex"
+          }
+        },
+        {
+          "name": "ss-e2e-cycle",
+          "origin": {
+            "kind": "external"
+          }
+        },
+        {
+          "name": "ss-e2e-external",
+          "origin": {
+            "kind": "external"
+          }
+        },
+        {
+          "name": "ss-e2e-external-other",
+          "origin": {
+            "kind": "external"
+          }
+        },
+        {
+          "name": "ss-e2e-gh-fix-ci",
+          "origin": {
+            "kind": "inPlace",
+            "ownerAgent": "codex"
+          }
+        },
+        {
+          "name": "ss-e2e-missing",
+          "origin": {
+            "kind": "external"
+          }
+        },
+        {
+          "name": "ss-e2e-secondary",
+          "origin": {
+            "kind": "inPlace",
+            "ownerAgent": "codex"
+          }
+        }
+      ]
+    },
+    {
+      "name": "library renders downloaded sample",
+      "pass": true
+    },
+    {
+      "name": "external alias discovery is deduplicated and cannot adopt source",
+      "pass": true
+    },
+    {
+      "name": "broken and cyclic links show diagnostics",
+      "pass": true
+    },
+    {
+      "name": "malformed YAML stays visible and repairs refresh automatically",
+      "pass": true
+    },
+    {
+      "name": "Codex ordered path and declared-name rules isolate same-name skills",
+      "pass": true
+    },
+    {
+      "name": "unlinking external aliases preserves repository source",
+      "pass": true
+    },
+    {
+      "name": "copy registration across agents",
+      "pass": true
+    },
+    {
+      "name": "symlink registration and repeated registration",
+      "pass": true
+    },
+    {
+      "name": "group create/rename/member deduplication/reorder",
+      "pass": true
+    },
+    {
+      "name": "group add preserves unrelated skill",
+      "pass": true
+    },
+    {
+      "name": "project direct+group bindings deploy to both agents",
+      "pass": true
+    },
+    {
+      "name": "real project UI preserves rapid selections and writes both skills",
+      "pass": true
+    },
+    {
+      "name": "project gitignore is idempotent and preserves existing rules",
+      "pass": true
+    },
+    {
+      "name": "project gitignore covers persistent transaction lock files",
+      "pass": true
+    },
+    {
+      "name": "automatic refresh after nested source edit",
+      "pass": true
+    },
+    {
+      "name": "source edits mark global copy stale",
+      "pass": true
+    },
+    {
+      "name": "adopt to Hub through actual menu and confirmation dialog",
+      "pass": true,
+      "detail": {
+        "id": "4a39756fed7b1f09",
+        "path": "/Users/fulei/.skill-studio/skills/ss-e2e-gh-fix-ci"
+      }
+    },
+    {
+      "name": "internal relative and absolute links survive migration",
+      "pass": true
+    },
+    {
+      "name": "existing global and project references keep old hash baseline",
+      "pass": true
+    },
+    {
+      "name": "post-migration global/project updates",
+      "pass": true
+    },
+    {
+      "name": "local modification detected without overwriting",
+      "pass": true
+    },
+    {
+      "name": "manual refresh renders modified badge",
+      "pass": true
+    },
+    {
+      "name": "both-side conflict is protected",
+      "pass": true
+    },
+    {
+      "name": "explicit forced repair restores copy",
+      "pass": true
+    },
+    {
+      "name": "missing SKILL.md reports damaged and blocks ordinary removal",
+      "pass": true
+    },
+    {
+      "name": "native enable/disable roundtrip for test skill only",
+      "pass": true
+    },
+    {
+      "name": "navigation: groups, projects, settings, return",
+      "pass": true
+    },
+    {
+      "name": "group remove spares unrelated registrations",
+      "pass": true
+    },
+    {
+      "name": "project unapply removes both agent copies",
+      "pass": true
+    },
+    {
+      "name": "delete group/project metadata",
+      "pass": true
+    },
+    {
+      "name": "unregister all temporary registrations and idempotent retry",
+      "pass": true
+    },
+    {
+      "name": "new roots and directory override changes are watched without restart",
+      "pass": true
+    },
+    {
+      "name": "configuration backups available",
+      "pass": true
+    },
+    {
+      "name": "configuration backup restore roundtrip",
+      "pass": true
+    }
+  ],
+  "errors": [],
+  "complete": true,
+  "finished": "2026-09-16T03:44:06.824Z"
+}

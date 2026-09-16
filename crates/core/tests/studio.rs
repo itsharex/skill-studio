@@ -335,8 +335,9 @@ fn native_toggle_is_reflected_in_the_view() {
     let v = &studio.scan_skills(&config).unwrap()[0];
     assert!(!v.agents["claude-code"].disabled);
 
+    let id = v.skill.id.clone();
     studio
-        .set_skill_enabled(&config, "deploy", "claude-code", false)
+        .set_skill_enabled(&config, &id, "claude-code", false)
         .unwrap();
 
     let v = &studio.scan_skills(&config).unwrap()[0];
@@ -348,7 +349,7 @@ fn native_toggle_is_reflected_in_the_view() {
     assert!(settings.contains("skillOverrides"), "{settings}");
 
     studio
-        .set_skill_enabled(&config, "deploy", "claude-code", true)
+        .set_skill_enabled(&config, &id, "claude-code", true)
         .unwrap();
     let v = &studio.scan_skills(&config).unwrap()[0];
     assert!(!v.agents["claude-code"].disabled);

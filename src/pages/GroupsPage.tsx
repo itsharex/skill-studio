@@ -1,3 +1,4 @@
+import { useQueuedDraft } from "@/hooks/useQueuedDraft";
 import { useMemo, useState } from "react";
 import {
   ArrowLeft,
@@ -83,7 +84,13 @@ export function GroupsPage() {
 
   const active = groups.find((g) => g.id === editing) ?? null;
   if (active) {
-    return <GroupMemberEditor group={active} onBack={() => setEditing(null)} />;
+    return (
+      <GroupMemberEditor
+        key={active.id}
+        group={active}
+        onBack={() => setEditing(null)}
+      />
+    );
   }
 
   const openCreate = () => {
@@ -347,21 +354,24 @@ function GroupMemberEditor({
   const { data: skills = [] } = useSkills();
   const setGroupSkills = useSetGroupSkills();
   const [query, setQuery] = useState("");
+  const draft = useQueuedDraft(group.skillIds, (skillIds) =>
+    setGroupSkills.mutateAsync({ groupId: group.id, skillIds }),
+  );
 
   const members = useMemo(
     () =>
-      group.skillIds
+      draft.value
         .map((id) => skills.find((s) => s.id === id))
         .filter((s): s is NonNullable<typeof s> => s !== undefined),
-    [group.skillIds, skills],
+    [draft.value, skills],
   );
 
   const candidates = useMemo(() => {
     const q = query.trim().toLowerCase();
     return skills
-      .filter((s) => !group.skillIds.includes(s.id))
+      .filter((s) => !draft.value.includes(s.id))
       .filter((s) => !q || s.name.toLowerCase().includes(q));
-  }, [skills, group.skillIds, query]);
+  }, [skills, draft.value, query]);
 
   const sensors = useSensors(
     useSensor(PointerSensor, { activationConstraint: { distance: 8 } }),
@@ -373,30 +383,37 @@ function GroupMemberEditor({
   const onDragEnd = (e: DragEndEvent) => {
     const { active, over } = e;
     if (!over || active.id === over.id) return;
-    const oldIndex = group.skillIds.indexOf(String(active.id));
-    const newIndex = group.skillIds.indexOf(String(over.id));
-    if (oldIndex < 0 || newIndex < 0) return;
-    const next = [...group.skillIds];
-    next.splice(newIndex, 0, next.splice(oldIndex, 1)[0]);
-    setGroupSkills.mutate({ groupId: group.id, skillIds: next });
+    draft.edit((previous) => {
+      const oldIndex = previous.indexOf(String(active.id));
+      const newIndex = previous.indexOf(String(over.id));
+      if (oldIndex < 0 || newIndex < 0) return previous;
+      const next = [...previous];
+      next.splice(newIndex, 0, next.splice(oldIndex, 1)[0]);
+      return next;
+    });
   };
 
   const add = (id: string) =>
-    setGroupSkills.mutate({
-      groupId: group.id,
-      skillIds: [...group.skillIds, id],
-    });
-
+    draft.edit((previous) =>
+      previous.includes(id) ? previous : [...previous, id],
+    );
   const remove = (id: string) =>
-    setGroupSkills.mutate({
-      groupId: group.id,
-      skillIds: group.skillIds.filter((x) => x !== id),
-    });
+    draft.edit((previous) => previous.filter((x) => x !== id));
 
   return (
     <div className="flex min-h-0 flex-1 flex-col">
       <div className="flex items-center gap-3 py-4">
-        <Button variant="outline" size="icon" onClick={onBack} title="返回">
+        <Button
+          variant="outline"
+          size="icon"
+          onClick={() =>
+            void draft
+              .flush()
+              .then(onBack)
+              .catch(() => {})
+          }
+          title="返回"
+        >
           <ArrowLeft className="h-4 w-4" />
         </Button>
         <div className="min-w-0 flex-1">
@@ -407,6 +424,22 @@ function GroupMemberEditor({
         </div>
       </div>
 
+      <div role="status" className="text-xs text-muted-foreground">
+        {draft.pending
+          ? "正在保存成员…"
+          : draft.error
+            ? `保存失败，成员已保留：${draft.error}`
+            : "成员会自动保存"}
+        {draft.error && (
+          <Button
+            variant="outline"
+            size="sm"
+            onClick={() => void draft.flush().catch(() => {})}
+          >
+            重试保存
+          </Button>
+        )}
+      </div>
       <div className="grid min-h-0 flex-1 grid-cols-1 gap-4 overflow-hidden pb-6 lg:grid-cols-2">
         <div className="flex min-h-0 flex-col">
           <p className="pb-2 text-xs font-semibold uppercase tracking-wide text-muted-foreground">
@@ -425,7 +458,7 @@ function GroupMemberEditor({
                   onDragEnd={onDragEnd}
                 >
                   <SortableContext
-                    items={group.skillIds}
+                    items={draft.value}
                     strategy={verticalListSortingStrategy}
                   >
                     {members.map((s, i) => (

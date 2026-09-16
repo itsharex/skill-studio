@@ -75,6 +75,8 @@ pub struct Frontmatter {
     /// frontmatter 存在但 YAML 解析失败
     #[serde(default)]
     pub malformed: bool,
+    #[serde(default)]
+    pub error: Option<String>,
 }
 
 /// 复制边车的内容
@@ -97,13 +99,17 @@ pub fn parse_frontmatter(skill_md: &Path) -> Frontmatter {
     };
     // 某些编辑器会写 BOM；frontmatter 只有在 `---` 位于**首行**时才生效
     let content = raw.trim_start_matches('\u{feff}');
-    if !content.starts_with("---") {
+    if content.lines().next().map(str::trim_end) != Some("---") {
         return Frontmatter::default();
     }
     // 首个 `---` 之后再找闭合的 `---`
     let rest = &content[3..];
     let Some(end) = find_closing_fence(rest) else {
-        return Frontmatter::default();
+        return Frontmatter {
+            malformed: true,
+            error: Some("frontmatter 缺少结束标记 ---".into()),
+            ..Default::default()
+        };
     };
     let block = &rest[..end];
 
@@ -127,10 +133,12 @@ pub fn parse_frontmatter(skill_md: &Path) -> Frontmatter {
                 description: as_string("description"),
                 extra_keys,
                 malformed: false,
+                error: None,
             }
         }
-        Err(_) => Frontmatter {
+        Err(error) => Frontmatter {
             malformed: true,
+            error: Some(error.to_string()),
             ..Default::default()
         },
     }
@@ -154,8 +162,7 @@ fn find_closing_fence(rest: &str) -> Option<usize> {
 /// - 按相对路径排序，保证跨平台结果一致
 /// - 路径和内容长度都进哈希，避免拼接歧义
 /// - 跳过复制边车自身（它含哈希，会自我循环）
-/// - **跳过一切符号链接**：目录 symlink 不递归（防环），文件 symlink 不读取
-///   （可能指到目录外，把意料之外的内容算进哈希）
+/// - 符号链接只记录目标，不遍历；内部目标使用相对路径，迁移不改变哈希
 pub fn dir_content_hash(dir: &Path) -> Result<String> {
     let mut files = Vec::new();
     collect_files(dir, dir, &mut files, 0)?;
@@ -164,7 +171,19 @@ pub fn dir_content_hash(dir: &Path) -> Result<String> {
     let mut hasher = Sha256::new();
     for rel in &files {
         let full = dir.join(rel);
-        let bytes = fs::read(&full).map_err(|e| Error::io(&full, e))?;
+        let bytes = if is_symlink_or_junction(&full) {
+            // Domain separation prevents a regular file containing the link's
+            // textual representation from being mistaken for the same entry.
+            hasher.update(b"symlink\0");
+            let target = link_destination(&full)?;
+            let key = match target.strip_prefix(crate::fs::paths::normalize_path_lexically(dir)) {
+                Ok(rel) => format!("internal:{}", rel.display()),
+                Err(_) => format!("external:{}", target.display()),
+            };
+            format!("symlink:{key}").into_bytes()
+        } else {
+            fs::read(&full).map_err(|e| Error::io(&full, e))?
+        };
         let rel_key = rel.to_string_lossy().replace('\\', "/");
         hasher.update((rel_key.len() as u64).to_le_bytes());
         hasher.update(rel_key.as_bytes());
@@ -179,24 +198,22 @@ const MAX_SCAN_DEPTH: usize = 16;
 
 fn collect_files(root: &Path, dir: &Path, out: &mut Vec<PathBuf>, depth: usize) -> Result<()> {
     if depth > MAX_SCAN_DEPTH {
-        return Ok(());
+        return Err(Error::invalid(format!("目录层级过深: {}", dir.display())));
     }
     let entries = fs::read_dir(dir).map_err(|e| Error::io(dir, e))?;
     for entry in entries {
         let entry = entry.map_err(|e| Error::io(dir, e))?;
         let path = entry.path();
-        // 无条件跳过 symlink：防目录环，也防文件 symlink 把目录外内容算进来
-        let meta = match path.symlink_metadata() {
-            Ok(m) => m,
-            Err(_) => continue,
-        };
-        if meta.file_type().is_symlink() {
+        // 链接只记录目标，禁止递归跟随。
+        let meta = path.symlink_metadata().map_err(|e| Error::io(&path, e))?;
+        if is_symlink_or_junction(&path) {
+            out.push(path.strip_prefix(root).unwrap().to_path_buf());
             continue;
         }
         if meta.is_dir() {
             collect_files(root, &path, out, depth + 1)?;
         } else if meta.is_file() {
-            if path.file_name().is_some_and(|n| n == COPY_SIDECAR) {
+            if dir == root && path.file_name().is_some_and(|n| n == COPY_SIDECAR) {
                 continue;
             }
             if let Ok(rel) = path.strip_prefix(root) {
@@ -205,6 +222,18 @@ fn collect_files(root: &Path, dir: &Path, out: &mut Vec<PathBuf>, depth: usize) 
         }
     }
     Ok(())
+}
+
+/// Resolve a link lexically, without traversing it (also handles dangling links).
+pub fn link_destination(path: &Path) -> Result<PathBuf> {
+    let target = fs::read_link(path).map_err(|e| Error::io(path, e))?;
+    Ok(crate::fs::paths::normalize_path_lexically(
+        &if target.is_absolute() {
+            target
+        } else {
+            path.parent().unwrap().join(target)
+        },
+    ))
 }
 
 /// 是否为符号链接或 Windows junction。
@@ -436,7 +465,7 @@ mod tests {
 
     #[cfg(unix)]
     #[test]
-    fn content_hash_skips_symlinks_and_survives_cycles() {
+    fn content_hash_tracks_symlinks_and_survives_cycles() {
         let d = tempfile::tempdir().unwrap();
         let a = d.path().join("a");
         write_skill(&a, "---\nname: a\n---\n");
@@ -444,7 +473,7 @@ mod tests {
         // 自指环：不跳过 symlink 就会栈溢出
         std::os::unix::fs::symlink(&a, a.join("loop")).unwrap();
         std::os::unix::fs::symlink("/etc/hosts", a.join("outside")).unwrap();
-        assert_eq!(dir_content_hash(&a).unwrap(), before);
+        assert_ne!(dir_content_hash(&a).unwrap(), before);
     }
 
     #[test]

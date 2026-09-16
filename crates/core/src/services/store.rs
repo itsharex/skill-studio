@@ -55,6 +55,7 @@ impl Store {
     /// 解析失败**不**静默回落到默认值 —— 那会让用户的分组凭空消失。
     /// 直接报错，由上层提示用户去 `backups/` 找回。
     pub fn load(&self) -> Result<AppConfig> {
+        super::transaction::recover(&self.dir.join("migration.json"))?;
         let path = self.config_path();
         match atomic::read_json_file::<AppConfig>(&path)? {
             Some(mut config) => {

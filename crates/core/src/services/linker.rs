@@ -58,11 +58,25 @@ pub fn link_status(source: &Path, dest: &Path) -> LinkStatus {
                 // 是本工具复制的，但来源是别的 skill
                 return LinkStatus::Conflict;
             }
-            match scanner::dir_content_hash(source) {
-                Ok(current) if current == sidecar.source_hash => LinkStatus::Copied,
-                Ok(_) => LinkStatus::CopyStale,
-                // 源读不出来时保守判为 stale，让用户看到需要处理
-                Err(_) => LinkStatus::CopyStale,
+            if validate_sync_source(dest).is_err() {
+                return LinkStatus::CopyDamaged;
+            }
+            let Ok(actual) = scanner::dir_content_hash(dest) else {
+                return LinkStatus::CopyDamaged;
+            };
+            let Ok(current) = scanner::dir_content_hash(source) else {
+                return LinkStatus::CopyConflict;
+            };
+            if actual != sidecar.source_hash {
+                if current == sidecar.source_hash {
+                    LinkStatus::CopyModified
+                } else {
+                    LinkStatus::CopyConflict
+                }
+            } else if current == sidecar.source_hash {
+                LinkStatus::Copied
+            } else {
+                LinkStatus::CopyStale
             }
         }
         // 真目录且没有边车 —— 用户自己放的，绝不动
@@ -163,36 +177,72 @@ fn remove_dest(dest: &Path) -> Result<()> {
     Ok(())
 }
 
-/// 递归复制目录。跳过符号链接（防环、防把目录外内容带进来）与复制边车。
-fn copy_dir_recursive(src: &Path, dst: &Path, depth: usize) -> Result<()> {
-    if depth > 32 {
-        return Err(Error::invalid(format!(
-            "目录层级过深，疑似存在环: {}",
-            src.display()
-        )));
+/// Copy without following links. Internal absolute links move with the tree;
+/// external relative links retain their original destination.
+pub(crate) fn copy_tree(src: &Path, dst: &Path) -> Result<()> {
+    fn walk(root: &Path, target: &Path, src: &Path, dst: &Path, depth: usize) -> Result<()> {
+        if depth > 16 {
+            return Err(Error::invalid("目录层级过深"));
+        }
+        fs::create_dir_all(dst).map_err(|e| Error::io(dst, e))?;
+        for entry in fs::read_dir(src).map_err(|e| Error::io(src, e))? {
+            let entry = entry.map_err(|e| Error::io(src, e))?;
+            if src == root && entry.file_name() == COPY_SIDECAR {
+                continue;
+            }
+            let from = entry.path();
+            let to = dst.join(entry.file_name());
+            let meta = fs::symlink_metadata(&from).map_err(|e| Error::io(&from, e))?;
+            if is_symlink_or_junction(&from) {
+                let resolved = scanner::link_destination(&from)?;
+                let link =
+                    if let Ok(rel) = resolved.strip_prefix(paths::normalize_path_lexically(root)) {
+                        // Relative links remain valid when the staging directory is renamed.
+                        let parent_rel = to.parent().unwrap().strip_prefix(target).unwrap();
+                        let mut link = PathBuf::new();
+                        for _ in parent_rel.components() {
+                            link.push("..");
+                        }
+                        link.push(rel);
+                        link
+                    } else {
+                        resolved
+                    };
+                #[cfg(unix)]
+                std::os::unix::fs::symlink(&link, &to).map_err(|e| Error::io(&to, e))?;
+                #[cfg(windows)]
+                {
+                    if from.is_dir() {
+                        std::os::windows::fs::symlink_dir(&link, &to)
+                    } else {
+                        std::os::windows::fs::symlink_file(&link, &to)
+                    }
+                    .map_err(|e| Error::io(&to, e))?;
+                }
+            } else if meta.is_dir() {
+                walk(root, target, &from, &to, depth + 1)?;
+            } else if meta.is_file() {
+                fs::copy(&from, &to).map_err(|e| Error::io(&from, e))?;
+                fs::File::open(&to)
+                    .and_then(|file| file.sync_all())
+                    .map_err(|e| Error::io(&to, e))?;
+            } else {
+                return Err(Error::invalid(format!(
+                    "不支持的文件类型: {}",
+                    from.display()
+                )));
+            }
+        }
+        fs::set_permissions(
+            dst,
+            fs::metadata(src)
+                .map_err(|e| Error::io(src, e))?
+                .permissions(),
+        )
+        .map_err(|e| Error::io(dst, e))?;
+        Ok(())
     }
-    fs::create_dir_all(dst).map_err(|e| Error::io(dst, e))?;
-    for entry in fs::read_dir(src).map_err(|e| Error::io(src, e))? {
-        let entry = entry.map_err(|e| Error::io(src, e))?;
-        let from = entry.path();
-        let name = entry.file_name();
-        if name == COPY_SIDECAR {
-            continue;
-        }
-        let Ok(meta) = from.symlink_metadata() else {
-            continue;
-        };
-        if meta.file_type().is_symlink() {
-            continue;
-        }
-        let to = dst.join(&name);
-        if meta.is_dir() {
-            copy_dir_recursive(&from, &to, depth + 1)?;
-        } else if meta.is_file() {
-            fs::copy(&from, &to).map_err(|e| Error::io(&from, e))?;
-        }
-    }
-    Ok(())
+    walk(src, dst, src, dst, 0)
 }
 
 /// 用 tmp + rename 的方式把 `source` 复制到 `dest`，并写下复制边车。
@@ -201,60 +251,134 @@ fn copy_dir_recursive(src: &Path, dst: &Path, depth: usize) -> Result<()> {
 /// 避免中途失败留下半个 skill。
 pub fn replace_dest_with_copy(source: &Path, dest: &Path, skill_id: &str) -> Result<String> {
     validate_sync_source(source)?;
+    // Compare the entry itself, not a final symlink pointing back to source.
+    let entry = dest
+        .parent()
+        .and_then(|p| p.canonicalize().ok())
+        .map(|p| p.join(dest.file_name().unwrap()))
+        .unwrap_or_else(|| dest.to_path_buf());
+    let source_real = source.canonicalize().map_err(|e| Error::io(source, e))?;
+    if paths::path_is_within(&source_real, &entry) || paths::path_is_within(&entry, &source_real) {
+        return Err(Error::invalid("源与目标目录重叠"));
+    }
     let parent = dest
         .parent()
-        .ok_or_else(|| Error::config("目标路径没有父目录"))?;
+        .ok_or_else(|| Error::config("目标没有父目录"))?;
     fs::create_dir_all(parent).map_err(|e| Error::io(parent, e))?;
-
-    let file_name = dest
-        .file_name()
-        .ok_or_else(|| Error::config("目标路径没有文件名"))?
-        .to_string_lossy()
-        .to_string();
-    let nonce = std::time::SystemTime::now()
-        .duration_since(std::time::UNIX_EPOCH)
-        .unwrap_or_default()
-        .as_nanos();
-    let tmp = parent.join(format!(".{file_name}.tmp-{}-{nonce}", std::process::id()));
-    if tmp.exists() || is_symlink_or_junction(&tmp) {
-        remove_dest(&tmp)?;
+    let journal = replacement_journal(dest);
+    // Recovery must precede ownership checks (startup handles this normally).
+    if journal.exists() {
+        return Err(Error::invalid("存在未完成的副本事务，请重启恢复后重试"));
     }
-
-    if let Err(err) = copy_dir_recursive(source, &tmp, 0) {
-        let _ = fs::remove_dir_all(&tmp);
-        return Err(err);
-    }
-
-    let source_hash = match scanner::dir_content_hash(source) {
-        Ok(h) => h,
-        Err(err) => {
-            let _ = fs::remove_dir_all(&tmp);
-            return Err(err);
+    let dest_before = destination_fingerprint(dest)?;
+    let mut tx = super::transaction::Transaction::begin(journal)?;
+    let tmp = super::transaction::sibling(dest, "staging");
+    let operation = (|| -> Result<String> {
+        let before = scanner::dir_content_hash(source)?;
+        tx.reserve(&tmp)?;
+        copy_tree(source, &tmp)?;
+        let after = scanner::dir_content_hash(source)?;
+        if before != after || scanner::dir_content_hash(&tmp)? != after {
+            return Err(Error::invalid(
+                "复制校验失败或源在复制期间发生变化，原目标已保留",
+            ));
         }
-    };
-    let sidecar = CopySidecar {
-        skill_id: skill_id.to_string(),
-        source_path: source.to_path_buf(),
-        source_hash: source_hash.clone(),
-        copied_at: now_secs(),
-    };
-    if let Err(err) = atomic::write_json_file(&tmp.join(COPY_SIDECAR), &sidecar) {
-        let _ = fs::remove_dir_all(&tmp);
-        return Err(err);
+        validate_sync_source(&tmp)?;
+        let sidecar = CopySidecar {
+            skill_id: skill_id.to_string(),
+            source_path: source.to_path_buf(),
+            source_hash: after.clone(),
+            copied_at: now_secs(),
+        };
+        atomic::write_json_file(&tmp.join(COPY_SIDECAR), &sidecar)?;
+        if destination_fingerprint(dest)? != dest_before {
+            return Err(Error::invalid(
+                "目标在复制期间发生变化，已保留目标，请刷新后重试",
+            ));
+        }
+        tx.reserve(dest)?;
+        fs::rename(&tmp, dest).map_err(|e| Error::io(dest, e))?;
+        Ok(after)
+    })();
+    match operation {
+        Ok(hash) => {
+            tx.commit()?;
+            Ok(hash)
+        }
+        Err(err) => {
+            tx.rollback()?;
+            Err(err)
+        }
     }
+}
 
-    if let Err(err) = remove_dest(dest) {
-        let _ = fs::remove_dir_all(&tmp);
-        return Err(err);
+fn replace_dest_with_symlink(source: &Path, dest: &Path) -> Result<()> {
+    let mut tx = super::transaction::Transaction::begin(replacement_journal(dest))?;
+    let tmp = super::transaction::sibling(dest, "staging");
+    let operation = (|| -> Result<()> {
+        tx.reserve(&tmp)?;
+        create_symlink(source, &tmp)?;
+        tx.reserve(dest)?;
+        fs::rename(&tmp, dest).map_err(|e| Error::io(dest, e))?;
+        Ok(())
+    })();
+    match operation {
+        Ok(()) => tx.commit(),
+        Err(err) => {
+            tx.rollback()?;
+            Err(err)
+        }
     }
-    if let Err(e) = fs::rename(&tmp, dest) {
-        let _ = fs::remove_dir_all(&tmp);
-        return Err(Error::io_context(
-            format!("替换目录失败: {} -> {}", tmp.display(), dest.display()),
-            e,
-        ));
+}
+
+fn destination_fingerprint(dest: &Path) -> Result<Option<(String, Vec<u8>)>> {
+    let meta = match fs::symlink_metadata(dest) {
+        Ok(meta) => meta,
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => return Ok(None),
+        Err(e) => return Err(Error::io(dest, e)),
+    };
+    if is_symlink_or_junction(dest) {
+        return Ok(Some((
+            format!("link:{}", scanner::link_destination(dest)?.display()),
+            vec![],
+        )));
     }
-    Ok(source_hash)
+    if meta.is_dir() {
+        let sidecar = match fs::read(dest.join(COPY_SIDECAR)) {
+            Ok(bytes) => bytes,
+            Err(e) if e.kind() == std::io::ErrorKind::NotFound => vec![],
+            Err(e) => return Err(Error::io(dest, e)),
+        };
+        Ok(Some((scanner::dir_content_hash(dest)?, sidecar)))
+    } else {
+        Ok(Some((
+            "file".into(),
+            fs::read(dest).map_err(|e| Error::io(dest, e))?,
+        )))
+    }
+}
+
+fn replacement_journal(dest: &Path) -> PathBuf {
+    dest.with_file_name(format!(
+        ".skill-studio-replace-{}.json",
+        dest.file_name().unwrap_or_default().to_string_lossy()
+    ))
+}
+
+pub(crate) fn recover_replacements(root: &Path) -> Result<()> {
+    let entries = match fs::read_dir(root) {
+        Ok(entries) => entries,
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => return Ok(()),
+        Err(e) => return Err(Error::io(root, e)),
+    };
+    for entry in entries {
+        let path = entry.map_err(|e| Error::io(root, e))?.path();
+        let name = path.file_name().unwrap().to_string_lossy();
+        if name.starts_with(".skill-studio-replace-") && name.ends_with(".json") {
+            super::transaction::recover(&path)?;
+        }
+    }
+    Ok(())
 }
 
 pub fn now_secs() -> i64 {
@@ -292,10 +416,26 @@ pub fn register(
         )));
     }
 
+    let source_real = source.canonicalize().map_err(|e| Error::io(source, e))?;
+    let dest_entry = dest
+        .parent()
+        .and_then(|p| p.canonicalize().ok())
+        .map(|p| p.join(dest.file_name().unwrap()))
+        .unwrap_or_else(|| dest.to_path_buf());
+    if paths::path_is_within(&source_real, &dest_entry)
+        || paths::path_is_within(&dest_entry, &source_real)
+    {
+        return Err(Error::invalid("源与目标目录重叠，拒绝注册"));
+    }
     let current = link_status(source, dest);
     match current {
         LinkStatus::Foreign if !force => {
             return Err(Error::Foreign(dest.display().to_string()));
+        }
+        LinkStatus::CopyModified | LinkStatus::CopyConflict | LinkStatus::CopyDamaged if !force => {
+            return Err(Error::invalid(
+                "副本有本地修改、冲突或损坏；请先备份/合并，拒绝自动覆盖",
+            ));
         }
         LinkStatus::Conflict if !force => {
             return Err(Error::Foreign(format!(
@@ -312,8 +452,7 @@ pub fn register(
 
     match mode {
         LinkMode::Symlink => {
-            remove_dest(dest)?;
-            create_symlink(source, dest)?;
+            replace_dest_with_symlink(source, dest)?;
             Ok(Registered {
                 mode: LinkMode::Symlink,
                 status: LinkStatus::Linked,
@@ -340,8 +479,7 @@ pub fn register(
                     source_hash: Some(hash),
                 });
             }
-            remove_dest(dest)?;
-            match create_symlink(source, dest) {
+            match replace_dest_with_symlink(source, dest) {
                 Ok(()) => Ok(Registered {
                     mode: LinkMode::Symlink,
                     status: LinkStatus::Linked,
@@ -368,7 +506,13 @@ pub fn unregister(source: &Path, dest: &Path, force: bool) -> Result<bool> {
     let status = link_status(source, dest);
     match status {
         LinkStatus::NotLinked => Ok(false),
-        LinkStatus::Foreign | LinkStatus::Conflict if !force => {
+        LinkStatus::Foreign
+        | LinkStatus::Conflict
+        | LinkStatus::CopyModified
+        | LinkStatus::CopyConflict
+        | LinkStatus::CopyDamaged
+            if !force =>
+        {
             Err(Error::Foreign(dest.display().to_string()))
         }
         _ => {
@@ -604,13 +748,18 @@ mod tests {
 
     #[cfg(unix)]
     #[test]
-    fn copy_skips_symlinks_inside_source() {
+    fn copy_preserves_symlinks_without_following_them() {
         let f = fixture();
         std::os::unix::fs::symlink("/etc/hosts", f.source.join("outside")).unwrap();
         register(&f.source, &f.dest, LinkMode::Copy, "id1", false).unwrap();
         assert!(
-            !f.dest.join("outside").exists(),
-            "源里的 symlink 不应被复制进目标"
+            f.dest
+                .join("outside")
+                .symlink_metadata()
+                .unwrap()
+                .file_type()
+                .is_symlink(),
+            "源里的 symlink 应保留且不能递归跟随"
         );
     }
 

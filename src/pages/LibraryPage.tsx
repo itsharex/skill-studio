@@ -220,11 +220,28 @@ export function LibraryPage() {
                     <Badge variant="outline" className="h-4 px-1.5 text-[10px]">
                       Hub 托管
                     </Badge>
+                  ) : skill.origin.kind === "external" ? (
+                    <Badge variant="outline" className="h-4 px-1.5 text-[10px]">
+                      外部来源
+                    </Badge>
                   ) : (
                     <Badge variant="outline" className="h-4 px-1.5 text-[10px]">
                       原地 · {agentName(agents, skill.origin.ownerAgent)}
                     </Badge>
                   )}
+                  {skill.malformedFrontmatter && (
+                    <span
+                      className="text-xs text-red-600"
+                      title={skill.frontmatterError ?? undefined}
+                    >
+                      YAML 格式错误
+                    </span>
+                  )}
+                  {skill.diagnostics?.map((message) => (
+                    <span key={message} className="text-xs text-red-600">
+                      {message}
+                    </span>
+                  ))}
                   {skill.frontmatterExtra.length > 0 && (
                     <Tooltip>
                       <TooltipTrigger asChild>
@@ -328,7 +345,7 @@ export function LibraryPage() {
         description={
           <>
             会把 <span className="font-mono">{adoptTarget?.name}</span> 的真身
-            移动到 Hub 目录集中托管，原位置改成指向 Hub 的链接，
+            移动到 Hub 目录集中托管，原位置按默认方式保留链接或副本，
             <span className="font-medium">该 agent 仍可正常使用</span>。
             这一步会移动文件。
           </>

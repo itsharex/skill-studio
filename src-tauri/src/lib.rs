@@ -8,7 +8,6 @@ pub use error::{AppError, AppResult};
 pub use state::AppState;
 
 use skill_studio_core::fs::paths;
-use skill_studio_core::models::agent::AGENTS;
 use skill_studio_core::services::store::Store;
 use tauri::Manager;
 
@@ -82,10 +81,9 @@ pub fn run() {
             // 要让界面起来并引导去 backups/ 恢复。
             match AppState::bootstrap(Store::new(config_dir.clone())) {
                 Ok(state) => {
-                    let dirs = watch_targets(&state);
-                    app.manage(state);
+                    app.manage(state.clone());
                     // watcher 必须被持有，drop 掉就停止监听
-                    if let Some(w) = watcher::spawn(app.handle().clone(), dirs) {
+                    if let Some(w) = watcher::spawn(app.handle().clone(), state) {
                         app.manage(WatcherHandle(std::sync::Mutex::new(w)));
                     }
                 }
@@ -114,18 +112,4 @@ pub fn run() {
 }
 
 /// 持有 watcher，保证监听在应用生命周期内不被回收
-struct WatcherHandle(#[allow(dead_code)] std::sync::Mutex<notify::RecommendedWatcher>);
-
-/// 要监听的目录：各 agent 的全部全局根 + Hub
-fn watch_targets(state: &AppState) -> Vec<std::path::PathBuf> {
-    let config = state.config();
-    let overrides = &config.settings.agent_dir_overrides;
-    let mut dirs: Vec<std::path::PathBuf> = AGENTS
-        .iter()
-        .flat_map(|a| a.resolved_global_roots(overrides))
-        .collect();
-    dirs.push(state.studio().store().hub_dir(&config));
-    dirs.sort();
-    dirs.dedup();
-    dirs
-}
+struct WatcherHandle(#[allow(dead_code)] std::sync::Mutex<watcher::SkillWatcher>);

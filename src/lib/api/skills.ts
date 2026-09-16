@@ -30,11 +30,11 @@ export const skillsApi = {
 
   /** 走 agent 原生配置启停，不动文件 */
   async setEnabled(
-    skillName: string,
+    skillId: string,
     agentId: string,
     enabled: boolean,
   ): Promise<void> {
-    await invoke("set_skill_enabled", { skillName, agentId, enabled });
+    await invoke("set_skill_enabled", { skillId, agentId, enabled });
   },
 
   async adoptToHub(skillId: string): Promise<Skill> {

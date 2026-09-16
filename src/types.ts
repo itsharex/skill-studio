@@ -14,13 +14,18 @@ export type LinkStatus =
   | "copied"
   /** 复制过但源已变更 */
   | "copyStale"
+  | "copyModified"
+  | "copyConflict"
+  | "copyDamaged"
   /** 目标被非本工具管理的内容占用，绝不覆盖 */
   | "foreign"
   | "brokenLink"
   | "conflict";
 
 export type SkillOrigin =
-  { kind: "inPlace"; ownerAgent: string } | { kind: "hub" };
+  | { kind: "inPlace"; ownerAgent: string }
+  | { kind: "hub" }
+  | { kind: "external" };
 
 export interface Skill {
   id: string;
@@ -39,6 +44,7 @@ export interface AgentSkillState {
   status: LinkStatus;
   /** 实际检查到的位置；未注册时是"将会写入"的位置 */
   targetPath: string;
+  entryPaths?: string[];
   /** 通过 agent 原生配置停用（文件仍在） */
   disabled: boolean;
   mode: LinkMode | null;
@@ -49,6 +55,8 @@ export interface SkillView extends Skill {
   agents: Record<string, AgentSkillState>;
   groupIds: string[];
   malformedFrontmatter: boolean;
+  frontmatterError?: string | null;
+  diagnostics?: string[];
 }
 
 export interface AgentInfo {
@@ -101,6 +109,7 @@ export interface Settings {
 export interface Registration {
   mode: LinkMode;
   targetPath: string;
+  entryPaths?: string[];
   registeredAt: number;
   sourceHashAtCopy?: string | null;
 }

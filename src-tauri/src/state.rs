@@ -57,6 +57,22 @@ impl AppState {
         Ok(outcome)
     }
 
+    /// Hub adoption persists its own filesystem/config transaction under the write lock.
+    pub fn adopt_to_hub(&self, skill_id: &str) -> Result<skill_studio_core::models::skill::Skill> {
+        let mut guard = self.config_mut();
+        self.studio.adopt_to_hub(&mut guard, skill_id)
+    }
+
+    /// Native settings writes share the configuration write lock to prevent two
+    /// toggles from replacing each other's read/modify/write results.
+    pub fn with_exclusive<T, F>(&self, f: F) -> Result<T>
+    where
+        F: FnOnce(&Studio, &AppConfig) -> Result<T>,
+    {
+        let guard = self.config_mut();
+        f(&self.studio, &guard)
+    }
+
     /// 只读操作
     pub fn with_config<T, F>(&self, f: F) -> Result<T>
     where

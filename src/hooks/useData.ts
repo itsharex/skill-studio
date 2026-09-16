@@ -123,12 +123,10 @@ export function useUnregisterSkills() {
 export function useSetSkillEnabled() {
   const invalidate = useInvalidateAfterWrite();
   return useMutation({
-    mutationFn: (v: { skillName: string; agentId: string; enabled: boolean }) =>
-      skillsApi.setEnabled(v.skillName, v.agentId, v.enabled),
+    mutationFn: (v: { skillId: string; agentId: string; enabled: boolean }) =>
+      skillsApi.setEnabled(v.skillId, v.agentId, v.enabled),
     onSuccess: (_r, v) =>
-      toast.success(
-        v.enabled ? `已启用 ${v.skillName}` : `已停用 ${v.skillName}`,
-      ),
+      toast.success(v.enabled ? "已启用 skill" : "已停用 skill"),
     onError: (e: unknown) => toast.error(String(e)),
     onSettled: invalidate,
   });

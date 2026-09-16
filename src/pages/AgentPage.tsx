@@ -50,8 +50,11 @@ function statusBadgeVariant(
   switch (status) {
     case "source":
       return "success";
+    case "copyModified":
     case "copyStale":
       return "warning";
+    case "copyConflict":
+    case "copyDamaged":
     case "foreign":
     case "brokenLink":
     case "conflict":
@@ -302,6 +305,9 @@ export function AgentPage({ agentId }: { agentId: string }) {
             {filtered.map((skill, i) => {
               const state = skill.agents[agentId]!;
               const attention =
+                state.status === "copyModified" ||
+                state.status === "copyConflict" ||
+                state.status === "copyDamaged" ||
                 state.status === "foreign" ||
                 state.status === "brokenLink" ||
                 state.status === "conflict";
@@ -332,6 +338,19 @@ export function AgentPage({ agentId }: { agentId: string }) {
                           </p>
                         </TooltipContent>
                       </Tooltip>
+                      {skill.malformedFrontmatter && (
+                        <span
+                          className="text-xs text-red-600"
+                          title={skill.frontmatterError ?? undefined}
+                        >
+                          YAML 格式错误
+                        </span>
+                      )}
+                      {skill.diagnostics?.map((message) => (
+                        <span key={message} className="text-xs text-red-600">
+                          {message}
+                        </span>
+                      ))}
                       {state.disabled && (
                         <Badge
                           variant="outline"
@@ -367,6 +386,7 @@ export function AgentPage({ agentId }: { agentId: string }) {
 
                   {/* 原生启停：只在该 agent 支持、且 skill 确实可用时才给开关 */}
                   {agent.supportsNativeToggle &&
+                    state.status !== "copyDamaged" &&
                     state.status !== "foreign" &&
                     state.status !== "conflict" &&
                     state.status !== "brokenLink" && (
@@ -377,7 +397,7 @@ export function AgentPage({ agentId }: { agentId: string }) {
                               checked={!state.disabled}
                               onCheckedChange={(next) =>
                                 setEnabled.mutate({
-                                  skillName: skill.name,
+                                  skillId: skill.id,
                                   agentId,
                                   enabled: next,
                                 })

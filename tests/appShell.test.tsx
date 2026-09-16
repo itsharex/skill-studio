@@ -1,4 +1,4 @@
-import { screen, waitFor } from "@testing-library/react";
+import { fireEvent, screen, waitFor } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { describe, expect, it } from "vitest";
 import App from "@/App";
@@ -129,4 +129,21 @@ describe("设置视图", () => {
     expect(await screen.findByText("Agent 目录覆盖")).toBeInTheDocument();
     expect(screen.queryByText("默认链接方式")).toBeNull();
   });
+});
+
+it("navigation replaces the body immediately without waiting for exit animation", async () => {
+  withAgents();
+  renderWithProviders(<App />);
+  await screen.findByRole("button", { name: "全局 Skill" });
+  fireEvent.click(screen.getByRole("button", { name: "项目" }));
+  expect(screen.getByRole("heading", { level: 1 })).toHaveTextContent("项目");
+  expect(
+    screen.getAllByRole("button", { name: "添加项目" }).length,
+  ).toBeGreaterThan(0);
+  fireEvent.click(screen.getByRole("button", { name: "设置" }));
+  expect(await screen.findByText("默认链接方式")).toBeInTheDocument();
+  fireEvent.click(screen.getByRole("button", { name: "返回" }));
+  expect(
+    screen.getAllByRole("button", { name: "添加项目" }).length,
+  ).toBeGreaterThan(0);
 });

@@ -233,6 +233,146 @@ pub fn is_codex_skill_disabled(config_path: &Path, skill_name: &str) -> bool {
     disabled
 }
 
+/// Read ordered user-level Codex rules. Session flags belong to the running
+/// Codex process and are not available to this desktop application.
+pub fn is_codex_skill_disabled_at(config_path: &Path, skill_name: &str, document: &Path) -> bool {
+    let Ok(text) = std::fs::read_to_string(config_path) else {
+        return false;
+    };
+    let Ok(doc) = text.parse::<DocumentMut>() else {
+        return false;
+    };
+    let Some(config) = doc.get("skills").and_then(|s| s.get("config")) else {
+        return false;
+    };
+    let mut disabled = false;
+    let mut apply = |name: Option<&str>, path: Option<&str>, enabled: Option<bool>| {
+        let matches = match (name, path) {
+            (Some(name), None) => !name.trim().is_empty() && name.trim() == skill_name,
+            (None, Some(path)) => {
+                Path::new(path).is_absolute()
+                    && crate::fs::paths::paths_alias(Path::new(path), document)
+            }
+            _ => false,
+        };
+        if matches {
+            if let Some(enabled) = enabled {
+                disabled = !enabled;
+            }
+        }
+    };
+    if let Some(arr) = config.as_array_of_tables() {
+        for t in arr {
+            apply(
+                t.get("name").and_then(Item::as_str),
+                t.get("path").and_then(Item::as_str),
+                t.get("enabled").and_then(Item::as_bool),
+            );
+        }
+    } else if let Some(arr) = config.as_array() {
+        for value in arr {
+            if let Some(t) = value.as_inline_table() {
+                apply(
+                    t.get("name").and_then(toml_edit::Value::as_str),
+                    t.get("path").and_then(toml_edit::Value::as_str),
+                    t.get("enabled").and_then(toml_edit::Value::as_bool),
+                );
+            }
+        }
+    }
+    disabled
+}
+
+/// Write an exact document selector after existing rules, preserving name rules
+/// for other same-name skills. Explicit true overrides an earlier name disable.
+pub fn set_codex_skill_enabled_at(
+    config_path: &Path,
+    document: &Path,
+    enabled: bool,
+) -> Result<()> {
+    let document = document
+        .canonicalize()
+        .map_err(|e| Error::io(document, e))?;
+    let text = match std::fs::read_to_string(config_path) {
+        Ok(text) => text,
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => String::new(),
+        Err(e) => return Err(Error::io(config_path, e)),
+    };
+    let mut doc: DocumentMut = text.parse().map_err(|source| Error::Toml {
+        path: config_path.display().to_string(),
+        source,
+    })?;
+    // TOML also permits skills.config = [{ path = "...", enabled = false }].
+    if let Some(item) = doc.get_mut("skills").and_then(|s| s.get_mut("config")) {
+        if let Some(array) = item.as_array() {
+            let mut tables = ArrayOfTables::new();
+            for value in array {
+                let table = value
+                    .as_inline_table()
+                    .ok_or_else(|| Error::config("skills.config 必须包含表"))?;
+                tables.push(table.clone().into_table());
+            }
+            *item = Item::ArrayOfTables(tables);
+        }
+    }
+    let array = codex_config_array(&mut doc)?;
+    let matches = |table: &Table| {
+        table.get("name").is_none()
+            && table
+                .get("path")
+                .and_then(Item::as_str)
+                .is_some_and(|p| crate::fs::paths::paths_alias(Path::new(p), &document))
+    };
+    let next_position = array.iter().filter_map(Table::position).max().unwrap_or(0) + 1;
+    let mut entry = array
+        .iter()
+        .filter(|t| matches(t))
+        .last()
+        .cloned()
+        .unwrap_or_default();
+    array.retain(|t| !matches(t));
+    // toml_edit retains document positions even after an array entry is moved.
+    // Move its serialized position too, otherwise a later name rule wins again.
+    entry.set_position(next_position);
+    entry["path"] = toml_edit::value(document.to_string_lossy().as_ref());
+    entry["enabled"] = toml_edit::value(enabled);
+    array.push(entry);
+    atomic::write_text_file(config_path, &doc.to_string())
+}
+
+pub fn is_skill_disabled_at(
+    agent: &AgentDescriptor,
+    overrides: &HashMap<String, PathBuf>,
+    name: &str,
+    document: &Path,
+) -> bool {
+    let Some(path) = agent.toggle_config_path(overrides) else {
+        return false;
+    };
+    match agent.toggle {
+        ToggleMechanism::ClaudeSettingsJson => is_claude_skill_disabled(&path, name),
+        ToggleMechanism::CodexConfigToml => is_codex_skill_disabled_at(&path, name, document),
+        ToggleMechanism::None => false,
+    }
+}
+
+pub fn set_skill_enabled_at(
+    agent: &AgentDescriptor,
+    overrides: &HashMap<String, PathBuf>,
+    name: &str,
+    document: &Path,
+    enabled: bool,
+) -> Result<()> {
+    let path = agent
+        .toggle_config_path(overrides)
+        .ok_or_else(|| Error::invalid("该 agent 不支持原生启停"))?;
+    match agent.toggle {
+        ToggleMechanism::ClaudeSettingsJson => set_claude_skill_enabled(&path, name, enabled),
+        ToggleMechanism::CodexConfigToml => set_codex_skill_enabled_at(&path, document, enabled),
+        ToggleMechanism::None => unreachable!(),
+    }
+}
+
 /// 按 agent 分派
 pub fn set_skill_enabled(
     agent: &AgentDescriptor,

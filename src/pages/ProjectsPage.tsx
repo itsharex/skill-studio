@@ -1,3 +1,4 @@
+import { useQueuedDraft } from "@/hooks/useQueuedDraft";
 import { useMemo, useState } from "react";
 import {
   ArrowLeft,
@@ -67,7 +68,13 @@ export function ProjectsPage() {
 
   const active = projects.find((p) => p.id === detail) ?? null;
   if (active) {
-    return <ProjectDetail project={active} onBack={() => setDetail(null)} />;
+    return (
+      <ProjectDetail
+        key={active.id}
+        project={active}
+        onBack={() => setDetail(null)}
+      />
+    );
   }
 
   const pick = async () => {
@@ -272,6 +279,20 @@ function ProjectDetail({
   const apply = useApplyProject();
   const gitignore = useWriteProjectGitignore();
   const [query, setQuery] = useState("");
+  const [writing, setWriting] = useState(false);
+
+  const remote = useMemo(
+    () => ({
+      agentIds: project.agentIds,
+      skillIds: project.skillIds,
+      groupIds: project.groupIds,
+      linkMode: project.linkMode,
+    }),
+    [project.agentIds, project.skillIds, project.groupIds, project.linkMode],
+  );
+  const draft = useQueuedDraft(remote, (next) =>
+    update.mutateAsync({ projectId: project.id, ...next }),
+  );
 
   const projectAgents = useMemo(
     () => agents.filter((a) => a.supportsProjectSkills),
@@ -284,31 +305,31 @@ function ProjectDetail({
     return skills.filter((s) => s.name.toLowerCase().includes(q));
   }, [skills, query]);
 
-  const toggleAgent = (id: string) => {
-    const next = project.agentIds.includes(id)
-      ? project.agentIds.filter((x) => x !== id)
-      : [...project.agentIds, id];
-    update.mutate({ projectId: project.id, agentIds: next });
-  };
-
-  const toggleSkill = (id: string) => {
-    const next = project.skillIds.includes(id)
-      ? project.skillIds.filter((x) => x !== id)
-      : [...project.skillIds, id];
-    update.mutate({ projectId: project.id, skillIds: next });
-  };
-
-  const toggleGroup = (id: string) => {
-    const next = project.groupIds.includes(id)
-      ? project.groupIds.filter((x) => x !== id)
-      : [...project.groupIds, id];
-    update.mutate({ projectId: project.id, groupIds: next });
-  };
+  const toggle = (key: "agentIds" | "skillIds" | "groupIds", id: string) =>
+    draft.edit((previous) => ({
+      ...previous,
+      [key]: previous[key].includes(id)
+        ? previous[key].filter((x) => x !== id)
+        : [...previous[key], id],
+    }));
+  const toggleAgent = (id: string) => toggle("agentIds", id);
+  const toggleSkill = (id: string) => toggle("skillIds", id);
+  const toggleGroup = (id: string) => toggle("groupIds", id);
 
   return (
     <div className="flex min-h-0 flex-1 flex-col">
       <div className="flex items-center gap-3 py-4">
-        <Button variant="outline" size="icon" onClick={onBack} title="返回">
+        <Button
+          variant="outline"
+          size="icon"
+          onClick={() =>
+            void draft
+              .flush()
+              .then(onBack)
+              .catch(() => {})
+          }
+          title="返回"
+        >
           <ArrowLeft className="h-4 w-4" />
         </Button>
         <div className="min-w-0 flex-1">
@@ -327,16 +348,42 @@ function ProjectDetail({
         <Button
           size="sm"
           disabled={
-            project.agentIds.length === 0 ||
-            (project.skillIds.length === 0 && project.groupIds.length === 0)
+            draft.value.agentIds.length === 0 ||
+            (draft.value.skillIds.length === 0 &&
+              draft.value.groupIds.length === 0) ||
+            writing ||
+            apply.isPending
           }
-          onClick={() => apply.mutate(project.id)}
+          onClick={() => {
+            setWriting(true);
+            void draft
+              .flush()
+              .then(() => apply.mutateAsync(project.id))
+              .catch(() => {})
+              .finally(() => setWriting(false));
+          }}
         >
           <Upload className="h-4 w-4" />
           写入项目
         </Button>
       </div>
 
+      <div role="status" className="text-xs text-muted-foreground">
+        {draft.pending
+          ? "正在保存选择…"
+          : draft.error
+            ? `保存失败，选择已保留：${draft.error}`
+            : "选择会自动保存"}
+        {draft.error && (
+          <Button
+            variant="outline"
+            size="sm"
+            onClick={() => void draft.flush().catch(() => {})}
+          >
+            重试保存
+          </Button>
+        )}
+      </div>
       <div className="min-h-0 flex-1 space-y-6 overflow-y-auto pb-6">
         <section className="space-y-2">
           <div className="flex items-center gap-2">
@@ -361,7 +408,7 @@ function ProjectDetail({
                 onClick={() => toggleAgent(a.id)}
               >
                 <Checkbox
-                  checked={project.agentIds.includes(a.id)}
+                  checked={draft.value.agentIds.includes(a.id)}
                   aria-label={a.displayName}
                 />
                 <AgentIcon agentId={a.id} className="h-4 w-4 shrink-0" />
@@ -380,12 +427,12 @@ function ProjectDetail({
           <h3 className="text-sm font-semibold">链接方式</h3>
           <div className="flex items-center gap-3">
             <Select
-              value={project.linkMode}
+              value={draft.value.linkMode}
               onValueChange={(v) =>
-                update.mutate({
-                  projectId: project.id,
+                draft.edit((previous) => ({
+                  ...previous,
                   linkMode: v as LinkMode,
-                })
+                }))
               }
             >
               <SelectTrigger className="w-48">
@@ -415,7 +462,7 @@ function ProjectDetail({
                   onClick={() => toggleGroup(g.id)}
                 >
                   <Checkbox
-                    checked={project.groupIds.includes(g.id)}
+                    checked={draft.value.groupIds.includes(g.id)}
                     aria-label={g.name}
                   />
                   <span className="flex-1 text-sm font-medium">{g.name}</span>
@@ -448,7 +495,7 @@ function ProjectDetail({
                   onClick={() => toggleSkill(s.id)}
                 >
                   <Checkbox
-                    checked={project.skillIds.includes(s.id)}
+                    checked={draft.value.skillIds.includes(s.id)}
                     aria-label={s.name}
                   />
                   <div className="min-w-0 flex-1">

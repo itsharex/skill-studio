@@ -131,16 +131,32 @@ pub fn write_project_gitignore(
     state: State<'_, AppState>,
     project_id: String,
 ) -> Result<bool, String> {
-    const ENTRY: &str = "**/.skill-studio-copy.json";
     let root = state
         .config()
         .project(&project_id)
         .map(|p| p.root.clone())
         .ok_or_else(|| format!("项目 {project_id} 不存在"))?;
 
+    write_skill_gitignore(&root).map_err(|e| e.to_string())
+}
+
+fn write_skill_gitignore(root: &std::path::Path) -> skill_studio_core::Result<bool> {
+    const ENTRIES: &[&str] = &[
+        "**/.skill-studio-copy.json",
+        "**/.skill-studio-replace-*.json.lock",
+        "**/.skill-studio-replace-*.json",
+    ];
     let path = root.join(".gitignore");
-    let existing = std::fs::read_to_string(&path).unwrap_or_default();
-    if existing.lines().any(|l| l.trim() == ENTRY) {
+    let existing = match std::fs::read_to_string(&path) {
+        Ok(text) => text,
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => String::new(),
+        Err(e) => return Err(Error::io(&path, e)),
+    };
+    let missing: Vec<_> = ENTRIES
+        .iter()
+        .filter(|entry| !existing.lines().any(|line| line.trim() == **entry))
+        .collect();
+    if missing.is_empty() {
         return Ok(false);
     }
     let mut next = existing;
@@ -150,11 +166,40 @@ pub fn write_project_gitignore(
     if !next.is_empty() {
         next.push('\n');
     }
-    next.push_str("# Skill Studio 的本机溯源信息，不应进版本库\n");
-    next.push_str(ENTRY);
-    next.push('\n');
-    skill_studio_core::fs::atomic::write_text_file(&path, &next).map_err(|e| e.to_string())?;
+    next.push_str("# Skill Studio 的本机溯源信息与事务记录，不应进版本库\n");
+    for entry in missing {
+        next.push_str(entry);
+        next.push('\n');
+    }
+    skill_studio_core::fs::atomic::write_text_file(&path, &next)?;
     Ok(true)
+}
+
+#[cfg(test)]
+mod gitignore_tests {
+    use super::write_skill_gitignore;
+    #[test]
+    fn upgrades_existing_rules_without_duplicates_and_is_idempotent() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join(".gitignore");
+        std::fs::write(&path, "node_modules/\n**/.skill-studio-copy.json\n").unwrap();
+        assert!(write_skill_gitignore(dir.path()).unwrap());
+        let result = std::fs::read_to_string(&path).unwrap();
+        assert!(result.starts_with("node_modules/\n"));
+        assert_eq!(result.matches("**/.skill-studio-copy.json").count(), 1);
+        assert!(result.contains("**/.skill-studio-replace-*.json.lock"));
+        assert!(result.contains("**/.skill-studio-replace-*.json\n"));
+        assert!(!write_skill_gitignore(dir.path()).unwrap());
+        assert_eq!(std::fs::read_to_string(path).unwrap(), result);
+    }
+    #[test]
+    fn unreadable_text_is_not_overwritten() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join(".gitignore");
+        std::fs::write(&path, [0xff, 0xfe]).unwrap();
+        assert!(write_skill_gitignore(dir.path()).is_err());
+        assert_eq!(std::fs::read(path).unwrap(), [0xff, 0xfe]);
+    }
 }
 
 /// 弹目录选择器

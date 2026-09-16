@@ -1,6 +1,6 @@
 import { useEffect, useMemo, useRef, useState } from "react";
 import { useQueryClient } from "@tanstack/react-query";
-import { AnimatePresence, motion } from "framer-motion";
+import { motion } from "framer-motion";
 import {
   ArrowLeft,
   FolderGit2,
@@ -290,18 +290,15 @@ export default function App() {
                 </Button>
               </div>
             )}
-            <AnimatePresence mode="wait">
-              <motion.div
-                key={view}
-                className="flex min-h-0 flex-1 flex-col overflow-hidden px-6"
-                initial={{ opacity: 0 }}
-                animate={{ opacity: 1 }}
-                exit={{ opacity: 0 }}
-                transition={{ duration: 0.2 }}
-              >
-                {content()}
-              </motion.div>
-            </AnimatePresence>
+            <motion.div
+              key={view}
+              className="flex min-h-0 flex-1 flex-col overflow-hidden px-6"
+              initial={{ opacity: 0 }}
+              animate={{ opacity: 1 }}
+              transition={{ duration: 0.2 }}
+            >
+              {content()}
+            </motion.div>
           </main>
         </div>
       </div>

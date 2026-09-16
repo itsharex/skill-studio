@@ -40,11 +40,11 @@ describe("skillsApi", () => {
     });
   });
 
-  it("setEnabled 传 skillName 而不是 id —— agent 的原生配置按名字选中 skill", async () => {
+  it("setEnabled 传 skillId，由后端解析实际入口和原生配置选择器", async () => {
     await skillsApi.setEnabled("deploy", "claude-code", false);
     expect(lastCall()).toEqual({
       command: "set_skill_enabled",
-      args: { skillName: "deploy", agentId: "claude-code", enabled: false },
+      args: { skillId: "deploy", agentId: "claude-code", enabled: false },
     });
   });
 

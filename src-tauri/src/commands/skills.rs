@@ -47,13 +47,13 @@ pub fn unregister_skills(
 #[tauri::command(rename_all = "camelCase")]
 pub fn set_skill_enabled(
     state: State<'_, AppState>,
-    skill_name: String,
+    skill_id: String,
     agent_id: String,
     enabled: bool,
 ) -> Result<(), String> {
     state
-        .with_config(|studio, config| {
-            studio.set_skill_enabled(config, &skill_name, &agent_id, enabled)
+        .with_exclusive(|studio, config| {
+            studio.set_skill_enabled(config, &skill_id, &agent_id, enabled)
         })
         .map_err(Into::into)
 }
@@ -61,9 +61,7 @@ pub fn set_skill_enabled(
 /// 把一个原地 skill 收编到 Hub 集中托管
 #[tauri::command(rename_all = "camelCase")]
 pub fn adopt_to_hub(state: State<'_, AppState>, skill_id: String) -> Result<Skill, String> {
-    state
-        .mutate(|studio, config| studio.adopt_to_hub(config, &skill_id))
-        .map_err(Into::into)
+    state.adopt_to_hub(&skill_id).map_err(Into::into)
 }
 
 /// 清理引用了已消失 skill 的分组成员与注册记录，返回清理条数

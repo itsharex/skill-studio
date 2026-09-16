@@ -26,6 +26,8 @@ pub struct AgentSkillState {
     /// 通过 agent 原生配置停用（文件仍在）
     pub disabled: bool,
     pub mode: Option<LinkMode>,
+    /// 同一来源在该 agent 下的全部入口（含别名）。
+    pub entry_paths: Vec<PathBuf>,
 }
 
 /// 前端拿到的 skill 视图
@@ -39,6 +41,8 @@ pub struct SkillView {
     pub group_ids: Vec<String>,
     /// frontmatter 解析失败（YAML 坏了）
     pub malformed_frontmatter: bool,
+    pub frontmatter_error: Option<String>,
+    pub diagnostics: Vec<String>,
 }
 
 pub struct Studio {
@@ -55,7 +59,29 @@ impl Studio {
     }
 
     pub fn load_config(&self) -> Result<AppConfig> {
-        self.store.load()
+        let config = self.store.load()?;
+        let mut roots: Vec<PathBuf> = AGENTS
+            .iter()
+            .flat_map(|a| a.resolved_global_roots(&config.settings.agent_dir_overrides))
+            .collect();
+        for project in &config.projects {
+            for agent in AGENTS {
+                if let Some(root) = agent.project_root(&project.root) {
+                    roots.push(root);
+                }
+            }
+        }
+        for regs in config.registrations.values() {
+            for reg in regs.values() {
+                if let Some(parent) = reg.target_path.parent() {
+                    roots.push(parent.to_path_buf());
+                }
+            }
+        }
+        for root in roots {
+            linker::recover_replacements(&root)?;
+        }
+        Ok(config)
     }
 
     pub fn save_config(&self, config: &AppConfig) -> Result<()> {
@@ -79,6 +105,12 @@ impl Studio {
             for root in agent.resolved_global_roots(overrides) {
                 for entry in scanner::scan_root(&root, agent)? {
                     if !matches!(entry.kind, EntryKind::RealSkill) {
+                        continue;
+                    }
+                    if sources
+                        .values()
+                        .any(|s| crate::fs::paths::paths_alias(&s.source_path, &entry.path))
+                    {
                         continue;
                     }
                     let id = skill_id_for(&entry.path);
@@ -106,6 +138,12 @@ impl Studio {
             if !matches!(entry.kind, EntryKind::RealSkill) {
                 continue;
             }
+            if sources
+                .values()
+                .any(|s| crate::fs::paths::paths_alias(&s.source_path, &entry.path))
+            {
+                continue;
+            }
             let id = skill_id_for(&entry.path);
             sources.entry(id.clone()).or_insert_with(|| {
                 build_skill(
@@ -119,6 +157,55 @@ impl Studio {
             });
         }
 
+        // Resolve links only after real sources, so an alias cannot change an
+        // existing source's ID or ownership. Never recurse through directory links.
+        let mut identities: HashMap<PathBuf, String> = sources
+            .values()
+            .map(|skill| {
+                (
+                    skill
+                        .source_path
+                        .canonicalize()
+                        .unwrap_or_else(|_| skill.source_path.clone()),
+                    skill.id.clone(),
+                )
+            })
+            .collect();
+        for agent in AGENTS {
+            for root in agent.resolved_global_roots(overrides) {
+                for entry in scanner::scan_root(&root, agent)? {
+                    if !matches!(entry.kind, EntryKind::Link { .. }) {
+                        continue;
+                    }
+                    let source = entry.path.canonicalize().unwrap_or_else(|_| {
+                        scanner::link_destination(&entry.path)
+                            .unwrap_or_else(|_| entry.path.clone())
+                    });
+                    if identities.contains_key(&source) {
+                        continue;
+                    }
+                    let id = skill_id_for(&source);
+                    identities.insert(source.clone(), id.clone());
+                    let name = source
+                        .file_name()
+                        .and_then(|s| s.to_str())
+                        .unwrap_or(&entry.name)
+                        .to_string();
+                    sources.insert(
+                        id.clone(),
+                        build_skill(
+                            id,
+                            &name,
+                            source,
+                            root.clone(),
+                            SkillOrigin::External,
+                            entry.frontmatter,
+                        ),
+                    );
+                }
+            }
+        }
+
         let mut views: Vec<SkillView> = sources
             .into_values()
             .map(|skill| {
@@ -128,8 +215,16 @@ impl Studio {
                     .into_iter()
                     .map(|g| g.id.clone())
                     .collect();
+                let fm = scanner::parse_frontmatter(&skill.source_path.join(scanner::SKILL_FILE));
+                let diagnostics = if !skill.source_path.join(scanner::SKILL_FILE).is_file() {
+                    vec!["链接目标不可用：目标缺失、存在循环，或不含 SKILL.md".into()]
+                } else {
+                    vec![]
+                };
                 SkillView {
-                    malformed_frontmatter: false,
+                    malformed_frontmatter: fm.malformed,
+                    frontmatter_error: fm.error,
+                    diagnostics,
                     skill,
                     agents,
                     group_ids,
@@ -139,6 +234,53 @@ impl Studio {
 
         views.sort_by(|a, b| a.skill.name.cmp(&b.skill.name));
         Ok(views)
+    }
+
+    fn agent_targets(
+        &self,
+        config: &AppConfig,
+        skill: &Skill,
+        agent: &crate::models::agent::AgentDescriptor,
+    ) -> Vec<PathBuf> {
+        let mut targets = Vec::new();
+        if let Some(reg) = config.registration(&skill.id, agent.id) {
+            targets.push(reg.target_path.clone());
+        }
+        for root in agent.resolved_global_roots(&config.settings.agent_dir_overrides) {
+            targets.push(root.join(&skill.name));
+            if let Ok(entries) = scanner::scan_root(&root, agent) {
+                for entry in entries {
+                    let matches = match entry.kind {
+                        EntryKind::Link { .. } => {
+                            crate::fs::paths::paths_alias(&entry.path, &skill.source_path)
+                                || scanner::link_destination(&entry.path).is_ok_and(|p| {
+                                    crate::fs::paths::paths_alias(&p, &skill.source_path)
+                                })
+                        }
+                        EntryKind::ManagedCopy { source_path, .. } => {
+                            crate::fs::paths::paths_alias(&source_path, &skill.source_path)
+                        }
+                        EntryKind::RealSkill => {
+                            crate::fs::paths::paths_alias(&entry.path, &skill.source_path)
+                        }
+                        _ => false,
+                    };
+                    if matches {
+                        targets.push(entry.path);
+                    }
+                }
+            }
+        }
+        let mut seen = HashSet::new();
+        targets.retain(|p| {
+            seen.insert(
+                p.parent()
+                    .and_then(|parent| parent.canonicalize().ok())
+                    .unwrap_or_default()
+                    .join(p.file_name().unwrap_or_default()),
+            )
+        });
+        targets
     }
 
     /// 计算一个 skill 在所有 agent 上的状态。
@@ -154,13 +296,26 @@ impl Studio {
             let primary = roots.first().cloned().unwrap_or_default();
             let mut best: Option<(LinkStatus, PathBuf)> = None;
 
-            for root in &roots {
-                let dest = root.join(&skill.name);
+            let targets = self.agent_targets(config, skill, agent);
+            let entry_paths: Vec<PathBuf> = targets
+                .iter()
+                .filter(|p| p.symlink_metadata().is_ok())
+                .cloned()
+                .collect();
+            for dest in targets {
                 // 真身就在这个 root 里
-                let status = if crate::fs::paths::is_same_path(&dest, &skill.source_path) {
+                let status = if dest.join(scanner::SKILL_FILE).is_file()
+                    && !scanner::is_symlink_or_junction(&dest)
+                    && crate::fs::paths::paths_alias(&dest, &skill.source_path)
+                {
                     LinkStatus::Source
                 } else {
-                    linker::link_status(&skill.source_path, &dest)
+                    let status = linker::link_status(&skill.source_path, &dest);
+                    if status == LinkStatus::Linked && !dest.join(scanner::SKILL_FILE).is_file() {
+                        LinkStatus::BrokenLink
+                    } else {
+                        status
+                    }
                 };
                 if status == LinkStatus::NotLinked {
                     continue;
@@ -177,8 +332,20 @@ impl Studio {
 
             let (status, target_path) =
                 best.unwrap_or((LinkStatus::NotLinked, primary.join(&skill.name)));
+            let document = target_path.join(scanner::SKILL_FILE);
+            let declared = scanner::parse_frontmatter(&document)
+                .name
+                .unwrap_or_else(|| skill.name.clone());
+            let toggle_name = if agent.id == "codex" {
+                &declared
+            } else {
+                target_path
+                    .file_name()
+                    .and_then(|s| s.to_str())
+                    .unwrap_or(&skill.name)
+            };
             let disabled = status.is_registered()
-                && native_toggle::is_skill_disabled(agent, overrides, &skill.name);
+                && native_toggle::is_skill_disabled_at(agent, overrides, toggle_name, &document);
             let mode = config.registration(&skill.id, agent.id).map(|r| r.mode);
 
             out.insert(
@@ -188,6 +355,7 @@ impl Studio {
                     target_path,
                     disabled,
                     mode,
+                    entry_paths,
                 },
             );
         }
@@ -223,7 +391,21 @@ impl Studio {
             let agent = crate::models::agent::require_agent(agent_id)?;
             let root = agent.primary_global_root(&overrides);
             for skill in &skills {
-                let dest = root.join(&skill.name);
+                let dest = self
+                    .agent_targets(config, skill, agent)
+                    .into_iter()
+                    .find(|p| {
+                        crate::fs::paths::paths_alias(p, &skill.source_path)
+                            || matches!(
+                                linker::link_status(&skill.source_path, p),
+                                LinkStatus::Copied
+                                    | LinkStatus::CopyStale
+                                    | LinkStatus::CopyModified
+                                    | LinkStatus::CopyConflict
+                                    | LinkStatus::CopyDamaged
+                            )
+                    })
+                    .unwrap_or_else(|| root.join(&skill.name));
                 // 真身就在这儿，没什么可注册的
                 if crate::fs::paths::is_same_path(&dest, &skill.source_path) {
                     report.push_ok(result(skill, agent_id, LinkStatus::Source, None));
@@ -264,16 +446,16 @@ impl Studio {
         force: bool,
     ) -> Result<LinkReport> {
         let skills = self.resolve_skills(config, skill_ids)?;
-        let overrides = config.settings.agent_dir_overrides.clone();
         let mut report = LinkReport::default();
 
         for agent_id in agent_ids {
             let agent = crate::models::agent::require_agent(agent_id)?;
             for skill in &skills {
                 // 遍历全部根，把散落在共享根里的注册也清掉
-                for root in agent.resolved_global_roots(&overrides) {
-                    let dest = root.join(&skill.name);
-                    if crate::fs::paths::is_same_path(&dest, &skill.source_path) {
+                for dest in self.agent_targets(config, skill, agent) {
+                    if !scanner::is_symlink_or_junction(&dest)
+                        && crate::fs::paths::paths_alias(&dest, &skill.source_path)
+                    {
                         // 不能把真身当注册删掉
                         continue;
                     }
@@ -427,17 +609,42 @@ impl Studio {
     pub fn set_skill_enabled(
         &self,
         config: &AppConfig,
-        skill_name: &str,
+        skill_id: &str,
         agent_id: &str,
         enabled: bool,
     ) -> Result<()> {
+        let skill = self.find_skill(config, skill_id)?;
         let agent = crate::models::agent::require_agent(agent_id)?;
-        native_toggle::set_skill_enabled(
-            agent,
-            &config.settings.agent_dir_overrides,
-            skill_name,
-            enabled,
-        )
+        let state = self
+            .agent_states(config, &skill)
+            .remove(agent_id)
+            .ok_or_else(|| Error::invalid("未知 agent"))?;
+        if !state.status.is_registered() {
+            return Err(Error::invalid("该 skill 在目标 agent 上不可用"));
+        }
+        for target in state.entry_paths {
+            if !linker::link_status(&skill.source_path, &target).is_registered()
+                && !crate::fs::paths::paths_alias(&target, &skill.source_path)
+            {
+                continue;
+            }
+            let document = target.join(scanner::SKILL_FILE);
+            let name = if agent_id == "codex" {
+                scanner::parse_frontmatter(&document)
+                    .name
+                    .unwrap_or_else(|| skill.name.clone())
+            } else {
+                target.file_name().unwrap().to_string_lossy().into_owned()
+            };
+            native_toggle::set_skill_enabled_at(
+                agent,
+                &config.settings.agent_dir_overrides,
+                &name,
+                &document,
+                enabled,
+            )?;
+        }
+        Ok(())
     }
 
     /// 把一个原地 skill 收编到 Hub：移动真身，并把原位置改成指向 Hub 的注册。
@@ -447,6 +654,11 @@ impl Studio {
         let skill = self.find_skill(config, skill_id)?;
         if matches!(skill.origin, SkillOrigin::Hub) {
             return Ok(skill);
+        }
+        if matches!(skill.origin, SkillOrigin::External) {
+            return Err(Error::invalid(
+                "外部来源仅通过链接引用，不能自动迁移或接管源目录",
+            ));
         }
         let hub = self.store.hub_dir(config);
         let overrides = config.settings.agent_dir_overrides.clone();
@@ -465,25 +677,152 @@ impl Studio {
             )));
         }
 
-        // 先复制到 Hub（带校验），成功后再把原位置换成链接，最后删原目录。
-        // 顺序保证任何一步失败都不会丢内容。
-        linker::replace_dest_with_copy(&skill.source_path, &target, &skill.id)?;
-        // Hub 里的真身不需要复制边车
-        let _ = std::fs::remove_file(target.join(scanner::COPY_SIDECAR));
-
+        // Discover affected entries before moving the source; shared roots may alias.
         let old_path = skill.source_path.clone();
-        std::fs::remove_dir_all(&old_path).map_err(|e| Error::io(&old_path, e))?;
-        linker::register(
-            &target,
-            &old_path,
-            config.settings.default_link_mode,
-            &skill.id,
-            false,
-        )?;
-
-        // 真身路径变了 → ID 变了，迁移分组 / 项目 / 注册里的引用
         let new_id = skill_id_for(&target);
-        migrate_skill_id(config, &skill.id, &new_id);
+        let mut candidates: Vec<PathBuf> = all_roots.iter().map(|r| r.join(&skill.name)).collect();
+        for agent in AGENTS {
+            candidates.extend(self.agent_targets(config, &skill, agent));
+        }
+        if let Some(regs) = config.registrations.get(&skill.id) {
+            candidates.extend(regs.values().map(|r| r.target_path.clone()));
+        }
+        for project in &config.projects {
+            if !project.root.is_dir() {
+                return Err(Error::invalid(format!(
+                    "项目不可访问，无法检查迁移引用: {}",
+                    project.root.display()
+                )));
+            }
+            // Include all supported roots, including deployments whose selection was later changed.
+            for agent in AGENTS {
+                if let Some(root) = agent.project_root(&project.root) {
+                    candidates.push(root.join(&skill.name));
+                }
+            }
+        }
+        let mut seen = HashSet::new();
+        let mut copies = Vec::new();
+        let mut links = Vec::new();
+        for dest in candidates {
+            let parent = dest.parent().unwrap();
+            let key = parent
+                .canonicalize()
+                .unwrap_or_else(|_| parent.to_path_buf())
+                .join(dest.file_name().unwrap());
+            if !seen.insert(key) || crate::fs::paths::is_same_path(&dest, &old_path) {
+                continue;
+            }
+            match std::fs::symlink_metadata(&dest) {
+                Err(e) if e.kind() == std::io::ErrorKind::NotFound => continue,
+                Err(e) => return Err(Error::io(&dest, e)),
+                Ok(_) => {}
+            }
+            if scanner::is_symlink_or_junction(&dest) {
+                if linker::link_status(&old_path, &dest) == LinkStatus::Linked {
+                    links.push(dest);
+                }
+            } else if let Some(mut sidecar) = scanner::read_copy_sidecar(&dest) {
+                if crate::fs::paths::paths_alias(&sidecar.source_path, &old_path) {
+                    sidecar.source_path = target.clone();
+                    sidecar.skill_id = new_id.clone();
+                    copies.push((dest.join(scanner::COPY_SIDECAR), sidecar));
+                }
+            } else if dest.join(scanner::COPY_SIDECAR).symlink_metadata().is_ok() {
+                return Err(Error::invalid(format!(
+                    "无法读取副本元数据: {}",
+                    dest.display()
+                )));
+            }
+        }
+        let mut next = config.clone();
+        migrate_skill_id(&mut next, &skill.id, &new_id);
+        let mut tx =
+            super::transaction::Transaction::begin(self.store.dir().join("migration.json"))?;
+        let operation = (|| -> Result<()> {
+            let before = scanner::dir_content_hash(&old_path)?;
+            tx.reserve(&target)?;
+            linker::copy_tree(&old_path, &target)?;
+            if scanner::dir_content_hash(&target)? != before
+                || scanner::dir_content_hash(&old_path)? != before
+            {
+                return Err(Error::invalid("迁移校验失败或源在迁移期间发生变化"));
+            }
+            scanner::validate_sync_source(&target)?;
+            tx.reserve(&old_path)?;
+            // Stay inside the outer journal: a nested copy transaction could undo
+            // the restored source during startup recovery.
+            let mode = config.settings.default_link_mode;
+            let linked = if mode == LinkMode::Copy {
+                false
+            } else {
+                match linker::create_symlink(&target, &old_path) {
+                    Ok(()) => true,
+                    Err(err) if mode == LinkMode::Symlink => return Err(err),
+                    Err(_) => false,
+                }
+            };
+            let done = if linked {
+                linker::Registered {
+                    mode: LinkMode::Symlink,
+                    status: LinkStatus::Linked,
+                    source_hash: None,
+                }
+            } else {
+                linker::copy_tree(&target, &old_path)?;
+                if scanner::dir_content_hash(&old_path)? != before {
+                    return Err(Error::invalid("原位置副本校验失败"));
+                }
+                crate::fs::atomic::write_json_file(
+                    &old_path.join(scanner::COPY_SIDECAR),
+                    &scanner::CopySidecar {
+                        skill_id: new_id.clone(),
+                        source_path: target.clone(),
+                        source_hash: before.clone(),
+                        copied_at: linker::now_secs(),
+                    },
+                )?;
+                linker::Registered {
+                    mode: LinkMode::Copy,
+                    status: LinkStatus::Copied,
+                    source_hash: Some(before),
+                }
+            };
+            if let SkillOrigin::InPlace { ref owner_agent } = skill.origin {
+                next.set_registration(
+                    &new_id,
+                    owner_agent,
+                    Registration {
+                        mode: done.mode,
+                        target_path: old_path.clone(),
+                        registered_at: linker::now_secs(),
+                        source_hash_at_copy: done.source_hash,
+                    },
+                );
+            }
+            for dest in &links {
+                tx.reserve(dest)?;
+                linker::create_symlink(&target, dest)?;
+            }
+            for (path, sidecar) in &copies {
+                tx.reserve(path)?;
+                crate::fs::atomic::write_json_file(path, sidecar)?;
+            }
+            // Configuration is part of the same undo journal as filesystem changes.
+            tx.reserve(&self.store.config_path())?;
+            self.store.save(&next)?;
+            Ok(())
+        })();
+        if let Err(err) = operation {
+            if let Err(recovery) = tx.rollback() {
+                return Err(Error::Other(format!(
+                    "{err}; 自动回滚未完成，请重启恢复: {recovery}"
+                )));
+            }
+            return Err(err);
+        }
+        tx.commit()?;
+        *config = next;
 
         let mut adopted = skill;
         adopted.id = new_id;
@@ -514,6 +853,7 @@ impl Studio {
         let existing: HashSet<String> = self
             .scan_skills(config)?
             .into_iter()
+            .filter(|v| v.skill.source_path.join(scanner::SKILL_FILE).is_file())
             .map(|v| v.skill.id)
             .collect();
         Ok(config.prune_missing_skills(&existing))

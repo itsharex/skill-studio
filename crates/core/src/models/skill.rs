@@ -12,6 +12,8 @@ pub enum SkillOrigin {
     InPlace { owner_agent: String },
     /// 已收编到 `~/.skill-studio/skills/`
     Hub,
+    /// 通过链接发现的外部来源；发现不等于接管，禁止自动迁移真身。
+    External,
 }
 
 /// 链接方式
@@ -40,6 +42,12 @@ pub enum LinkStatus {
     Copied,
     /// 复制但源已变更（哈希不匹配）→ 提示重新复制
     CopyStale,
+    /// 副本有本地修改，普通更新/移除必须保护。
+    CopyModified,
+    /// 源和副本都已变化。
+    CopyConflict,
+    /// 副本缺少必要文件或无法读取。
+    CopyDamaged,
     /// 目标存在但非本工具管理 → **绝不覆盖**，UI 标红
     Foreign,
     /// symlink 悬空
@@ -62,7 +70,12 @@ impl LinkStatus {
     pub fn is_registered(self) -> bool {
         matches!(
             self,
-            Self::Source | Self::Linked | Self::Copied | Self::CopyStale
+            Self::Source
+                | Self::Linked
+                | Self::Copied
+                | Self::CopyStale
+                | Self::CopyModified
+                | Self::CopyConflict
         )
     }
 
@@ -70,7 +83,13 @@ impl LinkStatus {
     pub fn needs_attention(self) -> bool {
         matches!(
             self,
-            Self::CopyStale | Self::Foreign | Self::BrokenLink | Self::Conflict
+            Self::CopyStale
+                | Self::CopyModified
+                | Self::CopyConflict
+                | Self::CopyDamaged
+                | Self::Foreign
+                | Self::BrokenLink
+                | Self::Conflict
         )
     }
 }
@@ -184,6 +203,10 @@ mod tests {
         assert!(!LinkStatus::Source.is_managed());
         assert!(!LinkStatus::Source.needs_attention());
         assert!(LinkStatus::Copied.is_registered());
+        assert!(LinkStatus::CopyModified.is_registered());
+        assert!(LinkStatus::CopyConflict.is_registered());
+        assert!(!LinkStatus::CopyDamaged.is_registered());
+        assert!(!LinkStatus::CopyModified.is_managed());
         assert!(LinkStatus::CopyStale.is_registered() && LinkStatus::CopyStale.needs_attention());
         // Foreign 是用户自己放的，既不算本工具管理，也不算注册
         assert!(!LinkStatus::Foreign.is_managed());
