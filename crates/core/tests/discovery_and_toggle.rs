@@ -1,10 +1,9 @@
 #[path = "support.rs"]
 mod support;
 use serial_test::serial;
-use skill_studio_core::{
-    models::skill::{LinkMode, LinkStatus, SkillOrigin},
-    services::{native_toggle, scanner},
-};
+#[cfg(unix)]
+use skill_studio_core::models::skill::{LinkMode, LinkStatus, SkillOrigin};
+use skill_studio_core::services::{native_toggle, scanner};
 use std::fs;
 use support::Env;
 
