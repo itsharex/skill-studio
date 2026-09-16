@@ -45,6 +45,7 @@ import {
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Textarea } from "@/components/ui/textarea";
+import { AgentIcon } from "@/components/common/AgentIcon";
 import { ConfirmDialog } from "@/components/common/ConfirmDialog";
 import { EmptyState } from "@/components/common/EmptyState";
 import {
@@ -174,7 +175,8 @@ export function GroupsPage() {
                             })
                           }
                         >
-                          <Plus className="h-4 w-4" />
+                          <Plus className="h-3.5 w-3.5" />
+                          <AgentIcon agentId={a.id} className="h-4 w-4" />
                           {a.displayName}
                         </DropdownMenuItem>
                       ))}
@@ -191,7 +193,8 @@ export function GroupsPage() {
                             })
                           }
                         >
-                          <Minus className="h-4 w-4" />
+                          <Minus className="h-3.5 w-3.5" />
+                          <AgentIcon agentId={a.id} className="h-4 w-4" />
                           {a.displayName}
                         </DropdownMenuItem>
                       ))}

@@ -31,6 +31,7 @@ import {
   ListItemRow,
   RowActions,
 } from "@/components/common/ListItemRow";
+import { AgentIcon } from "@/components/common/AgentIcon";
 import { ListToolbar } from "@/components/common/ListToolbar";
 import { StatusDots } from "@/components/common/StatusDots";
 import {
@@ -150,6 +151,7 @@ export function LibraryPage() {
                     onClick={() => bulkRegister(a.id)}
                     disabled={!a.detected}
                   >
+                    <AgentIcon agentId={a.id} className="h-4 w-4" />
                     {a.displayName}
                     {!a.detected && (
                       <span className="ml-auto text-[10px] text-muted-foreground">
@@ -283,6 +285,7 @@ export function LibraryPage() {
                             })
                           }
                         >
+                          <AgentIcon agentId={a.id} className="h-4 w-4" />
                           {a.displayName}
                           {isSource && (
                             <span className="ml-auto text-[10px] text-muted-foreground">

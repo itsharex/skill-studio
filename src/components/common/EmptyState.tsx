@@ -1,4 +1,4 @@
-import type { LucideIcon } from "lucide-react";
+import type { ComponentType } from "react";
 
 export function EmptyState({
   icon: Icon,
@@ -6,7 +6,8 @@ export function EmptyState({
   description,
   action,
 }: {
-  icon: LucideIcon;
+  /** lucide 图标或 agent 品牌标记，只要接 className 即可 */
+  icon: ComponentType<{ className?: string }>;
   title: string;
   description?: string;
   action?: React.ReactNode;

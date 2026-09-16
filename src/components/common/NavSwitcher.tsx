@@ -1,10 +1,15 @@
-import type { LucideIcon } from "lucide-react";
+import type { ReactNode } from "react";
 import { cn } from "@/lib/utils";
 
 export interface NavItem<T extends string> {
   id: T;
   label: string;
-  icon: LucideIcon;
+  /**
+   * 左侧图标节点。这里收的是元素而不是组件类型 —— agent 项要用各自的品牌
+   * 标记（见 AgentIcon），它和 lucide 图标不是同一种签名，交给调用方直接渲染
+   * 反而省掉一层适配。
+   */
+  icon: ReactNode;
   /** 右侧计数徽标，例如该 agent 已注册的 skill 数 */
   badge?: string;
 }
@@ -40,7 +45,7 @@ export function NavSwitcher<T extends string>({
             </p>
           )}
           <div className="flex flex-col gap-1 rounded-xl bg-muted p-1">
-            {section.items.map(({ id, label, icon: Icon, badge }) => {
+            {section.items.map(({ id, label, icon, badge }) => {
               const isActive = active === id;
               return (
                 <button
@@ -49,13 +54,15 @@ export function NavSwitcher<T extends string>({
                   onClick={() => onSelect(id)}
                   aria-current={isActive ? "page" : undefined}
                   className={cn(
-                    "group inline-flex h-9 items-center gap-2.5 rounded-md px-3 text-sm font-medium transition-all duration-200",
+                    "group inline-flex h-9 items-center gap-2.5 rounded-xl-inner px-3 text-sm font-medium transition-all duration-200",
                     isActive
                       ? "bg-background text-foreground shadow-sm"
                       : "text-muted-foreground hover:bg-background/50 hover:text-foreground",
                   )}
                 >
-                  <Icon className="h-4 w-4 shrink-0" />
+                  <span className="flex h-4 w-4 shrink-0 items-center justify-center">
+                    {icon}
+                  </span>
                   <span className="min-w-0 flex-1 truncate text-left">
                     {label}
                   </span>

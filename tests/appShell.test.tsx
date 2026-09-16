@@ -75,3 +75,58 @@ describe("窗口壳与侧栏导航", () => {
     expect(await screen.findByText(/配置文件损坏/)).toBeInTheDocument();
   });
 });
+
+describe("设置视图", () => {
+  it("进入设置后侧栏收起，靠返回键退出，并回到进入前停留的视图", async () => {
+    withAgents();
+    const user = userEvent.setup();
+    renderWithProviders(<App />);
+    await user.click(await screen.findByRole("button", { name: /Codex/ }));
+    expect(
+      screen.getByRole("navigation", { name: "主导航" }),
+    ).toBeInTheDocument();
+
+    await user.click(screen.getByRole("button", { name: "设置" }));
+    expect(screen.getByRole("heading", { level: 1 }).textContent).toBe("设置");
+    expect(screen.queryByRole("navigation", { name: "主导航" })).toBeNull();
+
+    await user.click(screen.getByRole("button", { name: "返回" }));
+    expect(screen.getByRole("heading", { level: 1 }).textContent).toBe("Codex");
+    expect(
+      screen.getByRole("navigation", { name: "主导航" }),
+    ).toBeInTheDocument();
+  });
+
+  it("设置是临时视图，不会被记成下次启动的落脚点", async () => {
+    withAgents();
+    const user = userEvent.setup();
+    renderWithProviders(<App />);
+    await user.click(screen.getByRole("button", { name: "设置" }));
+    expect(localStorage.getItem("skill-studio-view")).toBe("library");
+  });
+
+  it("旧版本存下的 settings 不会让应用启动就停在设置页", async () => {
+    withAgents();
+    localStorage.setItem("skill-studio-view", "settings");
+    renderWithProviders(<App />);
+    await waitFor(() =>
+      expect(screen.getByRole("heading", { level: 1 }).textContent).toBe(
+        "全局 Skill",
+      ),
+    );
+  });
+
+  it("设置内容按顶部标签栏分页，默认停在「通用」", async () => {
+    withAgents();
+    const user = userEvent.setup();
+    renderWithProviders(<App />);
+    await user.click(screen.getByRole("button", { name: "设置" }));
+
+    expect(await screen.findByText("默认链接方式")).toBeInTheDocument();
+    expect(screen.queryByText("Agent 目录覆盖")).toBeNull();
+
+    await user.click(screen.getByRole("tab", { name: "目录" }));
+    expect(await screen.findByText("Agent 目录覆盖")).toBeInTheDocument();
+    expect(screen.queryByText("默认链接方式")).toBeNull();
+  });
+});

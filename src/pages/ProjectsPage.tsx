@@ -32,6 +32,7 @@ import {
   TooltipContent,
   TooltipTrigger,
 } from "@/components/ui/tooltip";
+import { AgentIcon } from "@/components/common/AgentIcon";
 import { ConfirmDialog } from "@/components/common/ConfirmDialog";
 import { EmptyState } from "@/components/common/EmptyState";
 import {
@@ -363,6 +364,7 @@ function ProjectDetail({
                   checked={project.agentIds.includes(a.id)}
                   aria-label={a.displayName}
                 />
+                <AgentIcon agentId={a.id} className="h-4 w-4 shrink-0" />
                 <span className="flex-1 text-sm font-medium">
                   {a.displayName}
                 </span>

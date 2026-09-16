@@ -63,10 +63,14 @@ module.exports = {
         lg: "0 10px 15px -3px rgb(0 0 0 / 0.1), 0 4px 6px -4px rgb(0 0 0 / 0.1)",
       },
       borderRadius: {
-        sm: "0.375rem",
-        md: "0.5rem",
-        lg: "0.75rem",
-        xl: "0.875rem",
+        sm: "0.375rem", // 6px
+        md: "0.5rem", // 8px
+        lg: "0.75rem", // 12px
+        xl: "0.875rem", // 14px
+        // 同心圆角（Apple 的 concentric corners / SwiftUI ContainerRelativeShape）：
+        // 内层半径 = 外层半径 − 内边距。分段控件的外框统一是 xl(14px) + p-1(4px)，
+        // 内层方块因此该是 10px。直接套 md(8px) 会比外框更方，圆角处露出不等宽的缝。
+        "xl-inner": "0.625rem", // 14 − 4
       },
       fontFamily: {
         sans: [

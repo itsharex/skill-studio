@@ -1,8 +1,8 @@
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import { useQueryClient } from "@tanstack/react-query";
 import { AnimatePresence, motion } from "framer-motion";
 import {
-  Boxes,
+  ArrowLeft,
   FolderGit2,
   Layers,
   Library,
@@ -15,6 +15,7 @@ import {
 } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { TooltipProvider } from "@/components/ui/tooltip";
+import { AgentIcon } from "@/components/common/AgentIcon";
 import { NavSwitcher, type NavSection } from "@/components/common/NavSwitcher";
 import { useTheme, type Theme } from "@/components/theme-provider";
 import { useAgents, useSkillsAutoRefresh } from "@/hooks/useData";
@@ -64,7 +65,7 @@ function ThemeToggle() {
           aria-pressed={theme === value}
           onClick={() => setTheme(value)}
           className={cn(
-            "inline-flex h-7 w-7 items-center justify-center rounded-md transition-all duration-200",
+            "inline-flex h-7 w-7 items-center justify-center rounded-xl-inner transition-all duration-200",
             theme === value
               ? "bg-background text-foreground shadow-sm"
               : "text-muted-foreground hover:bg-background/50 hover:text-foreground",
@@ -84,12 +85,20 @@ export default function App() {
 
   const [initError, setInitError] = useState<string | null>(null);
   const [view, setView] = useState<ViewId>(() => {
-    const stored = localStorage.getItem(VIEW_STORAGE_KEY);
-    return (stored as ViewId | null) ?? "library";
+    const stored = localStorage.getItem(VIEW_STORAGE_KEY) as ViewId | null;
+    // 设置是全屏临时视图（没有侧栏），重启后停在这里没有意义；
+    // 旧版本可能已经把它写进过 localStorage，这里一并挡掉。
+    return stored && stored !== "settings" ? stored : "library";
   });
+  const isSettings = view === "settings";
 
+  // 设置页的返回目标 = 进入设置之前停留的那个视图
+  const backTarget = useRef<ViewId>("library");
   useEffect(() => {
-    localStorage.setItem(VIEW_STORAGE_KEY, view);
+    if (view !== "settings") {
+      backTarget.current = view;
+      localStorage.setItem(VIEW_STORAGE_KEY, view);
+    }
   }, [view]);
 
   // 启动期错误（例如配置文件坏了）要让用户看见，而不是静默用默认值跑
@@ -111,27 +120,46 @@ export default function App() {
   const sections = useMemo<NavSection<ViewId>[]>(
     () => [
       {
-        items: [{ id: "library", label: STATIC_TITLES.library, icon: Library }],
+        items: [
+          {
+            id: "library",
+            label: STATIC_TITLES.library,
+            icon: <Library className="h-4 w-4" />,
+          },
+        ],
       },
       {
         label: "AGENT",
         items: agents.map((a) => ({
           id: `${AGENT_PREFIX}${a.id}` as ViewId,
           label: a.displayName,
-          icon: Boxes,
+          icon: <AgentIcon agentId={a.id} className="h-4 w-4" />,
           badge: a.detected ? undefined : "未装",
         })),
       },
       {
         label: "组织",
         items: [
-          { id: "groups", label: STATIC_TITLES.groups, icon: Layers },
-          { id: "projects", label: STATIC_TITLES.projects, icon: FolderGit2 },
+          {
+            id: "groups",
+            label: STATIC_TITLES.groups,
+            icon: <Layers className="h-4 w-4" />,
+          },
+          {
+            id: "projects",
+            label: STATIC_TITLES.projects,
+            icon: <FolderGit2 className="h-4 w-4" />,
+          },
         ],
       },
     ],
     [agents],
   );
+
+  /** 当前停留在哪个 agent 页（顶栏要显示它的品牌标记） */
+  const activeAgent = view.startsWith(AGENT_PREFIX)
+    ? agents.find((a) => a.id === view.slice(AGENT_PREFIX.length))
+    : undefined;
 
   const refresh = () => {
     void queryClient.invalidateQueries();
@@ -174,9 +202,29 @@ export default function App() {
         >
           <div className="flex h-full items-center justify-between gap-2 px-6">
             <div className="flex items-center gap-2.5" data-tauri-no-drag>
-              <div className="flex h-8 w-8 items-center justify-center rounded-lg bg-blue-500 shadow-sm">
-                <Layers className="h-[18px] w-[18px] text-white" />
-              </div>
+              {isSettings ? (
+                <Button
+                  variant="outline"
+                  size="icon"
+                  className="h-8 w-8"
+                  title="返回"
+                  aria-label="返回"
+                  onClick={() => setView(backTarget.current)}
+                >
+                  <ArrowLeft className="h-4 w-4" />
+                </Button>
+              ) : activeAgent ? (
+                <div className="flex h-8 w-8 items-center justify-center rounded-lg border border-border-default bg-card">
+                  <AgentIcon
+                    agentId={activeAgent.id}
+                    className="h-[18px] w-[18px]"
+                  />
+                </div>
+              ) : (
+                <div className="flex h-8 w-8 items-center justify-center rounded-lg bg-blue-500 shadow-sm">
+                  <Layers className="h-[18px] w-[18px] text-white" />
+                </div>
+              )}
               <h1 className="text-lg font-semibold leading-none">
                 {titles[view] ?? "Skill Studio"}
               </h1>
@@ -188,24 +236,23 @@ export default function App() {
                 <Button
                   variant="ghost"
                   size="sm"
-                  className="w-8 px-2 text-muted-foreground hover:bg-black/5 hover:text-foreground dark:hover:bg-white/5"
+                  className="w-8 rounded-xl-inner px-2 text-muted-foreground hover:bg-black/5 hover:text-foreground dark:hover:bg-white/5"
                   title="重新扫描"
                   onClick={refresh}
                 >
                   <RefreshCw className="h-4 w-4" />
                 </Button>
-                <Button
-                  variant="ghost"
-                  size="sm"
-                  className={cn(
-                    "w-8 px-2 text-muted-foreground hover:bg-black/5 hover:text-foreground dark:hover:bg-white/5",
-                    view === "settings" && "text-foreground",
-                  )}
-                  title="设置"
-                  onClick={() => setView("settings")}
-                >
-                  <SettingsIcon className="h-4 w-4" />
-                </Button>
+                {!isSettings && (
+                  <Button
+                    variant="ghost"
+                    size="sm"
+                    className="w-8 rounded-xl-inner px-2 text-muted-foreground hover:bg-black/5 hover:text-foreground dark:hover:bg-white/5"
+                    title="设置"
+                    onClick={() => setView("settings")}
+                  >
+                    <SettingsIcon className="h-4 w-4" />
+                  </Button>
+                )}
               </div>
             </div>
           </div>
@@ -213,12 +260,18 @@ export default function App() {
 
         {/* ③ 侧栏 + 内容区 */}
         <div className="flex min-h-0 flex-1">
-          <nav
-            aria-label="主导航"
-            className="w-[236px] shrink-0 overflow-y-auto px-3 py-4"
-          >
-            <NavSwitcher sections={sections} active={view} onSelect={setView} />
-          </nav>
+          {!isSettings && (
+            <nav
+              aria-label="主导航"
+              className="w-[236px] shrink-0 overflow-y-auto px-3 py-4"
+            >
+              <NavSwitcher
+                sections={sections}
+                active={view}
+                onSelect={setView}
+              />
+            </nav>
+          )}
 
           <main className="flex min-h-0 flex-1 flex-col overflow-hidden">
             {initError && (

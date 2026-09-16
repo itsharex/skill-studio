@@ -1,6 +1,5 @@
 import { useMemo, useState } from "react";
 import {
-  Boxes,
   FolderOpen,
   Minus,
   Plus,
@@ -22,6 +21,7 @@ import {
   TooltipContent,
   TooltipTrigger,
 } from "@/components/ui/tooltip";
+import { agentIcon } from "@/components/common/AgentIcon";
 import { EmptyState } from "@/components/common/EmptyState";
 import {
   ListContainer,
@@ -99,7 +99,13 @@ export function AgentPage({ agentId }: { agentId: string }) {
   );
 
   if (!agent) {
-    return <EmptyState icon={Boxes} title="未知 agent" description={agentId} />;
+    return (
+      <EmptyState
+        icon={agentIcon(agentId)}
+        title="未知 agent"
+        description={agentId}
+      />
+    );
   }
 
   return (
@@ -279,7 +285,7 @@ export function AgentPage({ agentId }: { agentId: string }) {
       <div className="min-h-0 flex-1 overflow-y-auto pb-6">
         {filtered.length === 0 ? (
           <EmptyState
-            icon={Boxes}
+            icon={agentIcon(agentId)}
             title={
               present.length === 0
                 ? `${agent.displayName} 还没有任何 skill`
