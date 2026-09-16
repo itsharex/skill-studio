@@ -194,7 +194,10 @@ pub fn dir_content_hash(dir: &Path) -> Result<String> {
     Ok(digest.iter().take(16).map(|b| format!("{b:02x}")).collect())
 }
 
-const MAX_SCAN_DEPTH: usize = 16;
+/// 目录遍历的深度上限：够深的 references 树，又不至于被恶意深目录（或跟错的链接）
+/// 拖住。哈希、token 估算、复制树走的是三条遍历，但**只该有一个上限** —— 各写一份
+/// 字面量的时候，改了一处就会静悄悄地留下两种深度。
+pub const MAX_SCAN_DEPTH: usize = 16;
 
 fn collect_files(root: &Path, dir: &Path, out: &mut Vec<PathBuf>, depth: usize) -> Result<()> {
     if depth > MAX_SCAN_DEPTH {

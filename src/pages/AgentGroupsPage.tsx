@@ -1,6 +1,6 @@
 import { Tabs, TabsList, TabsTrigger, TabsContent } from "@/components/ui/tabs";
 import { PageTools } from "@/components/common/PageTools";
-import { useState, type ReactNode } from "react";
+import { useMemo, useState, type ReactNode } from "react";
 import {
   DndContext,
   PointerSensor,
@@ -53,7 +53,7 @@ import {
 } from "@/components/common/ListItemRow";
 import { AgentSkills } from "@/pages/AgentPage";
 import { formatTokens, sumTokens, tokenIndex, tokenTitle } from "@/lib/tokens";
-import { isRegistered } from "@/lib/linkStatus";
+import { isCopyDrifted, isRegistered, needsManualFix } from "@/lib/linkStatus";
 import type { Group } from "@/types";
 
 export function AgentPage({ agentId }: { agentId: string }) {
@@ -116,8 +116,8 @@ export function AgentPage({ agentId }: { agentId: string }) {
     reorder.mutate(next);
   };
   const legacy = groups.filter((g) => !g.agentId);
-  // 每次渲染重建一次索引即可：skills 变了这个数就该跟着变
-  const tokens = tokenIndex(skills);
+  // 索引跟着 skills 走：与 ProjectsPage 同一口径，别在每次重渲染时重建一遍
+  const tokens = useMemo(() => tokenIndex(skills), [skills]);
   const groupTokens = (g: Group) => sumTokens(tokens, g.skillIds);
   // 顶部统计卡片的三个数字。
   // 分组：每个 agent 同时只启用一个，且启用记录指向的组必须还在（删掉的组不算）。
@@ -132,6 +132,11 @@ export function AgentPage({ agentId }: { agentId: string }) {
     tokens,
     enabledSkills.map((s) => s.id),
   );
+  // 这些 skill 的副本与源已经不一致，而合计恒定按源估算 ——
+  // 数字照给（agent 确实加载了它们），偏差在 tooltip 里交代
+  const driftedCount = enabledSkills.filter((s) =>
+    isCopyDrifted(s.agents[agentId].status),
+  ).length;
 
   const agent = agents.find((a) => a.id === agentId);
   const refresh = () => client.invalidateQueries();
@@ -215,25 +220,37 @@ export function AgentPage({ agentId }: { agentId: string }) {
               </span>
             </TabsTrigger>
           </TabsList>
+          {/*
+            这三枚统计胶囊只报数、这一行没有筛选语义，所以是不可聚焦的 Badge
+            而不是按钮。用 Badge 的 outline 变体而不是手抄它的类名 —— 裸 `border`
+            会吃到 preflight 推出的 #e4e4e7，深色下就是近白边框套在已经变暗的卡片里。
+          */}
           <div className="ml-auto flex flex-wrap items-center gap-2">
-            <span
-              className="rounded-full border px-3 py-1 text-sm font-medium"
+            <Badge
+              variant="outline"
+              className="px-3 py-1 text-sm font-medium"
               title={`每个 agent 同一时间只能启用一个分组；本 agent 共 ${own.length} 个分组`}
             >
               已启用 {activeGroupCount} 个分组
-            </span>
-            <span
-              className="rounded-full border px-3 py-1 text-sm font-medium"
+            </Badge>
+            <Badge
+              variant="outline"
+              className="px-3 py-1 text-sm font-medium"
               title="文件在位、且没被 agent 的原生开关停用的 skill。目录里有痕迹但用不上的（外来占位、悬空链接）不计。"
             >
               已启用 {enabledSkills.length} 个 skill
-            </span>
-            <span
-              className="rounded-full border px-3 py-1 text-sm font-medium"
-              title={tokenTitle(enabledTokens, "当前已启用的 skill")}
+            </Badge>
+            <Badge
+              variant="outline"
+              className="px-3 py-1 text-sm font-medium"
+              title={tokenTitle(
+                enabledTokens,
+                "当前已启用的 skill",
+                driftedCount,
+              )}
             >
               ≈ {formatTokens(enabledTokens.total)} tokens
-            </span>
+            </Badge>
           </div>
         </div>
         <TabsContent
@@ -264,6 +281,8 @@ export function AgentPage({ agentId }: { agentId: string }) {
                   )
                   .map((g) => {
                     const active = current?.groupId === g.id;
+                    // 一行只遍历一次 id 集合：下面的判断、数字、tooltip 共用
+                    const rowTokens = groupTokens(g);
                     const changed =
                       active &&
                       (current.entries?.some(
@@ -276,6 +295,9 @@ export function AgentPage({ agentId }: { agentId: string }) {
                           JSON.stringify(g.skillIds) ||
                         (current.preserveManualSkills ?? true) !==
                           (settings?.preserveManualSkills ?? true));
+                    // 「需要检查」问的是"必须由人动手吗"，和上面数"已启用"的
+                    // isRegistered 是两个谓词：copyConflict 两边都算，见 linkStatus.ts
+                    // （注意它与 Rust 的 needs_attention 也不是一回事）
                     const unavailable =
                       active &&
                       current.skillIds.some((id) => {
@@ -285,13 +307,7 @@ export function AgentPage({ agentId }: { agentId: string }) {
                         return (
                           !state ||
                           state.disabled ||
-                          ![
-                            "source",
-                            "linked",
-                            "copied",
-                            "copyStale",
-                            "copyModified",
-                          ].includes(state.status)
+                          needsManualFix(state.status)
                         );
                       });
                     return (
@@ -314,12 +330,12 @@ export function AgentPage({ agentId }: { agentId: string }) {
                             <Badge variant="outline">
                               {g.skillIds.length} 个 skill
                             </Badge>
-                            {groupTokens(g).total > 0 && (
+                            {rowTokens.total > 0 && (
                               <Badge
                                 variant="outline"
-                                title={tokenTitle(groupTokens(g), "组内 skill")}
+                                title={tokenTitle(rowTokens, "组内 skill")}
                               >
-                                ≈ {formatTokens(groupTokens(g).total)} tokens
+                                ≈ {formatTokens(rowTokens.total)} tokens
                               </Badge>
                             )}
                             {active && (

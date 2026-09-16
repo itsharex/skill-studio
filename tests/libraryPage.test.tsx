@@ -81,6 +81,140 @@ describe("Skill Hub", () => {
     await user.click(screen.getByRole("button", { name: "已安装 2 个" }));
     expect(screen.getByText("pdf-tools")).toBeInTheDocument();
     expect(hubPill).toHaveAttribute("aria-pressed", "false");
+    // 它现在连托管筛选一起清，title 不能只承诺来源
+    expect(
+      screen.getByRole("button", { name: "已安装 2 个" }).getAttribute("title"),
+    ).toContain("已托管");
+  });
+
+  it("两枚统计胶囊用主题边框，深色模式下不是硬编码的近白色", async () => {
+    setup([
+      makeSkill(),
+      makeSkill({
+        id: "hub",
+        name: "StudioOnly",
+        origin: { kind: "hub" },
+        sourceIds: ["studio"],
+        agents: {},
+      }),
+    ]);
+    renderWithProviders(<LibraryPage />);
+    expect(
+      await screen.findByRole("button", { name: "已安装 2 个" }),
+    ).toHaveClass("border-border-default");
+    expect(screen.getByRole("button", { name: "已托管 1 个" })).toHaveClass(
+      "border-border-default",
+    );
+  });
+
+  it("开着「已托管」时，来源胶囊与失效来源都按同一口径收窄", async () => {
+    setup([
+      makeSkill(),
+      makeSkill({
+        id: "hub",
+        name: "StudioOnly",
+        origin: { kind: "hub" },
+        sourceIds: ["studio"],
+        agents: {},
+      }),
+      makeSkill({ id: "broken", name: "Broken", diagnostics: ["目标不存在"] }),
+    ]);
+    const user = userEvent.setup({ pointerEventsCheck: 0 });
+    renderWithProviders(<LibraryPage />);
+    expect(
+      await screen.findByRole("button", { name: "Claude Code: 1" }),
+    ).toBeInTheDocument();
+    expect(screen.getByText("失效来源（1）")).toBeInTheDocument();
+
+    await user.click(screen.getByRole("button", { name: "已托管 1 个" }));
+    // 胶囊不能承诺一条点下去只剩 0 条的筛选
+    expect(
+      screen.getByRole("button", { name: "Claude Code: 0" }),
+    ).toBeInTheDocument();
+    expect(
+      screen.getByRole("button", { name: "Skill Studio: 1" }),
+    ).toBeInTheDocument();
+    expect(screen.queryByText("失效来源（1）")).toBeNull();
+  });
+
+  it("开着「已托管」筛选还原一个 skill 后，卡片仍留在眼前而不是凭空消失", async () => {
+    let collected = true;
+    const provenance = {
+      sourceIds: ["codex"],
+      originalPath: "/home/u/.codex/skills/yuque",
+      originalRoot: "/home/u/.codex/skills",
+      originalOrigin: { kind: "inPlace" as const, ownerAgent: "codex" },
+      backupPath: "/tmp/backup",
+      originalHash: "abc",
+      collectedAt: 1,
+      entryPaths: [],
+    };
+    handlers.set("list_agents", () => [claudeAgent, codexAgent]);
+    handlers.set("scan_skills", () => [
+      makeSkill({ id: "plain", name: "Alpha" }),
+      makeSkill({
+        id: collected ? "hub-id" : "original-id",
+        name: "yuque",
+        contentHash: "yuque",
+        sourceIds: ["codex"],
+        provenance,
+        origin: collected ? { kind: "hub" } : provenance.originalOrigin,
+        sourcePath: collected ? "/hub/yuque" : provenance.originalPath,
+        agents: {},
+      }),
+    ]);
+    handlers.set("release_from_hub", () => {
+      collected = false;
+      return {};
+    });
+    const user = userEvent.setup({ pointerEventsCheck: 0 });
+    renderWithProviders(<LibraryPage />);
+    await user.click(
+      await screen.findByRole("button", { name: "已托管 1 个" }),
+    );
+    expect(screen.queryByText("Alpha")).toBeNull();
+
+    await user.click(
+      screen.getByRole("button", { name: "还原 yuque 到原位置" }),
+    );
+    await user.click(screen.getByRole("button", { name: "还原到原位置" }));
+    await waitFor(() => expect(screen.queryByRole("dialog")).toBeNull());
+    // 文件还在磁盘上，界面必须继续交代它 —— 否则用户会以为被删了
+    expect(await screen.findByText("yuque")).toBeInTheDocument();
+    expect(screen.queryByText("没有匹配的可用 skill")).toBeNull();
+  });
+
+  it("开着来源筛选收编一个 skill 后，卡片同样留在眼前", async () => {
+    let collected = false;
+    handlers.set("list_agents", () => [claudeAgent, codexAgent]);
+    // 旧后端认不出已收编内容的原始来源，收编后它会从「Claude Code」这一维掉出去
+    handlers.set("scan_skills", () => [
+      makeSkill({
+        id: collected ? "hub-id" : "original-id",
+        origin: collected
+          ? { kind: "hub" }
+          : { kind: "inPlace", ownerAgent: "claude-code" },
+        agents: collected ? {} : { "claude-code": agentState("source") },
+      }),
+    ]);
+    handlers.set("adopt_to_hub", () => {
+      collected = true;
+      return {};
+    });
+    const user = userEvent.setup({ pointerEventsCheck: 0 });
+    renderWithProviders(<LibraryPage />);
+    await user.click(
+      await screen.findByRole("button", { name: "Claude Code: 1" }),
+    );
+    expect(screen.getByText("pdf-tools")).toBeInTheDocument();
+
+    await user.click(
+      screen.getByRole("button", { name: "收编 pdf-tools 到 Hub" }),
+    );
+    await user.click(screen.getByRole("button", { name: "收编" }));
+    await waitFor(() => expect(collected).toBe(true));
+    expect(await screen.findByText("pdf-tools")).toBeInTheDocument();
+    expect(screen.queryByText("没有匹配的可用 skill")).toBeNull();
   });
 
   it("含 Claude 专有 frontmatter 字段时给出跨端提示", async () => {

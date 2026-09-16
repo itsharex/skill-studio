@@ -194,7 +194,7 @@ pub fn prepare_archive(source: &str, skill_id: &str, bytes: &[u8]) -> Result<Pre
         }
     }
     fn find(dir: &Path, id: &str, depth: usize, matches: &mut Vec<PathBuf>) -> Result<()> {
-        if depth > 16 {
+        if depth > scanner::MAX_SCAN_DEPTH {
             return Err(Error::invalid("仓库目录层级过深"));
         }
         if dir.join("SKILL.md").is_file() {
@@ -355,7 +355,7 @@ pub fn discover_local(root: &Path) -> Result<Vec<LocalSkill>> {
     let mut found = Vec::new();
     let mut budget = MAX_ENTRIES;
     fn walk(dir: &Path, depth: usize, budget: &mut usize, out: &mut Vec<LocalSkill>) -> Result<()> {
-        if depth > 16 {
+        if depth > scanner::MAX_SCAN_DEPTH {
             return Err(Error::invalid("目录层级过深，请选择更具体的目录"));
         }
         if dir.join("SKILL.md").is_file() {

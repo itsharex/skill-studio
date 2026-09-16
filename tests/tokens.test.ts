@@ -4,6 +4,7 @@ import {
   projectSkillIds,
   sumTokens,
   tokenIndex,
+  tokenTitle,
 } from "@/lib/tokens";
 import { makeGroup, makeProject, makeSkill } from "./mocks/tauri";
 
@@ -35,14 +36,66 @@ describe("token 体量汇总", () => {
       makeGroup({ id: "g1", skillIds: ["a", "b"] }),
       makeGroup({ id: "g2", skillIds: ["b"] }),
     ];
-    const project = makeProject({ skillIds: ["a"], groupIds: ["g1", "g2"] });
+    const project = makeProject({
+      agentIds: ["claude-code"],
+      skillIds: ["a"],
+      groupIds: ["g1", "g2"],
+    });
     expect(projectSkillIds(project, groups).sort()).toEqual(["a", "b"]);
     expect(sumTokens(index, projectSkillIds(project, groups)).total).toBe(1700);
   });
 
   it("绑定了已删除的分组时按空处理", () => {
-    const project = makeProject({ skillIds: ["a"], groupIds: ["没了"] });
+    const project = makeProject({
+      agentIds: ["claude-code"],
+      skillIds: ["a"],
+      groupIds: ["没了"],
+    });
     expect(projectSkillIds(project, [])).toEqual(["a"]);
+  });
+
+  it("归属别的 agent 的分组不计入 —— 后端根本不会为它写文件", () => {
+    const groups = [makeGroup({ id: "g1", agentId: "codex", skillIds: ["b"] })];
+    const project = makeProject({
+      agentIds: ["claude-code"],
+      skillIds: ["a"],
+      groupIds: ["g1"],
+    });
+    expect(projectSkillIds(project, groups)).toEqual(["a"]);
+  });
+
+  it("归属为空的旧共享分组对每个勾选的 agent 都展开", () => {
+    const groups = [makeGroup({ id: "g1", agentId: null, skillIds: ["b"] })];
+    const project = makeProject({
+      agentIds: ["claude-code"],
+      skillIds: ["a"],
+      groupIds: ["g1"],
+    });
+    expect(projectSkillIds(project, groups).sort()).toEqual(["a", "b"]);
+  });
+
+  it("多个 agent 各自归属的分组求并集，重叠成员只算一次", () => {
+    const groups = [
+      makeGroup({ id: "g1", agentId: "claude-code", skillIds: ["a"] }),
+      makeGroup({ id: "g2", agentId: "codex", skillIds: ["a", "b"] }),
+    ];
+    const project = makeProject({
+      agentIds: ["claude-code", "codex"],
+      skillIds: [],
+      groupIds: ["g1", "g2"],
+    });
+    expect(projectSkillIds(project, groups).sort()).toEqual(["a", "b"]);
+    expect(sumTokens(index, projectSkillIds(project, groups)).total).toBe(1700);
+  });
+
+  it("还没勾 agent 的项目算 0 —— 后端此时一个文件都不写", () => {
+    const groups = [makeGroup({ id: "g1", skillIds: ["b"] })];
+    const project = makeProject({
+      agentIds: [],
+      skillIds: ["a"],
+      groupIds: ["g1"],
+    });
+    expect(projectSkillIds(project, groups)).toEqual([]);
   });
 
   it.each([
@@ -54,7 +107,32 @@ describe("token 体量汇总", () => {
     // 9.99 → toFixed(1) 是 "10.0"，尾巴上的 .0 要被剪掉，不能显示 "10.0k"
     [9990, "10k"],
     [24400, "24k"],
+    // k 到了三位数就该换单位，否则 999999 与 1000000 都写成 "1000k"
+    [999499, "999k"],
+    [999999, "1M"],
+    [1_000_000, "1M"],
+    [1_500_000, "1.5M"],
+    [12_500_000, "13M"],
   ])("徽标格式：%i → %s", (n, expected) => {
     expect(formatTokens(n)).toBe(expected);
+  });
+});
+
+describe("token tooltip", () => {
+  const sum = { skillMd: 400, extras: 100, total: 500 };
+
+  it("没有副本漂移时不额外声明偏差", () => {
+    const title = tokenTitle(sum, "当前已启用的 skill");
+    expect(title).toContain("当前已启用的 skill");
+    expect(title).toContain("SKILL.md ≈ 400");
+    expect(title).not.toContain("副本与源已不一致");
+  });
+
+  it("有副本漂移时说明这个数字按源估算、可能偏高或偏低", () => {
+    const title = tokenTitle(sum, "当前已启用的 skill", 2);
+    // 两半的拆分还在，只是后面追加了不确定性说明
+    expect(title).toContain("SKILL.md ≈ 400");
+    expect(title).toContain("2 个 skill 的副本与源已不一致");
+    expect(title).toContain("应用修改");
   });
 });

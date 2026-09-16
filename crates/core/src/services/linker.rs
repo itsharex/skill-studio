@@ -17,7 +17,7 @@ use crate::fs::{atomic, paths};
 use crate::models::skill::{LinkMode, LinkStatus};
 use crate::services::scanner::{
     self, is_symlink_or_junction, read_copy_sidecar, validate_sync_source, CopySidecar,
-    COPY_SIDECAR,
+    COPY_SIDECAR, MAX_SCAN_DEPTH,
 };
 
 /// 判断某个 skill 在目标位置的状态。
@@ -181,7 +181,7 @@ fn remove_dest(dest: &Path) -> Result<()> {
 /// external relative links retain their original destination.
 pub(crate) fn copy_tree(src: &Path, dst: &Path) -> Result<()> {
     fn walk(root: &Path, target: &Path, src: &Path, dst: &Path, depth: usize) -> Result<()> {
-        if depth > 16 {
+        if depth > MAX_SCAN_DEPTH {
             return Err(Error::invalid("目录层级过深"));
         }
         fs::create_dir_all(dst).map_err(|e| Error::io(dst, e))?;

@@ -48,27 +48,39 @@ import type { SkillView } from "@/types";
 export function LibraryPage({ onAdd }: { onAdd?: () => void } = {}) {
   const { data: skills = [], isLoading } = useSkills();
   const { data: agents = [] } = useAgents();
-  const adopt = useAdoptToHub();
   const client = useQueryClient();
   const [releaseTarget, setReleaseTarget] = useState<SkillView | null>(null);
-  const release = useMutation({
-    mutationFn: skillsApi.releaseFromHub,
-    onSuccess: () => {
-      setReleaseTarget(null);
-      setSourceCard(null);
-      toast.success("已移出 Hub 并还原到原始目录");
-    },
-    onError: (e) => toast.error(String(e)),
-    onSettled: () => client.invalidateQueries(),
-  });
-
   const [sourceFilter, setSourceFilter] = useState<string | null>(null);
   const [hubOnly, setHubOnly] = useState(false);
   const [adding, setAdding] = useState(false);
   const [query, setQuery] = useState("");
   const [adoptTarget, setAdoptTarget] = useState<SkillView | null>(null);
-
   const [sourceCard, setSourceCard] = useState<HubCard | null>(null);
+
+  /*
+   * 收编 / 还原都会改动 skill 的归属，于是它可能从当前筛选里掉出去：文件还在
+   * 磁盘上，卡片却整个消失、计数减一，用户没法区分"被筛掉了"和"被删了"。
+   * 所以下面两个动作成功后都要把会藏住它的筛选清掉，把结果留在眼前。
+   */
+  const release = useMutation({
+    mutationFn: skillsApi.releaseFromHub,
+    onSuccess: () => {
+      setReleaseTarget(null);
+      setSourceCard(null);
+      // 还原后它不再是 Hub 托管，「已托管」会藏住它；来源归属也可能跟着变
+      setHubOnly(false);
+      setSourceFilter(null);
+      toast.success("已移出 Hub 并还原到原始目录");
+    },
+    onError: (e) => toast.error(String(e)),
+    onSettled: () => client.invalidateQueries(),
+  });
+  const adopt = useAdoptToHub();
+  const adoptAndKeepVisible = (skillId: string) =>
+    // 收编后它必定是 Hub 托管，「已托管」不会藏它；但来源归属可能变（旧后端
+    // 认不出已收编内容的原始来源），所以只清来源筛选。失败了就别动用户的筛选
+    adopt.mutate(skillId, { onSuccess: () => setSourceFilter(null) });
+
   const catalog = useMemo(() => hubCatalog(skills), [skills]);
   const selectedSourceCard = sourceCard
     ? (catalog.find((c) => c.key === sourceCard.key) ?? null)
@@ -84,13 +96,16 @@ export function LibraryPage({ onAdd }: { onAdd?: () => void } = {}) {
   const isHubManaged = (card: HubCard) =>
     card.sources.some((s) => s.origin.kind === "hub");
   const hubManaged = available.filter(isHubManaged);
-  const filtered = available.filter(
+  // 来源胶囊的计数必须和列表同一口径：开着「已托管」时，一枚写着 3 的胶囊
+  // 点下去只剩 0 条，等于刚承诺完就打自己的脸
+  const counted = hubOnly ? hubManaged : available;
+  const filtered = counted.filter(
     (c) =>
-      matches(c) &&
-      (!sourceFilter || hubSourceIds(c).includes(sourceFilter)) &&
-      (!hubOnly || isHubManaged(c)),
+      matches(c) && (!sourceFilter || hubSourceIds(c).includes(sourceFilter)),
   );
-  const invalid = catalog.filter((c) => c.unavailable && matches(c));
+  const invalid = catalog.filter(
+    (c) => c.unavailable && matches(c) && (!hubOnly || isHubManaged(c)),
+  );
 
   const sourceOptions = [
     ...agents.map((a) => ({
@@ -131,7 +146,7 @@ export function LibraryPage({ onAdd }: { onAdd?: () => void } = {}) {
         className="flex flex-wrap items-center gap-2"
       >
         {sourceOptions.map(({ id, label, color }) => {
-          const count = available.filter((c) =>
+          const count = counted.filter((c) =>
             hubSourceIds(c).includes(id),
           ).length;
           return (
@@ -162,6 +177,11 @@ export function LibraryPage({ onAdd }: { onAdd?: () => void } = {}) {
         })}
       </div>
       <div className="ml-auto flex flex-wrap items-center gap-2">
+        {/*
+          这两枚是筛选器（有 aria-pressed），所以保留 button；但边框必须走主题
+          token —— 裸 `border` 会吃到 preflight 推出的 #e4e4e7，深色下是一枚
+          近白胶囊套在已经变暗的卡片里。
+        */}
         <button
           type="button"
           aria-pressed={!sourceFilter && !hubOnly}
@@ -169,8 +189,8 @@ export function LibraryPage({ onAdd }: { onAdd?: () => void } = {}) {
             setSourceFilter(null);
             setHubOnly(false);
           }}
-          title="显示全部来源"
-          className="rounded-full border px-3 py-1 text-sm font-medium transition-colors hover:bg-muted focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
+          title={`清除来源与「已托管」筛选，显示全部 ${available.length} 个已安装 skill`}
+          className="rounded-full border border-border-default px-3 py-1 text-sm font-medium transition-colors hover:bg-muted focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
         >
           已安装 {available.length} 个
         </button>
@@ -179,7 +199,7 @@ export function LibraryPage({ onAdd }: { onAdd?: () => void } = {}) {
           aria-pressed={hubOnly}
           onClick={() => setHubOnly((v) => !v)}
           title={`真身已搬进 Hub 目录集中托管的 skill，共 ${hubManaged.length} 个（其余仍在各 agent 原处）。点击只看这些。`}
-          className={`rounded-full border px-3 py-1 text-sm font-medium transition-colors hover:bg-muted focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring ${
+          className={`rounded-full border border-border-default px-3 py-1 text-sm font-medium transition-colors hover:bg-muted focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring ${
             hubOnly ? "bg-muted text-foreground ring-2 ring-current" : ""
           }`}
         >
@@ -273,7 +293,7 @@ export function LibraryPage({ onAdd }: { onAdd?: () => void } = {}) {
                         )}
                       </span>
                     ))}
-                    {card.sources.some((s) => s.origin.kind === "hub") && (
+                    {isHubManaged(card) && (
                       <Badge
                         variant="outline"
                         className="h-4 px-1.5 text-[10px]"
@@ -281,10 +301,9 @@ export function LibraryPage({ onAdd }: { onAdd?: () => void } = {}) {
                         Hub 托管
                       </Badge>
                     )}
-                    {!origins.length &&
-                      !card.sources.some((s) => s.origin.kind === "hub") && (
-                        <Badge variant="outline">外部来源</Badge>
-                      )}
+                    {!origins.length && !isHubManaged(card) && (
+                      <Badge variant="outline">外部来源</Badge>
+                    )}
                     {card.sources.length > 1 && (
                       <button
                         className="text-xs text-muted-foreground hover:text-foreground"
@@ -656,7 +675,7 @@ export function LibraryPage({ onAdd }: { onAdd?: () => void } = {}) {
           </>
         }
         onConfirm={() => {
-          if (adoptTarget) adopt.mutate(adoptTarget.id);
+          if (adoptTarget) adoptAndKeepVisible(adoptTarget.id);
           setAdoptTarget(null);
         }}
       />

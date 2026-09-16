@@ -3,6 +3,7 @@ import { expect, it } from "vitest";
 import { ProjectsPage } from "@/pages/ProjectsPage";
 import {
   claudeAgent,
+  codexAgent,
   handlers,
   makeGroup,
   makeProject,
@@ -10,8 +11,8 @@ import {
 } from "./mocks/tauri";
 import { renderWithProviders } from "./utils/render";
 
-it("项目卡片上的 token 体量按「直接绑定 + 绑定分组」去重后合计", async () => {
-  handlers.set("list_agents", () => [claudeAgent]);
+function setupSkills() {
+  handlers.set("list_agents", () => [claudeAgent, codexAgent]);
   handlers.set("scan_skills", () => [
     makeSkill({
       id: "a",
@@ -22,6 +23,10 @@ it("项目卡片上的 token 体量按「直接绑定 + 绑定分组」去重后
     // 没被任何项目用到，不该出现在合计里
     makeSkill({ id: "c", name: "Gamma", tokens: { skillMd: 900, extras: 0 } }),
   ]);
+}
+
+it("项目卡片上的 token 体量按「直接绑定 + 绑定分组」去重后合计", async () => {
+  setupSkills();
   handlers.set("list_groups", () => [
     makeGroup({ id: "g1", name: "Dev", skillIds: ["a", "b"] }),
   ]);
@@ -30,6 +35,7 @@ it("项目卡片上的 token 体量按「直接绑定 + 绑定分组」去重后
     makeProject({
       id: "p1",
       name: "webapp",
+      agentIds: ["claude-code"],
       skillIds: ["a"],
       groupIds: ["g1"],
     }),
@@ -40,4 +46,49 @@ it("项目卡片上的 token 体量按「直接绑定 + 绑定分组」去重后
   expect(await screen.findByText("≈ 1.7k tokens")).toBeInTheDocument();
   // 什么都没绑的项目不显示这个徽标
   expect(screen.getAllByText(/tokens$/)).toHaveLength(1);
+});
+
+it("绑了别的 agent 的分组时不虚报 —— 后端不会为它写任何文件", async () => {
+  setupSkills();
+  handlers.set("list_groups", () => [
+    // 分组选择器会把别的 agent 的分组一并列出，一次点击就能绑上
+    makeGroup({
+      id: "g1",
+      name: "Codex 组",
+      agentId: "codex",
+      skillIds: ["b"],
+    }),
+    makeGroup({ id: "g2", name: "旧共享组", agentId: null, skillIds: ["c"] }),
+  ]);
+  handlers.set("list_projects", () => [
+    makeProject({
+      id: "p1",
+      name: "webapp",
+      agentIds: ["claude-code"],
+      skillIds: ["a"],
+      groupIds: ["g1", "g2"],
+    }),
+  ]);
+  renderWithProviders(<ProjectsPage />);
+  // a(500) + 归属为空的旧共享组带进来的 c(900)；归属 codex 的 b(1200) 不算
+  expect(await screen.findByText("≈ 1.4k tokens")).toBeInTheDocument();
+});
+
+it("还没勾 agent 的项目不显示 token 徽标 —— 此时后端一个文件都不写", async () => {
+  setupSkills();
+  handlers.set("list_groups", () => [
+    makeGroup({ id: "g1", name: "Dev", skillIds: ["a", "b"] }),
+  ]);
+  handlers.set("list_projects", () => [
+    makeProject({
+      id: "p1",
+      name: "webapp",
+      agentIds: [],
+      skillIds: ["a"],
+      groupIds: ["g1"],
+    }),
+  ]);
+  renderWithProviders(<ProjectsPage />);
+  expect(await screen.findByText("webapp")).toBeInTheDocument();
+  expect(screen.queryByText(/tokens$/)).toBeNull();
 });

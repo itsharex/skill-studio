@@ -28,6 +28,11 @@ export function useSkills() {
   return useQuery({
     queryKey: queryKeys.skills,
     queryFn: () => skillsApi.scan(),
+    // scan_skills 是同步命令、全库走一遍文件系统，期间界面是卡住的，而全局默认
+    // staleTime: 0 + refetchOnWindowFocus 会让纯导航和切回窗口都白扫一次。
+    // 敢留这个窗口是因为失效不靠过期驱动：watcher 的 skills-changed、写操作后的
+    // invalidate、手动刷新都是 invalidateQueries，对活跃查询立即重取、不看 staleTime。
+    staleTime: 20_000,
   });
 }
 

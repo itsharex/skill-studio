@@ -38,33 +38,66 @@ export function sumTokens(
 }
 
 /**
- * 一个项目实际会用到的 skill：直接绑定的 + 绑定分组带进来的，按 id 去重。
+ * 一个项目实际会写进去的 skill，口径必须与后端 `Studio::write_project` 一致：
+ * 后端是"对 project.agentIds 里每个 agent，取直接绑定的 skillIds + 归属为空或
+ * 归属于该 agent 的分组成员"，跨 agent 求并集。
+ *
+ * 分组选择器会列出别的 agent 的分组（只是标上归属），所以"绑了一个 codex 的组"
+ * 是一次点击就能造出来的状态；无条件并集所有 groupIds 会让卡片报出一个后端
+ * 一个文件都不会写的数字。agentIds 为空时后端同样什么都不写，这里也就是 0。
  * 同一个 skill 既单独绑定又在组里，只占一份文件，也只该算一次 token。
  */
 export function projectSkillIds(
   project: ProjectBinding,
   groups: Group[],
 ): string[] {
-  const ids = new Set(project.skillIds);
-  for (const groupId of project.groupIds) {
-    const group = groups.find((g) => g.id === groupId);
-    for (const id of group?.skillIds ?? []) ids.add(id);
+  const ids = new Set<string>();
+  for (const agentId of project.agentIds) {
+    for (const id of project.skillIds) ids.add(id);
+    for (const groupId of project.groupIds) {
+      const group = groups.find((g) => g.id === groupId);
+      // 归属为空的是旧共享分组，对每个 agent 都展开
+      if (!group || (group.agentId && group.agentId !== agentId)) continue;
+      for (const id of group.skillIds) ids.add(id);
+    }
   }
   return [...ids];
 }
 
-/** 徽标用的短格式：820 / 1.2k / 24k */
+/** 徽标用的短格式：820 / 1.2k / 24k / 1.5M */
 export function formatTokens(n: number): string {
   if (n < 1000) return String(n);
   const k = n / 1000;
-  return k < 10 ? `${k.toFixed(1).replace(/\.0$/, "")}k` : `${Math.round(k)}k`;
+  // 999.5k 起会四舍五入成"1000k"——三位数的 k 该换单位了
+  return k < 999.5 ? scaled(k, "k") : scaled(n / 1_000_000, "M");
 }
 
-/** hover 说明：这个数字是怎么来的，以及两半各占多少 */
-export function tokenTitle(sum: TokenSum, scope: string): string {
-  return (
+/** 小于 10 保留一位小数（1.2k），再大就取整（24k）——徽标只有一行的宽度 */
+function scaled(v: number, unit: string): string {
+  return v < 10
+    ? `${v.toFixed(1).replace(/\.0$/, "")}${unit}`
+    : `${Math.round(v)}${unit}`;
+}
+
+/**
+ * hover 说明：这个数字是怎么来的，以及两半各占多少。
+ *
+ * `driftedCount` 是参与合计的 skill 里"副本与源已不一致"的个数（见
+ * `linkStatus.isCopyDrifted`）。这个数字恒定按源估算，而 agent 读的是副本，
+ * 所以有漂移时必须把误差方向说出来，光给一个精确的数字反而更误导。
+ */
+export function tokenTitle(
+  sum: TokenSum,
+  scope: string,
+  driftedCount = 0,
+): string {
+  const base =
     `${scope}的 token 估算：SKILL.md ≈ ${formatTokens(sum.skillMd)}，` +
     `references / scripts 等文本附带文件 ≈ ${formatTokens(sum.extras)}。` +
-    `二进制文件与隐藏文件不计，软链不重复计算。估算值，非精确分词。`
+    `二进制与隐藏文件、目录软链指向的内容都不计。估算值，非精确分词。`;
+  if (driftedCount <= 0) return base;
+  return (
+    `${base}\n其中 ${driftedCount} 个 skill 的副本与源已不一致：这个数字按源算，` +
+    `agent 读的是副本，可能偏高也可能偏低 —— 在分组卡片上点「应用修改」即可对上。`
   );
 }

@@ -75,7 +75,8 @@ function ProjectsContent() {
   const createProject = useCreateProject();
   const deleteProject = useDeleteProject();
 
-  // 项目实际会写进去的是"直接绑定 + 分组带进来"的并集，token 也按这个并集算
+  // token 口径与后端写入口径必须是同一个，见 projectSkillIds：
+  // 勾了哪些 agent 决定了哪些绑定分组会被展开，没勾 agent 就一个文件都不写
   const tokens = useMemo(() => tokenIndex(skills), [skills]);
   const projectTokens = (p: ProjectBinding) =>
     sumTokens(tokens, projectSkillIds(p, groups));
@@ -146,71 +147,81 @@ function ProjectsContent() {
           />
         ) : (
           <ListContainer>
-            {filtered.map((p, i) => (
-              <ListItemRow
-                key={p.id}
-                isLast={i === filtered.length - 1}
-                onClick={() => setDetail(p.id)}
-              >
-                <div className="flex h-8 w-8 shrink-0 items-center justify-center rounded-lg border border-border bg-muted">
-                  <FolderGit2 className="h-4 w-4 text-muted-foreground" />
-                </div>
-                <div className="min-w-0 flex-1">
-                  <div className="flex items-center gap-2">
-                    <span className="truncate text-sm font-medium">
-                      {p.name}
-                    </span>
-                    <Badge variant="outline" className="h-4 px-1.5 text-[10px]">
-                      {p.skillIds.length + p.groupIds.length} 项绑定
-                    </Badge>
-                    {projectTokens(p).total > 0 && (
+            {filtered.map((p, i) => {
+              // 一行只遍历一次 id 集合：下面的判断、数字、tooltip 共用
+              const rowTokens = projectTokens(p);
+              return (
+                <ListItemRow
+                  key={p.id}
+                  isLast={i === filtered.length - 1}
+                  onClick={() => setDetail(p.id)}
+                >
+                  <div className="flex h-8 w-8 shrink-0 items-center justify-center rounded-lg border border-border bg-muted">
+                    <FolderGit2 className="h-4 w-4 text-muted-foreground" />
+                  </div>
+                  <div className="min-w-0 flex-1">
+                    <div className="flex items-center gap-2">
+                      <span className="truncate text-sm font-medium">
+                        {p.name}
+                      </span>
                       <Badge
                         variant="outline"
                         className="h-4 px-1.5 text-[10px]"
-                        title={tokenTitle(
-                          projectTokens(p),
-                          "这个项目会用到的 skill（直接绑定 + 绑定分组，去重后）",
-                        )}
                       >
-                        ≈ {formatTokens(projectTokens(p).total)} tokens
+                        {p.skillIds.length + p.groupIds.length} 项绑定
                       </Badge>
-                    )}
-                    <Badge variant="outline" className="h-4 px-1.5 text-[10px]">
-                      {p.linkMode === "copy"
-                        ? "复制"
-                        : p.linkMode === "symlink"
-                          ? "软链"
-                          : "自动"}
-                    </Badge>
+                      {rowTokens.total > 0 && (
+                        <Badge
+                          variant="outline"
+                          className="h-4 px-1.5 text-[10px]"
+                          title={tokenTitle(
+                            rowTokens,
+                            "这个项目会用到的 skill（勾选的 agent × 直接绑定 + 归属匹配的分组，去重后）",
+                          )}
+                        >
+                          ≈ {formatTokens(rowTokens.total)} tokens
+                        </Badge>
+                      )}
+                      <Badge
+                        variant="outline"
+                        className="h-4 px-1.5 text-[10px]"
+                      >
+                        {p.linkMode === "copy"
+                          ? "复制"
+                          : p.linkMode === "symlink"
+                            ? "软链"
+                            : "自动"}
+                      </Badge>
+                    </div>
+                    <p className="truncate pt-0.5 font-mono text-[11px] text-muted-foreground">
+                      {p.root}
+                    </p>
                   </div>
-                  <p className="truncate pt-0.5 font-mono text-[11px] text-muted-foreground">
-                    {p.root}
-                  </p>
-                </div>
-                <div onClick={(e) => e.stopPropagation()}>
-                  <RowActions>
-                    <Button
-                      variant="ghost"
-                      size="icon"
-                      className="h-7 w-7"
-                      title="打开项目目录"
-                      onClick={() => void systemApi.revealPath(p.root)}
-                    >
-                      <FolderOpen className="h-4 w-4" />
-                    </Button>
-                    <Button
-                      variant="ghost"
-                      size="icon"
-                      className="h-7 w-7 hover:text-red-500"
-                      title="移除项目"
-                      onClick={() => setDeleting(p)}
-                    >
-                      <Trash2 className="h-4 w-4" />
-                    </Button>
-                  </RowActions>
-                </div>
-              </ListItemRow>
-            ))}
+                  <div onClick={(e) => e.stopPropagation()}>
+                    <RowActions>
+                      <Button
+                        variant="ghost"
+                        size="icon"
+                        className="h-7 w-7"
+                        title="打开项目目录"
+                        onClick={() => void systemApi.revealPath(p.root)}
+                      >
+                        <FolderOpen className="h-4 w-4" />
+                      </Button>
+                      <Button
+                        variant="ghost"
+                        size="icon"
+                        className="h-7 w-7 hover:text-red-500"
+                        title="移除项目"
+                        onClick={() => setDeleting(p)}
+                      >
+                        <Trash2 className="h-4 w-4" />
+                      </Button>
+                    </RowActions>
+                  </div>
+                </ListItemRow>
+              );
+            })}
           </ListContainer>
         )}
       </div>

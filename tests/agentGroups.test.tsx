@@ -110,6 +110,105 @@ it("启用记录指向已删除的分组时，统计卡片不虚报", async () =
   expect(await screen.findByText("已启用 0 个分组")).toBeInTheDocument();
 });
 
+/**
+ * 后端的估算恒定来自真身，而 copy 漂移的三态里 agent 读到的是另一份内容。
+ * 不能把它们从计数里剔掉（agent 确实加载了），只能把不确定性说清楚。
+ */
+it("副本与源漂移时，token 胶囊在 tooltip 里交代这个数字可能偏高或偏低", async () => {
+  handlers.set("list_agents", () => [claudeAgent, codexAgent]);
+  handlers.set("scan_skills", () => [
+    makeSkill({
+      id: "a",
+      name: "Alpha",
+      tokens: { skillMd: 400, extras: 0 },
+      agents: { codex: agentState("source") },
+    }),
+    // 源从 5000 改成 200 却没重新应用：codex 读的还是旧副本
+    makeSkill({
+      id: "b",
+      name: "Beta",
+      tokens: { skillMd: 200, extras: 0 },
+      agents: { codex: agentState("copyStale") },
+    }),
+  ]);
+  handlers.set("list_groups", () => []);
+  handlers.set("get_config", () => ({ activeGroups: {} }));
+  renderWithProviders(<AgentPage agentId="codex" />);
+  const pill = await screen.findByText("≈ 600 tokens");
+  // 计数不变：两个 skill 都算进去了
+  expect(screen.getByText("已启用 2 个 skill")).toBeInTheDocument();
+  expect(pill.getAttribute("title")).toContain("1 个 skill 的副本与源已不一致");
+  expect(pill.getAttribute("title")).toContain("应用修改");
+});
+
+it("没有漂移时 tooltip 不说这句话，免得每次都像在报警", async () => {
+  handlers.set("list_agents", () => [claudeAgent, codexAgent]);
+  handlers.set("scan_skills", () => [
+    makeSkill({
+      id: "a",
+      name: "Alpha",
+      tokens: { skillMd: 400, extras: 0 },
+      agents: { codex: agentState("source") },
+    }),
+    makeSkill({
+      id: "b",
+      name: "Beta",
+      tokens: { skillMd: 200, extras: 0 },
+      agents: { codex: agentState("copied") },
+    }),
+  ]);
+  handlers.set("list_groups", () => []);
+  handlers.set("get_config", () => ({ activeGroups: {} }));
+  renderWithProviders(<AgentPage agentId="codex" />);
+  const pill = await screen.findByText("≈ 600 tokens");
+  expect(pill.getAttribute("title")).not.toContain("副本与源已不一致");
+});
+
+it("copyConflict 既计入已启用，又让分组卡片标出「需要检查」", async () => {
+  handlers.set("list_agents", () => [claudeAgent, codexAgent]);
+  handlers.set("scan_skills", () => [
+    makeSkill({
+      id: "a",
+      name: "Alpha",
+      tokens: { skillMd: 400, extras: 0 },
+      agents: { codex: agentState("source") },
+    }),
+    makeSkill({
+      id: "b",
+      name: "Beta",
+      tokens: { skillMd: 200, extras: 0 },
+      agents: { codex: agentState("copyConflict") },
+    }),
+  ]);
+  handlers.set("list_groups", () => [
+    makeGroup({ id: "g", name: "Dev", agentId: "codex", skillIds: ["a", "b"] }),
+  ]);
+  handlers.set("get_config", () => ({
+    activeGroups: {
+      codex: { groupId: "g", skillIds: ["a", "b"], entries: [] },
+    },
+  }));
+  renderWithProviders(<AgentPage agentId="codex" />);
+  expect(await screen.findByText("需要检查")).toBeInTheDocument();
+  expect(screen.getByText("已启用 2 个 skill")).toBeInTheDocument();
+});
+
+it("统计胶囊用主题边框，深色模式下不是硬编码的近白色", async () => {
+  setup();
+  handlers.set("list_groups", () => []);
+  renderWithProviders(<AgentPage agentId="codex" />);
+  for (const label of [
+    "已启用 0 个分组",
+    "已启用 0 个 skill",
+    /^≈ .* tokens$/,
+  ]) {
+    const pill = await screen.findByText(label);
+    expect(pill).toHaveClass("border-border-default");
+    // 这一行没有筛选语义，胶囊不该变成可点的按钮
+    expect(pill.tagName).not.toBe("BUTTON");
+  }
+});
+
 it("filters groups by agent and activation sends exactly the selected group", async () => {
   setup();
   handlers.set("list_groups", () => [
