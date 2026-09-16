@@ -2,6 +2,7 @@ import { fireEvent, screen, waitFor } from "@testing-library/react";
 import { expect, it, vi } from "vitest";
 import { AgentPage } from "@/pages/AgentGroupsPage";
 import {
+  agentState,
   handlers,
   calls,
   makeGroup,
@@ -40,6 +41,75 @@ it("creates an agent-scoped draft and saves the full rapid selection without act
   );
   expect(calls.some((c) => c.command === "activate_agent_group")).toBe(false);
 });
+it("分组卡片给出组内 token 体量，空组不显示这个徽标", async () => {
+  handlers.set("list_agents", () => [claudeAgent, codexAgent]);
+  handlers.set("scan_skills", () => [
+    makeSkill({ id: "a", name: "Alpha", tokens: { skillMd: 400, extras: 0 } }),
+    makeSkill({ id: "b", name: "Beta", tokens: { skillMd: 1200, extras: 0 } }),
+  ]);
+  handlers.set("get_config", () => ({ activeGroups: {} }));
+  handlers.set("list_groups", () => [
+    makeGroup({ id: "c", name: "Dev", agentId: "codex", skillIds: ["a", "b"] }),
+    makeGroup({ id: "e", name: "Empty", agentId: "codex", skillIds: [] }),
+  ]);
+  renderWithProviders(<AgentPage agentId="codex" />);
+  expect(await screen.findByText("≈ 1.6k tokens")).toBeInTheDocument();
+  // 两处：顶部统计卡片 + 文档组卡片。一个 skill 都没有的空组不该也顶一个
+  expect(screen.getAllByText(/tokens$/)).toHaveLength(2);
+});
+
+it("顶部统计卡片只数真正生效的东西", async () => {
+  handlers.set("list_agents", () => [claudeAgent, codexAgent]);
+  handlers.set("scan_skills", () => [
+    // 真身就在 codex 目录里、没被停用 → 计入
+    makeSkill({
+      id: "a",
+      name: "Alpha",
+      tokens: { skillMd: 400, extras: 100 },
+      agents: { codex: agentState("source") },
+    }),
+    // 被 agent 的原生开关停用 → 文件在，但用不上，不计
+    makeSkill({
+      id: "b",
+      name: "Beta",
+      tokens: { skillMd: 1200, extras: 0 },
+      agents: { codex: agentState("copied", true) },
+    }),
+    // 同名目录是用户自己放的，本工具没管 → 不计
+    makeSkill({
+      id: "c",
+      name: "Gamma",
+      tokens: { skillMd: 900, extras: 0 },
+      agents: { codex: agentState("foreign") },
+    }),
+  ]);
+  handlers.set("list_groups", () => [
+    makeGroup({ id: "g", name: "Dev", agentId: "codex", skillIds: ["a", "b"] }),
+  ]);
+  handlers.set("get_config", () => ({
+    activeGroups: {
+      codex: { groupId: "g", skillIds: ["a", "b"], entries: [] },
+    },
+  }));
+  renderWithProviders(<AgentPage agentId="codex" />);
+  expect(await screen.findByText("已启用 1 个分组")).toBeInTheDocument();
+  expect(screen.getByText("已启用 1 个 skill")).toBeInTheDocument();
+  // 只有 Alpha 生效：400 + 100 附带文件
+  expect(screen.getByText("≈ 500 tokens")).toBeInTheDocument();
+  // 分组卡片仍然按组内全部成员算，两个数字不该互相污染
+  expect(screen.getByText("≈ 1.7k tokens")).toBeInTheDocument();
+});
+
+it("启用记录指向已删除的分组时，统计卡片不虚报", async () => {
+  setup();
+  handlers.set("list_groups", () => []);
+  handlers.set("get_config", () => ({
+    activeGroups: { codex: { groupId: "没了", skillIds: [], entries: [] } },
+  }));
+  renderWithProviders(<AgentPage agentId="codex" />);
+  expect(await screen.findByText("已启用 0 个分组")).toBeInTheDocument();
+});
+
 it("filters groups by agent and activation sends exactly the selected group", async () => {
   setup();
   handlers.set("list_groups", () => [

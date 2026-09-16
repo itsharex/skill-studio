@@ -53,6 +53,36 @@ describe("Skill Hub", () => {
     expect(await screen.findByText("Hub 托管")).toBeInTheDocument();
   });
 
+  it("「已托管」只数真身在 Hub 的 skill，点一下就只看这些", async () => {
+    setup([
+      makeSkill(),
+      makeSkill({
+        id: "hub",
+        name: "StudioOnly",
+        origin: { kind: "hub" },
+        sourceIds: ["studio"],
+        agents: {},
+      }),
+    ]);
+    const user = userEvent.setup({ pointerEventsCheck: 0 });
+    renderWithProviders(<LibraryPage />);
+    expect(
+      await screen.findByRole("button", { name: "已安装 2 个" }),
+    ).toBeInTheDocument();
+    const hubPill = screen.getByRole("button", { name: "已托管 1 个" });
+    expect(hubPill).toHaveAttribute("aria-pressed", "false");
+
+    await user.click(hubPill);
+    expect(hubPill).toHaveAttribute("aria-pressed", "true");
+    expect(screen.getByText("StudioOnly")).toBeInTheDocument();
+    expect(screen.queryByText("pdf-tools")).toBeNull();
+
+    // 「已安装 N 个」是「显示全部」那一枚，必须把这个筛选也清掉
+    await user.click(screen.getByRole("button", { name: "已安装 2 个" }));
+    expect(screen.getByText("pdf-tools")).toBeInTheDocument();
+    expect(hubPill).toHaveAttribute("aria-pressed", "false");
+  });
+
   it("含 Claude 专有 frontmatter 字段时给出跨端提示", async () => {
     setup([makeSkill({ frontmatterExtra: ["context", "agent"] })]);
     renderWithProviders(<LibraryPage />);

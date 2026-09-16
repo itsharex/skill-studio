@@ -63,6 +63,7 @@ export function LibraryPage({ onAdd }: { onAdd?: () => void } = {}) {
   });
 
   const [sourceFilter, setSourceFilter] = useState<string | null>(null);
+  const [hubOnly, setHubOnly] = useState(false);
   const [adding, setAdding] = useState(false);
   const [query, setQuery] = useState("");
   const [adoptTarget, setAdoptTarget] = useState<SkillView | null>(null);
@@ -79,9 +80,15 @@ export function LibraryPage({ onAdd }: { onAdd?: () => void } = {}) {
         .includes(query.trim().toLowerCase()),
     );
   const available = catalog.filter((c) => !c.unavailable);
+  /** 真身已经搬进 Hub 目录（收编过），与卡片上那枚「Hub 托管」徽标同一判定 */
+  const isHubManaged = (card: HubCard) =>
+    card.sources.some((s) => s.origin.kind === "hub");
+  const hubManaged = available.filter(isHubManaged);
   const filtered = available.filter(
     (c) =>
-      matches(c) && (!sourceFilter || hubSourceIds(c).includes(sourceFilter)),
+      matches(c) &&
+      (!sourceFilter || hubSourceIds(c).includes(sourceFilter)) &&
+      (!hubOnly || isHubManaged(c)),
   );
   const invalid = catalog.filter((c) => c.unavailable && matches(c));
 
@@ -118,15 +125,6 @@ export function LibraryPage({ onAdd }: { onAdd?: () => void } = {}) {
   }
   const summary = (
     <div className="my-4 flex flex-wrap items-center justify-between gap-3 rounded-xl border border-border-default px-5 py-4">
-      <button
-        type="button"
-        aria-pressed={!sourceFilter}
-        onClick={() => setSourceFilter(null)}
-        title="显示全部来源"
-        className="rounded-full border px-3 py-1 text-sm font-medium transition-colors hover:bg-muted focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
-      >
-        已安装 {available.length} 个
-      </button>
       <div
         role="group"
         aria-label="按来源筛选"
@@ -162,6 +160,31 @@ export function LibraryPage({ onAdd }: { onAdd?: () => void } = {}) {
             </button>
           );
         })}
+      </div>
+      <div className="ml-auto flex flex-wrap items-center gap-2">
+        <button
+          type="button"
+          aria-pressed={!sourceFilter && !hubOnly}
+          onClick={() => {
+            setSourceFilter(null);
+            setHubOnly(false);
+          }}
+          title="显示全部来源"
+          className="rounded-full border px-3 py-1 text-sm font-medium transition-colors hover:bg-muted focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
+        >
+          已安装 {available.length} 个
+        </button>
+        <button
+          type="button"
+          aria-pressed={hubOnly}
+          onClick={() => setHubOnly((v) => !v)}
+          title={`真身已搬进 Hub 目录集中托管的 skill，共 ${hubManaged.length} 个（其余仍在各 agent 原处）。点击只看这些。`}
+          className={`rounded-full border px-3 py-1 text-sm font-medium transition-colors hover:bg-muted focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring ${
+            hubOnly ? "bg-muted text-foreground ring-2 ring-current" : ""
+          }`}
+        >
+          已托管 {hubManaged.length} 个
+        </button>
       </div>
     </div>
   );
@@ -383,7 +406,9 @@ export function LibraryPage({ onAdd }: { onAdd?: () => void } = {}) {
         </ListContainer>
         {!filtered.length && (
           <p className="py-6 text-center text-sm text-muted-foreground">
-            {query || sourceFilter ? "没有匹配的可用 skill" : "暂无可用 skill"}
+            {query || sourceFilter || hubOnly
+              ? "没有匹配的可用 skill"
+              : "暂无可用 skill"}
           </p>
         )}
         {invalid.length > 0 && (

@@ -14,7 +14,7 @@ use crate::models::skill::{
     skill_id_for, LinkMode, LinkReport, LinkResult, LinkStatus, Skill, SkillOrigin,
 };
 use crate::services::scanner::{EntryKind, Frontmatter};
-use crate::services::{detector, linker, native_toggle, scanner, store::Store};
+use crate::services::{detector, linker, native_toggle, scanner, store::Store, tokens};
 
 /// 某个 skill 在某个 agent 上的状态（给前端）
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -1036,6 +1036,7 @@ fn build_skill(
 ) -> Skill {
     let fm = frontmatter.unwrap_or_default();
     let content_hash = scanner::dir_content_hash(&source_path).unwrap_or_default();
+    let token_estimate = tokens::estimate_skill(&source_path);
     Skill {
         id,
         name: name.to_string(),
@@ -1046,6 +1047,7 @@ fn build_skill(
         content_hash,
         frontmatter_extra: fm.extra_keys.clone(),
         root,
+        tokens: token_estimate,
     }
 }
 

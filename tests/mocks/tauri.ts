@@ -100,6 +100,7 @@ export function makeSkill(over: Partial<SkillView> = {}): SkillView {
     },
     groupIds: [],
     malformedFrontmatter: false,
+    tokens: { skillMd: 100, extras: 0 },
     ...over,
   };
 }

@@ -52,6 +52,8 @@ import {
   RowActions,
 } from "@/components/common/ListItemRow";
 import { AgentSkills } from "@/pages/AgentPage";
+import { formatTokens, sumTokens, tokenIndex, tokenTitle } from "@/lib/tokens";
+import { isRegistered } from "@/lib/linkStatus";
 import type { Group } from "@/types";
 
 export function AgentPage({ agentId }: { agentId: string }) {
@@ -114,6 +116,22 @@ export function AgentPage({ agentId }: { agentId: string }) {
     reorder.mutate(next);
   };
   const legacy = groups.filter((g) => !g.agentId);
+  // 每次渲染重建一次索引即可：skills 变了这个数就该跟着变
+  const tokens = tokenIndex(skills);
+  const groupTokens = (g: Group) => sumTokens(tokens, g.skillIds);
+  // 顶部统计卡片的三个数字。
+  // 分组：每个 agent 同时只启用一个，且启用记录指向的组必须还在（删掉的组不算）。
+  // skill：文件在位、且没被 agent 的原生开关停用；"有痕迹但用不上"的
+  // （外来占位、悬空链接）不计，否则是虚报 —— 见 isRegistered。
+  const activeGroupCount = own.some((g) => g.id === current?.groupId) ? 1 : 0;
+  const enabledSkills = skills.filter((s) => {
+    const state = s.agents[agentId];
+    return !!state && !state.disabled && isRegistered(state.status);
+  });
+  const enabledTokens = sumTokens(
+    tokens,
+    enabledSkills.map((s) => s.id),
+  );
 
   const agent = agents.find((a) => a.id === agentId);
   const refresh = () => client.invalidateQueries();
@@ -172,7 +190,8 @@ export function AgentPage({ agentId }: { agentId: string }) {
         }}
         className="flex min-h-0 flex-1 flex-col"
       >
-        <div className="py-3">
+        {/* 分页与统计合成一行：左边切页、右边靠右对齐的三个数字 */}
+        <div className="my-4 flex flex-wrap items-center justify-between gap-x-6 gap-y-3 rounded-xl border border-border-default px-4 py-3">
           <TabsList aria-label="Agent 内容">
             <TabsTrigger
               value="groups"
@@ -196,6 +215,26 @@ export function AgentPage({ agentId }: { agentId: string }) {
               </span>
             </TabsTrigger>
           </TabsList>
+          <div className="ml-auto flex flex-wrap items-center gap-2">
+            <span
+              className="rounded-full border px-3 py-1 text-sm font-medium"
+              title={`每个 agent 同一时间只能启用一个分组；本 agent 共 ${own.length} 个分组`}
+            >
+              已启用 {activeGroupCount} 个分组
+            </span>
+            <span
+              className="rounded-full border px-3 py-1 text-sm font-medium"
+              title="文件在位、且没被 agent 的原生开关停用的 skill。目录里有痕迹但用不上的（外来占位、悬空链接）不计。"
+            >
+              已启用 {enabledSkills.length} 个 skill
+            </span>
+            <span
+              className="rounded-full border px-3 py-1 text-sm font-medium"
+              title={tokenTitle(enabledTokens, "当前已启用的 skill")}
+            >
+              ≈ {formatTokens(enabledTokens.total)} tokens
+            </span>
+          </div>
         </div>
         <TabsContent
           value="groups"
@@ -275,6 +314,14 @@ export function AgentPage({ agentId }: { agentId: string }) {
                             <Badge variant="outline">
                               {g.skillIds.length} 个 skill
                             </Badge>
+                            {groupTokens(g).total > 0 && (
+                              <Badge
+                                variant="outline"
+                                title={tokenTitle(groupTokens(g), "组内 skill")}
+                              >
+                                ≈ {formatTokens(groupTokens(g).total)} tokens
+                              </Badge>
+                            )}
                             {active && (
                               <Badge
                                 variant={unavailable ? "warning" : "success"}

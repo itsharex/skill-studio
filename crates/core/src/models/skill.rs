@@ -119,6 +119,27 @@ pub struct Skill {
     pub frontmatter_extra: Vec<String>,
     /// 所在的全局根（用于区分 `~/.codex/skills` 与共享的 `~/.agents/skills`）
     pub root: PathBuf,
+    /// token 体量估算（见 `services::tokens`）。UI 用它算"这一组 / 这个项目
+    /// 大概多重"。估算值，不是精确分词结果。
+    #[serde(default)]
+    pub tokens: TokenEstimate,
+}
+
+/// 一个 skill 的 token 体量，分成两半 —— 它们进上下文的时机不同：
+/// `SKILL.md` 被调用时必然进去，附带文件是 agent 按需打开的。
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct TokenEstimate {
+    /// `SKILL.md`（含 frontmatter）
+    pub skill_md: u32,
+    /// `references/`、`scripts/` 等文本附带文件；二进制与隐藏文件不计
+    pub extras: u32,
+}
+
+impl TokenEstimate {
+    pub fn total(&self) -> u32 {
+        self.skill_md.saturating_add(self.extras)
+    }
 }
 
 /// 计算 skill 的稳定 ID

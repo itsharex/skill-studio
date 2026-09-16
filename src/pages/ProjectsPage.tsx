@@ -51,6 +51,13 @@ import {
   useSkills,
   useWriteProjectGitignore,
 } from "@/hooks/useData";
+import {
+  formatTokens,
+  projectSkillIds,
+  sumTokens,
+  tokenIndex,
+  tokenTitle,
+} from "@/lib/tokens";
 import type { LinkMode, ProjectBinding } from "@/types";
 
 export function ProjectsPage() {
@@ -63,8 +70,15 @@ export function ProjectsPage() {
 function ProjectsContent() {
   const requestNavigation = useNavigationGuard();
   const { data: projects = [] } = useProjects();
+  const { data: skills = [] } = useSkills();
+  const { data: groups = [] } = useGroups();
   const createProject = useCreateProject();
   const deleteProject = useDeleteProject();
+
+  // 项目实际会写进去的是"直接绑定 + 分组带进来"的并集，token 也按这个并集算
+  const tokens = useMemo(() => tokenIndex(skills), [skills]);
+  const projectTokens = (p: ProjectBinding) =>
+    sumTokens(tokens, projectSkillIds(p, groups));
 
   const [query, setQuery] = useState("");
   const filtered = projects.filter((p) =>
@@ -149,6 +163,18 @@ function ProjectsContent() {
                     <Badge variant="outline" className="h-4 px-1.5 text-[10px]">
                       {p.skillIds.length + p.groupIds.length} 项绑定
                     </Badge>
+                    {projectTokens(p).total > 0 && (
+                      <Badge
+                        variant="outline"
+                        className="h-4 px-1.5 text-[10px]"
+                        title={tokenTitle(
+                          projectTokens(p),
+                          "这个项目会用到的 skill（直接绑定 + 绑定分组，去重后）",
+                        )}
+                      >
+                        ≈ {formatTokens(projectTokens(p).total)} tokens
+                      </Badge>
+                    )}
                     <Badge variant="outline" className="h-4 px-1.5 text-[10px]">
                       {p.linkMode === "copy"
                         ? "复制"

@@ -38,6 +38,16 @@ export interface Skill {
   /** frontmatter 里的非可移植字段：注册到 Codex 会被忽略，上传 claude.ai 会报错 */
   frontmatterExtra: string[];
   root: string;
+  /** token 体量估算，后端扫描时算好（见 crates/core services::tokens） */
+  tokens: TokenEstimate;
+}
+
+/** 一个 skill 的 token 体量。两半进上下文的时机不同，所以分开给。 */
+export interface TokenEstimate {
+  /** SKILL.md（含 frontmatter），被调用时必然进上下文 */
+  skillMd: number;
+  /** references / scripts 等文本附带文件，agent 按需打开 */
+  extras: number;
 }
 
 export interface AgentSkillState {
