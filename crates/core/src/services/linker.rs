@@ -204,6 +204,11 @@ pub(crate) fn copy_tree(src: &Path, dst: &Path) -> Result<()> {
                             link.push("..");
                         }
                         link.push(rel);
+                        // A root-level link back to the tree must point to ".";
+                        // Linux rejects an empty symlink target with ENOENT.
+                        if link.as_os_str().is_empty() {
+                            link.push(".");
+                        }
                         link
                     } else {
                         resolved

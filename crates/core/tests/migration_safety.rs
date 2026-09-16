@@ -37,6 +37,10 @@ fn migration_preserves_relative_absolute_external_and_dangling_links() {
     let adopted = studio.adopt_to_hub(&mut cfg, &id).unwrap();
     for root in [&adopted.source_path, &source] {
         assert_eq!(
+            fs::read_link(root.join("loop")).unwrap(),
+            std::path::PathBuf::from(".")
+        );
+        assert_eq!(
             fs::read_to_string(root.join("nested/relative")).unwrap(),
             "resource"
         );
