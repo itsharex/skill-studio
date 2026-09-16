@@ -39,3 +39,22 @@ it("backup restore requires confirmation and cancel does not restore", async () 
   await user.click(screen.getByRole("button", { name: "取消" }));
   expect(calls.filter((c) => c.command === "restore_backup")).toHaveLength(0);
 });
+
+it("does not persist partial Hub paths while typing", async () => {
+  const user = userEvent.setup();
+  renderWithProviders(<SettingsPage />);
+  await user.click(await screen.findByRole("tab", { name: "目录" }));
+  fireEvent.change(screen.getByRole("textbox", { name: "Hub 目录" }), {
+    target: { value: "/tmp/new-hub" },
+  });
+  expect(calls.filter((c) => c.command === "update_settings")).toHaveLength(0);
+  await user.click(screen.getByRole("button", { name: "保存目录" }));
+  await waitFor(() =>
+    expect(calls.filter((c) => c.command === "update_settings")).toHaveLength(
+      1,
+    ),
+  );
+  expect(calls.find((c) => c.command === "update_settings")?.args).toEqual({
+    patch: { hubDir: "/tmp/new-hub" },
+  });
+});

@@ -57,6 +57,7 @@ impl Store {
     pub fn load(&self) -> Result<AppConfig> {
         super::transaction::recover(&self.dir.join("migration.json"))?;
         super::transaction::recover(&self.dir.join("group-switch.json"))?;
+        super::transaction::recover(&self.dir.join("project-write.json"))?;
         let path = self.config_path();
         match atomic::read_json_file::<AppConfig>(&path)? {
             Some(mut config) => {
@@ -155,10 +156,16 @@ impl Store {
         files
     }
 
+    pub fn read_backup(&self, backup: &Path) -> Result<AppConfig> {
+        let mut restored: AppConfig = atomic::read_json_file(backup)?
+            .ok_or_else(|| Error::NotFound(backup.display().to_string()))?;
+        self.migrate(&mut restored)?;
+        Ok(restored)
+    }
+
     /// 从备份恢复。恢复前会把当前配置再备份一次，避免误操作不可逆。
     pub fn restore_backup(&self, backup: &Path) -> Result<AppConfig> {
-        let restored: AppConfig = atomic::read_json_file(backup)?
-            .ok_or_else(|| Error::NotFound(backup.display().to_string()))?;
+        let restored = self.read_backup(backup)?;
         self.save(&restored)?;
         Ok(restored)
     }

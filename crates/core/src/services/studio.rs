@@ -542,63 +542,7 @@ impl Studio {
     ///
     /// 项目级默认 Copy —— symlink 进 git 只是个指向本机绝对路径的死链。
     pub fn apply_project(&self, config: &mut AppConfig, project_id: &str) -> Result<LinkReport> {
-        let project = config
-            .project(project_id)
-            .ok_or_else(|| Error::NotFound(format!("项目 {project_id}")))?
-            .clone();
-
-        let mut report = LinkReport::default();
-        for agent_id in &project.agent_ids {
-            let mut ids = project.skill_ids.clone();
-            let mut seen: HashSet<String> = ids.iter().cloned().collect();
-            for gid in &project.group_ids {
-                if let Some(group) = config.group(gid) {
-                    if group
-                        .agent_id
-                        .as_ref()
-                        .is_some_and(|owner| owner != agent_id)
-                    {
-                        continue;
-                    }
-                    for sid in &group.skill_ids {
-                        if seen.insert(sid.clone()) {
-                            ids.push(sid.clone());
-                        }
-                    }
-                }
-            }
-            let skills = self.resolve_skills(config, &ids)?;
-            let agent = crate::models::agent::require_agent(agent_id)?;
-            let Some(root) = agent.project_root(&project.root) else {
-                report.push_err(LinkResult {
-                    skill_id: String::new(),
-                    skill_name: String::new(),
-                    agent_id: agent_id.clone(),
-                    status: LinkStatus::NotLinked,
-                    message: Some(format!("{} 不支持项目级 skill", agent.display_name)),
-                });
-                continue;
-            };
-            for skill in &skills {
-                let dest = root.join(&skill.name);
-                match linker::register(
-                    &skill.source_path,
-                    &dest,
-                    project.link_mode,
-                    &skill.id,
-                    false,
-                ) {
-                    Ok(done) => report.push_ok(result(skill, agent_id, done.status, None)),
-                    Err(err) => report.push_err(result(
-                        skill,
-                        agent_id,
-                        linker::link_status(&skill.source_path, &dest),
-                        Some(err.to_string()),
-                    )),
-                }
-            }
-        }
-        Ok(report)
+        self.write_project(config, project_id, None)
     }
 
     /// 从项目里移除某些 skill 的注册
@@ -885,6 +829,13 @@ impl Studio {
         };
         let mut next = config.clone();
         migrate_skill_id(&mut next, &skill.id, &new_id);
+        for project in &mut next.projects {
+            for entry in &mut project.managed_entries {
+                if entry.skill_id == new_id {
+                    entry.source_path = target.clone();
+                }
+            }
+        }
         next.skill_provenance.insert(new_id.clone(), record.clone());
         if restore {
             if let Some(regs) = next.registrations.get_mut(&new_id) {
@@ -1056,6 +1007,11 @@ fn migrate_skill_id(config: &mut AppConfig, old: &str, new: &str) {
         }
     }
     for project in &mut config.projects {
+        for entry in &mut project.managed_entries {
+            if entry.skill_id == old {
+                entry.skill_id = new.into();
+            }
+        }
         for id in &mut project.skill_ids {
             if id == old {
                 *id = new.to_string();

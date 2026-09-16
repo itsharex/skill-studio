@@ -254,6 +254,7 @@ fn project_only_applies_scoped_group_to_its_owner() {
     );
     p.agent_ids = vec!["codex".into(), "claude-code".into()];
     p.group_ids = vec!["a".into()];
+    fs::create_dir_all(&p.root).unwrap();
     c.projects.push(p);
     let r = studio.apply_project(&mut c, "p").unwrap();
     assert!(r.failed.is_empty());
@@ -454,4 +455,26 @@ fn exclusive_switch_failure_keeps_manual_state_and_active_group() {
     assert_eq!(before, fs::read(manual.join("SKILL.md")).unwrap());
     assert!(env.codex_skills().join("one/SKILL.md").is_file());
     assert!(!env.codex_skills().join("two").exists());
+}
+
+#[test]
+#[serial]
+fn reapply_refreshes_stale_owned_copy_without_changing_manual_skills() {
+    let env = Env::new();
+    let studio = env.studio();
+    let mut c = studio.load_config().unwrap();
+    let g = make(&env, &studio, &mut c, "dev", "codex", &["demo"]);
+    studio
+        .activate_agent_group(&mut c, "codex", Some(&g))
+        .unwrap();
+    fs::write(env.hub().join("demo/new.txt"), "new content").unwrap();
+    studio
+        .activate_agent_group(&mut c, "codex", Some(&g))
+        .unwrap();
+    assert_eq!(
+        fs::read_to_string(env.codex_skills().join("demo/new.txt")).unwrap(),
+        "new content"
+    );
+    studio.activate_agent_group(&mut c, "codex", None).unwrap();
+    assert!(!env.codex_skills().join("demo").exists());
 }

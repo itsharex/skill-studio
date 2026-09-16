@@ -1,0 +1,50 @@
+{
+  "fill": {
+    "solid": "extended-srgb:0.00000,0.00000,0.00000,0.00000"
+  },
+  "groups": [
+    {
+      "name": "Skill Studio",
+      "shadow": {
+        "kind": "neutral",
+        "opacity": 0
+      },
+      "specular": false,
+      "translucency": {
+        "enabled": false,
+        "value": 0
+      },
+      "layers": [
+        {
+          "name": "Pixel robot",
+          "image-name": "robot.png",
+          "glass": false,
+          "position": {
+            "scale": 1.22,
+            "translation-in-points": [
+              0,
+              0
+            ]
+          }
+        },
+        {
+          "name": "Monitor",
+          "image-name": "machine.png",
+          "glass": false,
+          "position": {
+            "scale": 1.22,
+            "translation-in-points": [
+              0,
+              0
+            ]
+          }
+        }
+      ]
+    }
+  ],
+  "supported-platforms": {
+    "squares": [
+      "macOS"
+    ]
+  }
+}

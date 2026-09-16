@@ -59,6 +59,34 @@ impl AppState {
         Ok(outcome)
     }
 
+    pub fn write_project(
+        &self,
+        id: &str,
+        selection: Option<skill_studio_core::models::project::ProjectSelection>,
+    ) -> Result<skill_studio_core::models::skill::LinkReport> {
+        let mut guard = self.config_mut();
+        self.studio.write_project(&mut guard, id, selection)
+    }
+
+    /// Restore under the same write lock as every other configuration mutation.
+    pub fn restore_backup(&self, path: &std::path::Path) -> Result<AppConfig> {
+        let mut guard = self.config_mut();
+        if !guard.active_groups.is_empty() {
+            return Err(skill_studio_core::Error::invalid(
+                "请先停用所有 Agent 分组，再恢复配置备份",
+            ));
+        }
+        let restored = self.studio.store().read_backup(path)?;
+        if !restored.active_groups.is_empty() {
+            return Err(skill_studio_core::Error::invalid(
+                "此备份包含运行中的分组，不能只恢复配置；请选择停用分组后生成的备份",
+            ));
+        }
+        self.studio.save_config(&restored)?;
+        *guard = restored.clone();
+        Ok(restored)
+    }
+
     /// Hub adoption persists its own filesystem/config transaction under the write lock.
     pub fn adopt_to_hub(&self, skill_id: &str) -> Result<skill_studio_core::models::skill::Skill> {
         let mut guard = self.config_mut();
@@ -104,5 +132,57 @@ impl AppState {
     {
         let guard = self.config();
         f(&self.studio, &guard)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use skill_studio_core::models::group::ActiveGroup;
+
+    #[test]
+    fn backup_validation_preserves_memory_and_disk_on_failure() {
+        let dir = tempfile::tempdir().unwrap();
+        let store = Store::new(dir.path().to_path_buf());
+        let state = AppState::bootstrap(store).unwrap();
+        state
+            .mutate(|_, c| {
+                c.settings.language = "original".into();
+                Ok(())
+            })
+            .unwrap();
+        let before = std::fs::read(state.studio().store().config_path()).unwrap();
+        let backup = dir.path().join("restore.json");
+        let mut restored = state.config().clone();
+        restored.version = u32::MAX;
+        std::fs::write(&backup, serde_json::to_vec(&restored).unwrap()).unwrap();
+        assert!(state.restore_backup(&backup).is_err());
+        restored.version = state.config().version;
+        restored.active_groups.insert(
+            "codex".into(),
+            ActiveGroup {
+                group_id: "group".into(),
+                skill_ids: vec![],
+                entries: vec![],
+                suspended_manual: vec![],
+                preserve_manual_skills: true,
+            },
+        );
+        std::fs::write(&backup, serde_json::to_vec(&restored).unwrap()).unwrap();
+        assert!(state.restore_backup(&backup).is_err());
+        assert_eq!(
+            std::fs::read(state.studio().store().config_path()).unwrap(),
+            before
+        );
+        assert_eq!(state.config().settings.language, "original");
+        restored.active_groups.clear();
+        restored.settings.language = "restored".into();
+        std::fs::write(&backup, serde_json::to_vec(&restored).unwrap()).unwrap();
+        state.restore_backup(&backup).unwrap();
+        assert_eq!(state.config().settings.language, "restored");
+        assert_eq!(
+            state.studio().load_config().unwrap().settings.language,
+            "restored"
+        );
     }
 }

@@ -35,8 +35,17 @@ export const projectsApi = {
     await invoke("delete_project", { projectId });
   },
 
-  async apply(projectId: string): Promise<LinkReport> {
-    return await invoke("apply_project", { projectId });
+  async apply(
+    projectId: string,
+    selection?: Pick<
+      ProjectBinding,
+      "agentIds" | "skillIds" | "groupIds" | "linkMode"
+    >,
+  ): Promise<LinkReport> {
+    return await invoke("apply_project", {
+      projectId,
+      selection: selection ?? null,
+    });
   },
 
   async unapply(

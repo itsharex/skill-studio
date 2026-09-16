@@ -1,14 +1,18 @@
+import { openUrl } from "@tauri-apps/plugin-opener";
+import { toast } from "sonner";
+import { SkillStudioIcon } from "@/components/common/SkillStudioIcon";
 import { ThemeToggle } from "@/components/common/ThemeToggle";
 import { Switch } from "@/components/ui/switch";
 import { useEffect, useState, type ReactNode } from "react";
 import {
   FolderOpen,
+  Github,
+  ExternalLink,
   History,
   Sparkles,
   Palette,
   Layers,
   Link2,
-  Database,
   FolderCog,
   Settings2,
   ShieldCheck,
@@ -53,7 +57,7 @@ function SettingsSection({
   return (
     <section className="space-y-3">
       <h3 className="flex items-center gap-2 border-b border-border/60 pb-3 text-sm font-semibold">
-        <span className="text-blue-500 [&>svg]:h-4 [&>svg]:w-4">{icon}</span>
+        <span className="text-blue-500 [&>*]:h-5 [&>*]:w-5">{icon}</span>
         {title}
       </h3>
       <div className="space-y-3">{children}</div>
@@ -76,7 +80,7 @@ function SettingCard({
   return (
     <div className="rounded-xl border border-border-default bg-card px-5 py-4">
       <div className="flex items-center gap-4">
-        <div className="flex h-10 w-10 shrink-0 items-center justify-center rounded-lg border border-border-default bg-background text-blue-500 [&>svg]:h-5 [&>svg]:w-5">
+        <div className="flex h-10 w-10 shrink-0 items-center justify-center rounded-lg border border-border-default bg-background text-blue-500 [&>*]:h-5 [&>*]:w-5">
           {icon}
         </div>
         <div className="min-w-0 flex-1">
@@ -111,6 +115,7 @@ export function SettingsPage() {
   const restore = useRestoreBackup();
   const prune = usePrune();
 
+  const [hubDraft, setHubDraft] = useState<string | null>(null);
   const [tab, setTab] = useState<SettingsTab>("general");
   const [restoring, setRestoring] = useState<string | null>(null);
   const [configDir, setConfigDir] = useState<string>("");
@@ -168,7 +173,7 @@ export function SettingsPage() {
                     切换分组时保留手动安装的 skill
                   </label>
                 }
-                description="关闭后，分组外的手动 skill 会暂时停用，停用分组时恢复。文件不会删除；下次启用或重新应用分组时生效。"
+                description="关闭后，下次启用、切换或重新应用分组时，暂时停用组外的手动 skill；未启用分组时不影响手动 skill。停用分组后恢复，文件和已安装记录均保留。"
                 icon={<ShieldCheck />}
               >
                 <Switch
@@ -212,35 +217,46 @@ export function SettingsPage() {
           </TabsContent>
 
           <TabsContent value="directories" className="space-y-7">
-            <SettingsSection title="Skill Studio 存储" icon={<Database />}>
+            <SettingsSection
+              title="Skill Studio 存储"
+              icon={<SkillStudioIcon className="h-5 w-5" />}
+            >
               <SettingCard
                 title="Hub 目录"
                 icon={<Layers />}
-                description="安装、导入和收编的 skill 存放在这里。留空使用默认目录，不能与 Agent 的 skills 目录重叠。"
+                description="安装、导入和收编的 skill 存放在这里。留空使用默认目录，不能与 Agent 的 skills 目录重叠。目录变更不会迁移文件，当前 Hub 非空时不能切换。"
                 details={
                   <div className="flex items-center gap-2">
                     <Input
                       aria-label="Hub 目录"
-                      value={settings.hubDir ?? ""}
+                      value={hubDraft ?? settings.hubDir ?? ""}
                       placeholder="~/.skill-studio/skills（默认）"
-                      onChange={(e) =>
+                      onChange={(e) => setHubDraft(e.target.value)}
+                    />
+                    <Button
+                      size="sm"
+                      disabled={update.isPending || hubDraft === null}
+                      onClick={() =>
                         update.mutate(
-                          e.target.value.trim()
-                            ? { hubDir: e.target.value }
+                          hubDraft?.trim()
+                            ? { hubDir: hubDraft.trim() }
                             : { clearHubDir: true },
+                          { onSuccess: () => setHubDraft(null) },
                         )
                       }
-                    />
+                    >
+                      保存目录
+                    </Button>
                     <Button
                       variant="outline"
                       size="sm"
                       disabled={update.isPending}
                       onClick={async () => {
                         const picked = await projectsApi.pickDirectory();
-                        if (picked) update.mutate({ hubDir: picked });
+                        if (picked) setHubDraft(picked);
                       }}
                     >
-                      <FolderOpen className="h-4 w-4" />
+                      <FolderOpen className="h-5 w-5" />
                       选择目录
                     </Button>
                   </div>
@@ -266,7 +282,7 @@ export function SettingsPage() {
                   disabled={!configDir}
                   onClick={() => void systemApi.revealPath(configDir)}
                 >
-                  <FolderOpen className="h-4 w-4" />
+                  <FolderOpen className="h-5 w-5" />
                   打开
                 </Button>
               </SettingCard>
@@ -312,7 +328,7 @@ export function SettingsPage() {
                       disabled={update.isPending}
                       onClick={() => void pickAgentDir(a.id)}
                     >
-                      <FolderOpen className="h-4 w-4" />
+                      <FolderOpen className="h-5 w-5" />
                       选择目录
                     </Button>
                   </SettingCard>
@@ -379,7 +395,7 @@ export function SettingsPage() {
                         key={path}
                         className="flex items-center gap-3 px-5 py-3"
                       >
-                        <History className="h-4 w-4 shrink-0 text-muted-foreground" />
+                        <History className="h-5 w-5 shrink-0 text-muted-foreground" />
                         <p
                           title={path}
                           className="min-w-0 flex-1 truncate font-mono text-xs"
@@ -409,23 +425,59 @@ export function SettingsPage() {
 
           <TabsContent value="about" className="space-y-7">
             <SettingsSection title="关于应用" icon={<Info />}>
-              <div className="rounded-xl border border-border-default bg-card p-6">
-                <div className="flex items-center gap-4">
-                  <div className="flex h-12 w-12 items-center justify-center rounded-xl bg-blue-500 text-white">
-                    <Layers className="h-6 w-6" />
-                  </div>
-                  <div>
-                    <h3 className="text-lg font-semibold text-blue-500">
-                      Skill Studio
-                    </h3>
-                    <p className="mt-1 text-xs text-muted-foreground">
-                      {version ? `版本 ${version}` : "跨 Agent 的 Skill 管理器"}
+              <div className="flex flex-wrap items-center justify-between gap-6 rounded-xl border border-border-default bg-card p-6">
+                <div className="flex min-w-0 items-center gap-4">
+                  <SkillStudioIcon className="h-12 w-12 shrink-0" />
+                  <div className="min-w-0">
+                    <div className="flex flex-wrap items-center gap-2.5">
+                      <h3 className="text-lg font-semibold text-blue-500">
+                        Skill Studio
+                      </h3>
+                      {version && (
+                        <Badge
+                          variant="outline"
+                          className="font-normal text-muted-foreground"
+                        >
+                          版本 v{version}
+                        </Badge>
+                      )}
+                    </div>
+                    <p className="mt-1 text-sm leading-relaxed text-muted-foreground">
+                      集中管理你的 skill，为不同 Agent 组合所需能力。
                     </p>
                   </div>
                 </div>
-                <p className="mt-5 text-sm leading-relaxed text-muted-foreground">
-                  集中管理你的 skill，为不同 Agent 组合所需能力。
-                </p>
+                <div className="ml-auto flex shrink-0 items-center gap-2">
+                  {[
+                    {
+                      label: "GitHub",
+                      url: "https://github.com/tarnish233/skill-studio",
+                      icon: Github,
+                    },
+                    {
+                      label: "更新日志",
+                      url: "https://github.com/tarnish233/skill-studio/releases",
+                      icon: ExternalLink,
+                    },
+                  ].map(({ label, url, icon: Icon }) => (
+                    <Button key={label} variant="outline" asChild>
+                      <a
+                        href={url}
+                        target="_blank"
+                        rel="noopener noreferrer"
+                        onClick={(event) => {
+                          event.preventDefault();
+                          void openUrl(url).catch((error: unknown) =>
+                            toast.error(`打开链接失败：${String(error)}`),
+                          );
+                        }}
+                      >
+                        <Icon className="h-5 w-5" />
+                        {label}
+                      </a>
+                    </Button>
+                  ))}
+                </div>
               </div>
               <SettingCard
                 title="Skill Hub"

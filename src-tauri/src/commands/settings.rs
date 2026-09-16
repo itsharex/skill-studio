@@ -42,7 +42,11 @@ pub fn update_settings(
     patch: SettingsPatch,
 ) -> Result<Settings, String> {
     state
-        .mutate(|_, config| {
+        .mutate(|studio, config| {
+            let paths_changed = patch.hub_dir.is_some()
+                || patch.clear_hub_dir.unwrap_or(false)
+                || patch.agent_dir_overrides.is_some();
+            let old_hub = studio.store().hub_dir(config);
             let s = &mut config.settings;
             if let Some(preserve) = patch.preserve_manual_skills {
                 s.preserve_manual_skills = preserve;
@@ -82,7 +86,11 @@ pub fn update_settings(
                 // 上限兜一下，避免用户填个天文数字把磁盘写满
                 s.backup_keep = k.min(100);
             }
-            Ok(s.clone())
+            let result = s.clone();
+            if paths_changed {
+                validate_hub_change(&old_hub, &studio.store().hub_dir(config), config)?;
+            }
+            Ok(result)
         })
         .map_err(Into::into)
 }
@@ -102,19 +110,9 @@ pub fn list_backups(state: State<'_, AppState>) -> Result<Vec<String>, String> {
 /// 从备份恢复配置。恢复动作本身也会先备份当前状态，可再次回退。
 #[tauri::command(rename_all = "camelCase")]
 pub fn restore_backup(state: State<'_, AppState>, path: String) -> Result<AppConfig, String> {
-    let restored = state
-        .studio()
-        .store()
-        .restore_backup(std::path::Path::new(&path))
-        .map_err(|e| e.to_string())?;
-    // 内存里的配置也要换成恢复后的，否则下一次写入会把它盖回去
     state
-        .mutate(|_, config| {
-            *config = restored.clone();
-            Ok(())
-        })
-        .map_err(|e: skill_studio_core::Error| e.to_string())?;
-    Ok(restored)
+        .restore_backup(std::path::Path::new(&path))
+        .map_err(Into::into)
 }
 
 /// 配置目录路径，供前端"在 Finder 中显示"用
@@ -130,4 +128,57 @@ pub fn reveal_path(app: tauri::AppHandle, path: String) -> Result<(), String> {
     app.opener()
         .open_path(path, None::<&str>)
         .map_err(|e| format!("打开路径失败: {e}"))
+}
+
+fn validate_hub_change(
+    old_hub: &std::path::Path,
+    hub: &std::path::Path,
+    config: &AppConfig,
+) -> skill_studio_core::Result<()> {
+    use skill_studio_core::{fs::paths, models::agent::AGENTS, services::linker, Error};
+    if !hub.is_absolute() {
+        return Err(Error::invalid("请选择绝对路径作为 Hub 目录"));
+    }
+    let roots: Vec<_> = AGENTS
+        .iter()
+        .flat_map(|a| a.resolved_global_roots(&config.settings.agent_dir_overrides))
+        .collect();
+    linker::ensure_distinct_roots(hub, &roots)?;
+    if !paths::paths_alias(hub, old_hub)
+        && (!config.active_groups.is_empty()
+            || (old_hub.exists()
+                && std::fs::read_dir(old_hub)
+                    .map_err(|e| Error::io(old_hub, e))?
+                    .next()
+                    .is_some()))
+    {
+        return Err(Error::invalid(
+            "当前 Hub 非空或有启用中的分组，请先移出或剔除收录的 skill；修改目录不会自动迁移文件",
+        ));
+    }
+    Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    #[test]
+    fn hub_change_rejects_relative_overlapping_and_nonempty_roots() {
+        let temp = tempfile::tempdir().unwrap();
+        let old = temp.path().join("old");
+        let new = temp.path().join("new");
+        std::fs::create_dir(&old).unwrap();
+        let mut config = AppConfig::default();
+        assert!(validate_hub_change(&old, &new, &config).is_ok());
+        assert!(validate_hub_change(&old, std::path::Path::new("relative"), &config).is_err());
+        config
+            .settings
+            .agent_dir_overrides
+            .insert("codex".into(), new.clone());
+        assert!(validate_hub_change(&old, &new, &config).is_err());
+        config.settings.agent_dir_overrides.clear();
+        std::fs::write(old.join("SKILL.md"), "keep").unwrap();
+        assert!(validate_hub_change(&old, &new, &config).is_err());
+        assert!(validate_hub_change(&old, &old, &config).is_ok());
+    }
 }

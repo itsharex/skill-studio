@@ -25,7 +25,7 @@ export function ThemeToggle() {
               : "text-muted-foreground hover:bg-background/50 hover:text-foreground",
           )}
         >
-          <Icon className="h-4 w-4" />
+          <Icon className="h-5 w-5" />
         </button>
       ))}
     </div>

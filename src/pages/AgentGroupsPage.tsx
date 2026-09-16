@@ -227,8 +227,14 @@ export function AgentPage({ agentId }: { agentId: string }) {
                     const active = current?.groupId === g.id;
                     const changed =
                       active &&
-                      (JSON.stringify(current.skillIds) !==
-                        JSON.stringify(g.skillIds) ||
+                      (current.entries?.some(
+                        (entry) =>
+                          skills.find((s) => s.id === entry.skillId)?.agents[
+                            agentId
+                          ]?.status === "copyStale",
+                      ) ||
+                        JSON.stringify(current.skillIds) !==
+                          JSON.stringify(g.skillIds) ||
                         (current.preserveManualSkills ?? true) !==
                           (settings?.preserveManualSkills ?? true));
                     const unavailable =

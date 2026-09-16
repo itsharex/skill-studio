@@ -1,3 +1,4 @@
+import { SkillStudioIcon } from "@/components/common/SkillStudioIcon";
 import {
   NavigationGuard,
   useNavigationGuard,
@@ -10,7 +11,7 @@ import { motion } from "framer-motion";
 import {
   ArrowLeft,
   FolderGit2,
-  Library,
+  Layers,
   RefreshCw,
   Settings as SettingsIcon,
   TriangleAlert,
@@ -106,7 +107,7 @@ function AppContent() {
           {
             id: "library",
             label: STATIC_TITLES.library,
-            icon: <Library className="h-4 w-4" />,
+            icon: <Layers className="h-5 w-5" />,
           },
         ],
       },
@@ -115,7 +116,7 @@ function AppContent() {
         items: agents.map((a) => ({
           id: `${AGENT_PREFIX}${a.id}` as ViewId,
           label: a.displayName,
-          icon: <AgentIcon agentId={a.id} className="h-4 w-4" />,
+          icon: <AgentIcon agentId={a.id} className="h-5 w-5" />,
           badge: a.detected ? undefined : "未装",
         })),
       },
@@ -125,7 +126,7 @@ function AppContent() {
           {
             id: "projects",
             label: STATIC_TITLES.projects,
-            icon: <FolderGit2 className="h-4 w-4" />,
+            icon: <FolderGit2 className="h-5 w-5" />,
           },
         ],
       },
@@ -193,6 +194,7 @@ function AppContent() {
                   <ArrowLeft className="h-4 w-4" />
                 </Button>
               )}
+              {!isSubpage && <SkillStudioIcon className="h-8 w-8" />}
               <span
                 aria-hidden="true"
                 className={`whitespace-nowrap text-xl font-semibold leading-7 tracking-tight ${isSubpage ? "text-foreground" : "text-blue-500"}`}

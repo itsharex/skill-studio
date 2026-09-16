@@ -23,6 +23,26 @@ pub struct ProjectBinding {
     /// 而 symlink 进 git 只是一个指向本机绝对路径的文本文件，别人拉下来就是断链。
     #[serde(default = "default_project_link_mode")]
     pub link_mode: LinkMode,
+    /// Exact deployments owned by this project; never infer ownership from a name alone.
+    #[serde(default)]
+    pub managed_entries: Vec<ProjectEntry>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ProjectEntry {
+    pub skill_id: String,
+    pub source_path: PathBuf,
+    pub target_path: PathBuf,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ProjectSelection {
+    pub agent_ids: Vec<String>,
+    pub skill_ids: Vec<String>,
+    pub group_ids: Vec<String>,
+    pub link_mode: LinkMode,
 }
 
 fn default_project_link_mode() -> LinkMode {
@@ -39,6 +59,7 @@ impl ProjectBinding {
             skill_ids: Vec::new(),
             group_ids: Vec::new(),
             link_mode: LinkMode::Copy,
+            managed_entries: Vec::new(),
         }
     }
 }

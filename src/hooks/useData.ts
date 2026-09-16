@@ -11,7 +11,7 @@ import {
 import { queryKeys } from "@/lib/queryKeys";
 import { toastLinkReport } from "@/lib/linkReport";
 import { useTauriEvent } from "@/hooks/useTauriEvent";
-import type { GroupApplyMode, LinkMode, SettingsPatch } from "@/types";
+import type { LinkMode, SettingsPatch } from "@/types";
 
 /* ─────────────────── 查询 ─────────────────── */
 
@@ -155,89 +155,12 @@ export function usePrune() {
   });
 }
 
-export function useCreateGroup() {
-  const invalidate = useInvalidateAfterWrite();
-  return useMutation({
-    mutationFn: (v: { name: string; description?: string; icon?: string }) =>
-      groupsApi.create(v.name, v.description, v.icon),
-    onSuccess: (g) => toast.success(`已创建分组：${g.name}`),
-    onError: (e: unknown) => toast.error(String(e)),
-    onSettled: invalidate,
-  });
-}
-
-export function useUpdateGroup() {
-  const invalidate = useInvalidateAfterWrite();
-  return useMutation({
-    mutationFn: (v: {
-      groupId: string;
-      name?: string;
-      description?: string;
-      icon?: string;
-    }) => groupsApi.update(v.groupId, v),
-    onError: (e: unknown) => toast.error(String(e)),
-    onSettled: invalidate,
-  });
-}
-
-export function useDeleteGroup() {
-  const invalidate = useInvalidateAfterWrite();
-  return useMutation({
-    mutationFn: (groupId: string) => groupsApi.remove(groupId),
-    onSuccess: () => toast.success("分组已删除（已注册的 skill 未变动）"),
-    onError: (e: unknown) => toast.error(String(e)),
-    onSettled: invalidate,
-  });
-}
-
-export function useSetGroupSkills() {
-  const invalidate = useInvalidateAfterWrite();
-  return useMutation({
-    mutationFn: (v: { groupId: string; skillIds: string[] }) =>
-      groupsApi.setSkills(v.groupId, v.skillIds),
-    onError: (e: unknown) => toast.error(String(e)),
-    onSettled: invalidate,
-  });
-}
-
-export function useApplyGroup() {
-  const invalidate = useInvalidateAfterWrite();
-  return useMutation({
-    mutationFn: (v: {
-      groupId: string;
-      agentIds: string[];
-      mode: GroupApplyMode;
-      force?: boolean;
-    }) => groupsApi.apply(v.groupId, v.agentIds, v.mode, v.force ?? false),
-    onSuccess: (report, v) =>
-      toastLinkReport(report, v.mode === "add" ? "应用分组" : "移除分组"),
-    onError: (e: unknown) => toast.error(String(e)),
-    onSettled: invalidate,
-  });
-}
-
 export function useCreateProject() {
   const invalidate = useInvalidateAfterWrite();
   return useMutation({
     mutationFn: (v: { name: string; root: string }) =>
       projectsApi.create(v.name, v.root),
     onSuccess: (p) => toast.success(`已添加项目：${p.name}`),
-    onError: (e: unknown) => toast.error(String(e)),
-    onSettled: invalidate,
-  });
-}
-
-export function useUpdateProject() {
-  const invalidate = useInvalidateAfterWrite();
-  return useMutation({
-    mutationFn: (v: {
-      projectId: string;
-      name?: string;
-      agentIds?: string[];
-      skillIds?: string[];
-      groupIds?: string[];
-      linkMode?: LinkMode;
-    }) => projectsApi.update(v.projectId, v),
     onError: (e: unknown) => toast.error(String(e)),
     onSettled: invalidate,
   });
@@ -256,8 +179,16 @@ export function useDeleteProject() {
 export function useApplyProject() {
   const invalidate = useInvalidateAfterWrite();
   return useMutation({
-    mutationFn: (projectId: string) => projectsApi.apply(projectId),
-    onSuccess: (report) => toastLinkReport(report, "写入项目"),
+    mutationFn: (v: {
+      projectId: string;
+      selection: {
+        agentIds: string[];
+        skillIds: string[];
+        groupIds: string[];
+        linkMode: LinkMode;
+      };
+    }) => projectsApi.apply(v.projectId, v.selection),
+    onSuccess: () => toast.success("项目选择已保存并写入"),
     onError: (e: unknown) => toast.error(String(e)),
     onSettled: invalidate,
   });

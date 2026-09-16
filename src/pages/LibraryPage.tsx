@@ -1,3 +1,4 @@
+import { SkillStudioIcon } from "@/components/common/SkillStudioIcon";
 import { InstallSkillsPage } from "@/pages/InstallSkillsPage";
 import { useMutation, useQueryClient } from "@tanstack/react-query";
 import { toast } from "sonner";
@@ -5,12 +6,11 @@ import { PageTools } from "@/components/common/PageTools";
 import { useMemo, useState } from "react";
 import {
   FolderOpen,
+  PackagePlus,
   Bot,
-  Undo2,
+  PackageMinus,
   CircleHelp,
-  Library,
   TriangleAlert,
-  Warehouse,
   Link2,
 } from "lucide-react";
 import { AgentIcon } from "@/components/common/AgentIcon";
@@ -150,13 +150,13 @@ export function LibraryPage({ onAdd }: { onAdd?: () => void } = {}) {
               className={`inline-flex items-center gap-1.5 rounded-full px-2.5 py-1 text-xs font-medium transition-colors hover:brightness-95 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring ${color} ${sourceFilter === id ? "ring-2 ring-current" : ""}`}
             >
               {id === "studio" ? (
-                <Warehouse className="h-3.5 w-3.5" />
+                <SkillStudioIcon className="h-4 w-4" />
               ) : id === "agent" ? (
-                <Bot className="h-3.5 w-3.5" />
+                <Bot className="h-4 w-4" />
               ) : id === "unknown" || id === "external" ? (
-                <CircleHelp className="h-3.5 w-3.5" />
+                <CircleHelp className="h-4 w-4" />
               ) : (
-                <AgentIcon agentId={id} className="h-3.5 w-3.5" />
+                <AgentIcon agentId={id} className="h-4 w-4" />
               )}
               {label}: {count}
             </button>
@@ -198,7 +198,7 @@ export function LibraryPage({ onAdd }: { onAdd?: () => void } = {}) {
         {tools}
         {summary}
         <EmptyState
-          icon={Library}
+          icon={SkillStudioIcon}
           title="Skill Hub 还没有发现 skill"
           description={`已扫描各 agent 的全局 skill 目录与 Hub，都是空的。在 ${
             agents[0]?.globalSkillDirs[0] ?? "~/.claude/skills"
@@ -242,7 +242,7 @@ export function LibraryPage({ onAdd }: { onAdd?: () => void } = {}) {
                         {id === "agent" ? (
                           <Bot className="h-4 w-4 text-violet-500" />
                         ) : id === "studio" ? (
-                          <Warehouse className="h-4 w-4 text-blue-500" />
+                          <SkillStudioIcon className="h-4 w-4" />
                         ) : id === "unknown" || id === "external" ? (
                           <CircleHelp className="h-4 w-4 text-muted-foreground" />
                         ) : (
@@ -319,20 +319,6 @@ export function LibraryPage({ onAdd }: { onAdd?: () => void } = {}) {
                 </div>
 
                 <RowActions>
-                  {card.sources.length === 1 &&
-                    skill.origin.kind === "hub" &&
-                    skill.provenance && (
-                      <Button
-                        variant="ghost"
-                        size="icon"
-                        title="移出 Hub 并还原"
-                        aria-label={`还原 ${skill.name} 到原位置`}
-                        disabled={release.isPending}
-                        onClick={() => setReleaseTarget(skill)}
-                      >
-                        <Undo2 className="h-4 w-4" />
-                      </Button>
-                    )}
                   <Button
                     variant="ghost"
                     size="icon"
@@ -362,6 +348,21 @@ export function LibraryPage({ onAdd }: { onAdd?: () => void } = {}) {
                     <FolderOpen className="h-4 w-4" />
                   </Button>
                   {card.sources.length === 1 &&
+                    skill.origin.kind === "hub" &&
+                    skill.provenance && (
+                      <Button
+                        variant="ghost"
+                        size="icon"
+                        className="h-8 w-8"
+                        title="移出 Hub 并还原"
+                        aria-label={`还原 ${skill.name} 到原位置`}
+                        disabled={release.isPending}
+                        onClick={() => setReleaseTarget(skill)}
+                      >
+                        <PackageMinus className="h-4 w-4" />
+                      </Button>
+                    )}
+                  {card.sources.length === 1 &&
                     skill.origin.kind === "inPlace" && (
                       <Button
                         variant="ghost"
@@ -372,7 +373,7 @@ export function LibraryPage({ onAdd }: { onAdd?: () => void } = {}) {
                         disabled={adopt.isPending}
                         onClick={() => setAdoptTarget(skill)}
                       >
-                        <Warehouse className="h-4 w-4" />
+                        <PackagePlus className="h-4 w-4" />
                       </Button>
                     )}
                 </RowActions>
@@ -523,17 +524,6 @@ export function LibraryPage({ onAdd }: { onAdd?: () => void } = {}) {
                   </p>
                 ))}
                 <div className="mt-3 flex justify-end gap-2">
-                  {source.origin.kind === "hub" && source.provenance && (
-                    <Button
-                      variant="outline"
-                      size="sm"
-                      disabled={release.isPending}
-                      onClick={() => setReleaseTarget(source)}
-                    >
-                      <Undo2 className="h-4 w-4" />
-                      移出 Hub 并还原
-                    </Button>
-                  )}
                   {selectedSourceCard.unavailable ? (
                     sourceAgentIds(source).flatMap((id) =>
                       (source.agents[id]?.entryPaths ?? []).map((path) => (
@@ -565,6 +555,17 @@ export function LibraryPage({ onAdd }: { onAdd?: () => void } = {}) {
                       打开来源目录
                     </Button>
                   )}
+                  {source.origin.kind === "hub" && source.provenance && (
+                    <Button
+                      variant="outline"
+                      size="sm"
+                      disabled={release.isPending}
+                      onClick={() => setReleaseTarget(source)}
+                    >
+                      <PackageMinus className="h-4 w-4" />
+                      移出 Hub 并还原
+                    </Button>
+                  )}
                   {!selectedSourceCard.unavailable &&
                     source.origin.kind === "inPlace" && (
                       <Button
@@ -576,7 +577,7 @@ export function LibraryPage({ onAdd }: { onAdd?: () => void } = {}) {
                           setAdoptTarget(source);
                         }}
                       >
-                        <Warehouse className="h-4 w-4" />
+                        <PackagePlus className="h-4 w-4" />
                         收编此来源
                       </Button>
                     )}

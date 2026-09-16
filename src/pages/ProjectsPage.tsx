@@ -49,7 +49,6 @@ import {
   useGroups,
   useProjects,
   useSkills,
-  useUpdateProject,
   useWriteProjectGitignore,
 } from "@/hooks/useData";
 import type { LinkMode, ProjectBinding } from "@/types";
@@ -282,7 +281,6 @@ function ProjectDetail({
   const { data: agents = [] } = useAgents();
   const { data: skills = [] } = useSkills();
   const { data: groups = [] } = useGroups();
-  const update = useUpdateProject();
   const apply = useApplyProject();
   const gitignore = useWriteProjectGitignore();
   const [query, setQuery] = useState("");
@@ -359,9 +357,8 @@ function ProjectDetail({
           onClick={() => {
             setWriting(true);
             setError(null);
-            void update
-              .mutateAsync({ projectId: project.id, ...value })
-              .then(() => apply.mutateAsync(project.id))
+            void apply
+              .mutateAsync({ projectId: project.id, selection: value })
               .then((report) => {
                 if (report.failed.length)
                   throw new Error("部分 skill 写入失败，请检查后重试");

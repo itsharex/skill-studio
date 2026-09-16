@@ -21,7 +21,7 @@ function deferred<T>() {
   });
   return { promise, resolve, reject };
 }
-const updates = () => calls.filter((c) => c.command === "update_project");
+const updates = () => calls.filter((c) => c.command === "apply_project");
 
 it("keeps selections local and saves once before applying on explicit write", async () => {
   let project = makeProject();
@@ -37,11 +37,11 @@ it("keeps selections local and saves once before applying on explicit write", as
   ]);
   const first = deferred<unknown>();
   let count = 0;
-  handlers.set("update_project", async (args) => {
+  handlers.set("apply_project", async (args) => {
     count++;
     if (count === 1) await first.promise;
-    project = { ...project, ...args };
-    return project;
+    project = { ...project, ...args.selection };
+    return { success: [], failed: [] };
   });
   renderWithProviders(<ProjectsPage />);
   fireEvent.click(await screen.findByText("webapp"));
@@ -55,13 +55,14 @@ it("keeps selections local and saves once before applying on explicit write", as
   expect(screen.getByRole("checkbox", { name: "Alpha" })).toBeChecked();
   expect(screen.getByRole("checkbox", { name: "Beta" })).toBeChecked();
   fireEvent.click(screen.getByRole("button", { name: "写入项目" }));
-  expect(calls.some((c) => c.command === "apply_project")).toBe(false);
+
   await waitFor(() => expect(updates()).toHaveLength(1));
   await act(async () => first.resolve({}));
   await waitFor(() =>
     expect(calls.filter((c) => c.command === "apply_project")).toHaveLength(1),
   );
-  const last = updates().at(-1)!.args as typeof project;
+  const last = (updates().at(-1)!.args as { selection: typeof project })
+    .selection;
   expect(last.skillIds).toEqual(["a", "b"]);
   expect(last.agentIds).toEqual(["claude-code", "codex"]);
   expect(last.groupIds).toEqual(["g1", "g2"]);
@@ -76,11 +77,11 @@ it("preserves the draft after a failed save, blocks apply, and retries the lates
   ]);
   const first = deferred<unknown>();
   let count = 0;
-  handlers.set("update_project", async (args) => {
+  handlers.set("apply_project", async (args) => {
     count++;
     if (count === 1) await first.promise;
-    project = { ...project, ...args };
-    return project;
+    project = { ...project, ...args.selection };
+    return { success: [], failed: [] };
   });
   renderWithProviders(<ProjectsPage />);
   fireEvent.click(await screen.findByText("webapp"));
@@ -94,10 +95,12 @@ it("preserves the draft after a failed save, blocks apply, and retries the lates
   );
   expect(screen.getByRole("checkbox", { name: "Alpha" })).toBeChecked();
   expect(screen.getByRole("checkbox", { name: "Beta" })).toBeChecked();
-  expect(calls.some((c) => c.command === "apply_project")).toBe(false);
+
   fireEvent.click(screen.getByRole("button", { name: "写入项目" }));
   await waitFor(() => expect(updates()).toHaveLength(2));
-  expect((updates()[1].args as typeof project).skillIds).toEqual(["a", "b"]);
+  expect(
+    (updates()[1].args as { selection: typeof project }).selection.skillIds,
+  ).toEqual(["a", "b"]);
 });
 
 it("confirms unsaved navigation, supports cancel and discard without saving", async () => {
@@ -130,9 +133,9 @@ it("does not prompt after successful write", async () => {
   let project = makeProject({ agentIds: ["codex"] });
   handlers.set("list_projects", () => [project]);
   handlers.set("scan_skills", () => [makeSkill({ id: "a", name: "Alpha" })]);
-  handlers.set("update_project", (args) => {
-    project = { ...project, ...args };
-    return project;
+  handlers.set("apply_project", (args) => {
+    project = { ...project, ...args.selection };
+    return { success: [], failed: [] };
   });
   renderWithProviders(<ProjectsPage />);
   fireEvent.click(await screen.findByText("webapp"));

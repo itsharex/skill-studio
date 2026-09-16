@@ -102,9 +102,13 @@ pub fn delete_project(state: State<'_, AppState>, project_id: String) -> Result<
 
 /// 把项目绑定写进各 agent 的项目目录
 #[tauri::command(rename_all = "camelCase")]
-pub fn apply_project(state: State<'_, AppState>, project_id: String) -> Result<LinkReport, String> {
+pub fn apply_project(
+    state: State<'_, AppState>,
+    project_id: String,
+    selection: Option<skill_studio_core::models::project::ProjectSelection>,
+) -> Result<LinkReport, String> {
     state
-        .mutate(|studio, config| studio.apply_project(config, &project_id))
+        .write_project(&project_id, selection)
         .map_err(Into::into)
 }
 

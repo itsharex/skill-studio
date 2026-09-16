@@ -188,16 +188,16 @@ impl Studio {
             let retained = owned
                 .iter()
                 .any(|e| e.skill_id == *id && e.target_path.is_dir());
-            if retained {
-                if state.disabled {
-                    return Err(Error::invalid(format!(
-                        "{} 已被手动停用，请先恢复启用",
-                        view.skill.name
-                    )));
-                }
+            if retained && state.disabled {
+                return Err(Error::invalid(format!(
+                    "{} 已被手动停用，请先恢复启用",
+                    view.skill.name
+                )));
+            }
+            if retained && state.status == crate::models::skill::LinkStatus::Copied {
                 continue;
             }
-            if state.status != crate::models::skill::LinkStatus::NotLinked {
+            if !retained && state.status != crate::models::skill::LinkStatus::NotLinked {
                 use crate::models::skill::LinkStatus::*;
                 if !matches!(
                     state.status,
@@ -215,9 +215,15 @@ impl Studio {
                 // Existing manual skill is usable: do not take ownership or overwrite it.
                 continue;
             }
-            let dest = agent
-                .primary_global_root(&config.settings.agent_dir_overrides)
-                .join(&view.skill.name);
+            let dest = owned
+                .iter()
+                .find(|e| e.skill_id == *id)
+                .map(|e| e.target_path.clone())
+                .unwrap_or_else(|| {
+                    agent
+                        .primary_global_root(&config.settings.agent_dir_overrides)
+                        .join(&view.skill.name)
+                });
             if !targets.insert(dest.clone()) {
                 return Err(Error::invalid("组合包含同目录名的多个 skill，请调整成员"));
             }
@@ -236,7 +242,10 @@ impl Studio {
         let mut tx = Transaction::begin(self.store().dir().join("group-switch.json"))?;
         let operation = (|| -> Result<()> {
             for entry in &owned {
-                if ids.contains(&entry.skill_id) && entry.target_path.is_dir() {
+                if ids.contains(&entry.skill_id)
+                    && entry.target_path.is_dir()
+                    && !additions.iter().any(|(_, dest)| dest == &entry.target_path)
+                {
                     entries.push(entry.clone());
                     continue;
                 }
@@ -271,7 +280,9 @@ impl Studio {
                 if dest.symlink_metadata().is_ok() {
                     return Err(Error::invalid("目标已存在，停止切换"));
                 }
-                tx.reserve(dest)?;
+                if !owned.iter().any(|entry| entry.target_path == *dest) {
+                    tx.reserve(dest)?;
+                }
                 linker::copy_tree(&skill.source_path, dest)?;
                 let hash = scanner::dir_content_hash(&skill.source_path)?;
                 if scanner::dir_content_hash(dest)? != hash {
