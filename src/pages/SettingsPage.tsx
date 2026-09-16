@@ -1,3 +1,5 @@
+import { ThemeToggle } from "@/components/common/ThemeToggle";
+import { Switch } from "@/components/ui/switch";
 import { useEffect, useState } from "react";
 import { FolderOpen, History, Sparkles } from "lucide-react";
 import { Badge } from "@/components/ui/badge";
@@ -82,6 +84,32 @@ export function SettingsPage() {
 
         <div className="min-h-0 flex-1 overflow-y-auto pb-8">
           <TabsContent value="general" className="space-y-6">
+            <section className="space-y-2">
+              <h3 className="text-sm font-semibold">外观</h3>
+              <ThemeToggle />
+            </section>
+            <section className="flex items-center justify-between gap-4">
+              <div>
+                <label
+                  htmlFor="preserve-manual"
+                  className="text-sm font-semibold"
+                >
+                  切换分组时保留手动安装的 skill
+                </label>
+                <p className="mt-1 text-xs text-muted-foreground">
+                  关闭后暂时停用分组外的手动
+                  skill，停用分组时恢复，不删除文件。下次启用或重新应用分组时生效。
+                </p>
+              </div>
+              <Switch
+                id="preserve-manual"
+                checked={settings.preserveManualSkills ?? true}
+                disabled={update.isPending}
+                onCheckedChange={(value) =>
+                  update.mutate({ preserveManualSkills: value })
+                }
+              />
+            </section>
             <section className="space-y-2">
               <h3 className="text-sm font-semibold">默认链接方式</h3>
               <div className="flex items-start gap-3">
@@ -317,8 +345,8 @@ export function SettingsPage() {
               ）， 不删文件，随时可恢复。
             </p>
             <p className="max-w-2xl text-xs leading-relaxed text-muted-foreground">
-              分组是一次性应用（添加 / 移除），不做持续对账 ——
-              永远不会误删你手动放进 agent 目录的 skill。
+              每个 Agent 同时启用一个分组；手动安装的 skill
+              按通用设置保留或暂时停用，文件不会被删除。
             </p>
           </TabsContent>
         </div>

@@ -25,7 +25,11 @@ pub fn create_group(
     }
     state
         .mutate(|_, config| {
-            if config.groups.iter().any(|g| g.name == name) {
+            if config
+                .groups
+                .iter()
+                .any(|g| g.name == name && g.agent_id.is_none())
+            {
                 return Err(Error::invalid(format!("已存在同名分组: {name}")));
             }
             let mut group = Group::new(uuid_v4(), name);
@@ -53,11 +57,11 @@ pub fn update_group(
                 if new_name.is_empty() {
                     return Err(Error::invalid("分组名不能为空"));
                 }
-                if config
-                    .groups
-                    .iter()
-                    .any(|g| g.name == new_name && g.id != group_id)
-                {
+                if config.groups.iter().any(|g| {
+                    g.name == new_name
+                        && g.id != group_id
+                        && g.agent_id == config.group(&group_id).and_then(|g| g.agent_id.clone())
+                }) {
                     return Err(Error::invalid(format!("已存在同名分组: {new_name}")));
                 }
             }
@@ -84,6 +88,13 @@ pub fn update_group(
 pub fn delete_group(state: State<'_, AppState>, group_id: String) -> Result<(), String> {
     state
         .mutate(|_, config| {
+            if config
+                .active_groups
+                .values()
+                .any(|g| g.group_id == group_id)
+            {
+                return Err(Error::invalid("请先停用正在使用的分组，再删除"));
+            }
             let before = config.groups.len();
             config.groups.retain(|g| g.id != group_id);
             if config.groups.len() == before {
@@ -157,4 +168,36 @@ pub fn apply_group(
 
 fn uuid_v4() -> String {
     uuid::Uuid::new_v4().to_string()
+}
+
+#[tauri::command(rename_all = "camelCase")]
+pub fn save_agent_group(
+    state: State<'_, AppState>,
+    group_id: Option<String>,
+    agent_id: String,
+    name: String,
+    skill_ids: Vec<String>,
+) -> Result<Group, String> {
+    state
+        .mutate(|studio, config| {
+            studio.save_agent_group(
+                config,
+                group_id.unwrap_or_else(uuid_v4),
+                &agent_id,
+                &name,
+                skill_ids,
+            )
+        })
+        .map_err(Into::into)
+}
+
+#[tauri::command(rename_all = "camelCase")]
+pub fn activate_agent_group(
+    state: State<'_, AppState>,
+    agent_id: String,
+    group_id: Option<String>,
+) -> Result<(), String> {
+    state
+        .activate_agent_group(&agent_id, group_id.as_deref())
+        .map_err(Into::into)
 }

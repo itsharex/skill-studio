@@ -52,8 +52,10 @@ impl AppState {
         F: FnOnce(&Studio, &mut AppConfig) -> Result<T>,
     {
         let mut guard = self.config_mut();
-        let outcome = f(&self.studio, &mut guard)?;
-        self.studio.save_config(&guard)?;
+        let mut next = guard.clone();
+        let outcome = f(&self.studio, &mut next)?;
+        self.studio.save_config(&next)?;
+        *guard = next;
         Ok(outcome)
     }
 
@@ -61,6 +63,28 @@ impl AppState {
     pub fn adopt_to_hub(&self, skill_id: &str) -> Result<skill_studio_core::models::skill::Skill> {
         let mut guard = self.config_mut();
         self.studio.adopt_to_hub(&mut guard, skill_id)
+    }
+
+    pub fn install_catalog_skill(
+        &self,
+        prepared: &skill_studio_core::services::marketplace::PreparedSkill,
+    ) -> Result<skill_studio_core::models::skill::Skill> {
+        let mut guard = self.config_mut();
+        self.studio.install_catalog_skill(&mut guard, prepared)
+    }
+
+    pub fn release_from_hub(
+        &self,
+        skill_id: &str,
+    ) -> Result<skill_studio_core::models::skill::Skill> {
+        let mut guard = self.config_mut();
+        self.studio.release_from_hub(&mut guard, skill_id)
+    }
+
+    pub fn activate_agent_group(&self, agent_id: &str, group_id: Option<&str>) -> Result<()> {
+        let mut guard = self.config_mut();
+        self.studio
+            .activate_agent_group(&mut guard, agent_id, group_id)
     }
 
     /// Native settings writes share the configuration write lock to prevent two

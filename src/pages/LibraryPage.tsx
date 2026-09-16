@@ -1,24 +1,34 @@
+import { InstallSkillsPage } from "@/pages/InstallSkillsPage";
+import { useMutation, useQueryClient } from "@tanstack/react-query";
+import { toast } from "sonner";
+import { PageTools } from "@/components/common/PageTools";
 import { useMemo, useState } from "react";
 import {
   FolderOpen,
+  Bot,
+  Undo2,
+  CircleHelp,
   Library,
-  MoreHorizontal,
-  PackagePlus,
-  Trash2,
   TriangleAlert,
   Warehouse,
+  Link2,
 } from "lucide-react";
+import { AgentIcon } from "@/components/common/AgentIcon";
+import {
+  hubCatalog,
+  hubSourceIds,
+  sourceAgentIds,
+  type HubCard,
+} from "@/lib/hubCatalog";
+import {
+  Dialog,
+  DialogContent,
+  DialogHeader,
+  DialogTitle,
+  DialogDescription,
+} from "@/components/ui/dialog";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
-import { Checkbox } from "@/components/ui/checkbox";
-import {
-  DropdownMenu,
-  DropdownMenuContent,
-  DropdownMenuItem,
-  DropdownMenuLabel,
-  DropdownMenuSeparator,
-  DropdownMenuTrigger,
-} from "@/components/ui/dropdown-menu";
 import {
   Tooltip,
   TooltipContent,
@@ -31,74 +41,147 @@ import {
   ListItemRow,
   RowActions,
 } from "@/components/common/ListItemRow";
-import { AgentIcon } from "@/components/common/AgentIcon";
-import { ListToolbar } from "@/components/common/ListToolbar";
-import { StatusDots } from "@/components/common/StatusDots";
-import {
-  useAdoptToHub,
-  useAgents,
-  useRegisterSkills,
-  useSkills,
-  useUnregisterSkills,
-} from "@/hooks/useData";
-import { systemApi } from "@/lib/api";
+import { useAdoptToHub, useAgents, useSkills } from "@/hooks/useData";
+import { skillsApi, systemApi } from "@/lib/api";
 import type { SkillView } from "@/types";
 
-export function LibraryPage() {
+export function LibraryPage({ onAdd }: { onAdd?: () => void } = {}) {
   const { data: skills = [], isLoading } = useSkills();
   const { data: agents = [] } = useAgents();
-  const register = useRegisterSkills();
-  const unregister = useUnregisterSkills();
   const adopt = useAdoptToHub();
+  const client = useQueryClient();
+  const [releaseTarget, setReleaseTarget] = useState<SkillView | null>(null);
+  const release = useMutation({
+    mutationFn: skillsApi.releaseFromHub,
+    onSuccess: () => {
+      setReleaseTarget(null);
+      setSourceCard(null);
+      toast.success("已移出 Hub 并还原到原始目录");
+    },
+    onError: (e) => toast.error(String(e)),
+    onSettled: () => client.invalidateQueries(),
+  });
 
+  const [sourceFilter, setSourceFilter] = useState<string | null>(null);
+  const [adding, setAdding] = useState(false);
   const [query, setQuery] = useState("");
-  const [selected, setSelected] = useState<Set<string>>(new Set());
   const [adoptTarget, setAdoptTarget] = useState<SkillView | null>(null);
 
-  const filtered = useMemo(() => {
-    const q = query.trim().toLowerCase();
-    if (!q) return skills;
-    return skills.filter(
-      (s) =>
-        s.name.toLowerCase().includes(q) ||
-        (s.displayName ?? "").toLowerCase().includes(q) ||
-        (s.description ?? "").toLowerCase().includes(q),
+  const [sourceCard, setSourceCard] = useState<HubCard | null>(null);
+  const catalog = useMemo(() => hubCatalog(skills), [skills]);
+  const selectedSourceCard = sourceCard
+    ? (catalog.find((c) => c.key === sourceCard.key) ?? null)
+    : null;
+  const matches = (card: HubCard) =>
+    card.sources.some((s) =>
+      `${s.name} ${s.displayName ?? ""} ${s.description ?? ""} ${s.sourcePath}`
+        .toLowerCase()
+        .includes(query.trim().toLowerCase()),
     );
-  }, [skills, query]);
+  const available = catalog.filter((c) => !c.unavailable);
+  const filtered = available.filter(
+    (c) =>
+      matches(c) && (!sourceFilter || hubSourceIds(c).includes(sourceFilter)),
+  );
+  const invalid = catalog.filter((c) => c.unavailable && matches(c));
 
-  const toggle = (id: string) => {
-    setSelected((prev) => {
-      const next = new Set(prev);
-      if (next.has(id)) next.delete(id);
-      else next.add(id);
-      return next;
-    });
-  };
+  const sourceOptions = [
+    ...agents.map((a) => ({
+      id: a.id,
+      label: a.displayName,
+      color:
+        a.id === "claude-code"
+          ? "bg-orange-500/10 text-orange-600 dark:text-orange-300"
+          : "bg-emerald-500/10 text-emerald-600 dark:text-emerald-300",
+    })),
+    {
+      id: "studio",
+      label: "Skill Studio",
+      color: "bg-blue-500/10 text-blue-600 dark:text-blue-300",
+    },
+    {
+      id: "agent",
+      label: "Agent",
+      color: "bg-violet-500/10 text-violet-600 dark:text-violet-300",
+    },
+  ];
+  for (const [id, label] of [
+    ["unknown", "来源待确认"],
+    ["external", "外部来源"],
+  ]) {
+    if (catalog.some((c) => hubSourceIds(c).includes(id)))
+      sourceOptions.push({
+        id,
+        label,
+        color: "bg-muted text-muted-foreground",
+      });
+  }
+  const summary = (
+    <div className="my-4 flex flex-wrap items-center justify-between gap-3 rounded-xl border border-border-default px-5 py-4">
+      <button
+        type="button"
+        aria-pressed={!sourceFilter}
+        onClick={() => setSourceFilter(null)}
+        title="显示全部来源"
+        className="rounded-full border px-3 py-1 text-sm font-medium transition-colors hover:bg-muted focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
+      >
+        已安装 {available.length} 个
+      </button>
+      <div
+        role="group"
+        aria-label="按来源筛选"
+        className="flex flex-wrap items-center gap-2"
+      >
+        {sourceOptions.map(({ id, label, color }) => {
+          const count = available.filter((c) =>
+            hubSourceIds(c).includes(id),
+          ).length;
+          return (
+            <button
+              key={id}
+              type="button"
+              aria-pressed={sourceFilter === id}
+              onClick={() => setSourceFilter(sourceFilter === id ? null : id)}
+              title={
+                id === "agent"
+                  ? "共享 Agent 目录（~/.agents/skills）"
+                  : `筛选 ${label} 来源`
+              }
+              className={`inline-flex items-center gap-1.5 rounded-full px-2.5 py-1 text-xs font-medium transition-colors hover:brightness-95 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring ${color} ${sourceFilter === id ? "ring-2 ring-current" : ""}`}
+            >
+              {id === "studio" ? (
+                <Warehouse className="h-3.5 w-3.5" />
+              ) : id === "agent" ? (
+                <Bot className="h-3.5 w-3.5" />
+              ) : id === "unknown" || id === "external" ? (
+                <CircleHelp className="h-3.5 w-3.5" />
+              ) : (
+                <AgentIcon agentId={id} className="h-3.5 w-3.5" />
+              )}
+              {label}: {count}
+            </button>
+          );
+        })}
+      </div>
+    </div>
+  );
 
-  const allVisibleSelected =
-    filtered.length > 0 && filtered.every((s) => selected.has(s.id));
-
-  const toggleAll = () => {
-    setSelected((prev) => {
-      if (allVisibleSelected) {
-        const next = new Set(prev);
-        filtered.forEach((s) => next.delete(s.id));
-        return next;
-      }
-      const next = new Set(prev);
-      filtered.forEach((s) => next.add(s.id));
-      return next;
-    });
-  };
-
-  const bulkRegister = (agentId: string) => {
-    register.mutate({ skillIds: Array.from(selected), agentIds: [agentId] });
-    setSelected(new Set());
-  };
-
+  const tools = (
+    <>
+      <PageTools
+        query={query}
+        onQueryChange={setQuery}
+        placeholder="按名称或描述搜索…"
+        createLabel="新增 skill"
+        onCreate={onAdd ?? (() => setAdding(true))}
+      />
+    </>
+  );
+  if (adding) return <InstallSkillsPage onBack={() => setAdding(false)} />;
   if (isLoading) {
     return (
       <div className="space-y-3 py-6">
+        {tools}
         {[0, 1, 2].map((i) => (
           <div
             key={i}
@@ -111,230 +194,423 @@ export function LibraryPage() {
 
   if (skills.length === 0) {
     return (
-      <EmptyState
-        icon={Library}
-        title="还没有发现任何 skill"
-        description={`已扫描各 agent 的全局 skill 目录与 Hub，都是空的。在 ${
-          agents[0]?.globalSkillDirs[0] ?? "~/.claude/skills"
-        } 下建一个含 SKILL.md 的文件夹就会出现在这里。`}
-      />
+      <>
+        {tools}
+        {summary}
+        <EmptyState
+          icon={Library}
+          title="Skill Hub 还没有发现 skill"
+          description={`已扫描各 agent 的全局 skill 目录与 Hub，都是空的。在 ${
+            agents[0]?.globalSkillDirs[0] ?? "~/.claude/skills"
+          } 下建一个含 SKILL.md 的文件夹就会出现在这里。`}
+        />
+      </>
     );
   }
 
   return (
     <div className="flex min-h-0 flex-1 flex-col">
-      <ListToolbar
-        count={filtered.length}
-        total={skills.length}
-        unit="个 skill"
-        query={query}
-        onQueryChange={setQuery}
-        placeholder="按名称或描述搜索…"
-      >
-        {selected.size > 0 && (
-          <>
-            <span className="text-sm text-muted-foreground">
-              已选 {selected.size}
-            </span>
-            <DropdownMenu>
-              <DropdownMenuTrigger asChild>
-                <Button size="sm">
-                  <PackagePlus className="h-4 w-4" />
-                  注册到…
-                </Button>
-              </DropdownMenuTrigger>
-              <DropdownMenuContent align="end">
-                <DropdownMenuLabel>注册到 agent</DropdownMenuLabel>
-                {agents.map((a) => (
-                  <DropdownMenuItem
-                    key={a.id}
-                    onClick={() => bulkRegister(a.id)}
-                    disabled={!a.detected}
-                  >
-                    <AgentIcon agentId={a.id} className="h-4 w-4" />
-                    {a.displayName}
-                    {!a.detected && (
-                      <span className="ml-auto text-[10px] text-muted-foreground">
-                        未安装
-                      </span>
-                    )}
-                  </DropdownMenuItem>
-                ))}
-                <DropdownMenuSeparator />
-                <DropdownMenuItem
-                  destructive
-                  onClick={() => {
-                    unregister.mutate({
-                      skillIds: Array.from(selected),
-                      agentIds: agents.map((a) => a.id),
-                    });
-                    setSelected(new Set());
-                  }}
-                >
-                  <Trash2 className="h-4 w-4" />
-                  从所有 agent 移除
-                </DropdownMenuItem>
-              </DropdownMenuContent>
-            </DropdownMenu>
-            <Button
-              variant="ghost"
-              size="sm"
-              onClick={() => setSelected(new Set())}
-            >
-              取消选择
-            </Button>
-          </>
-        )}
-      </ListToolbar>
+      {tools}
+      {summary}
 
       <div className="min-h-0 flex-1 overflow-y-auto pb-6">
-        <ListContainer>
-          <ListItemRow className="bg-muted/30 py-2">
-            <Checkbox
-              checked={allVisibleSelected}
-              onCheckedChange={toggleAll}
-              aria-label="全选"
-            />
-            <span className="text-xs font-medium text-muted-foreground">
-              名称
-            </span>
-            <span className="ml-auto text-xs font-medium text-muted-foreground">
-              各 agent 状态
-            </span>
-          </ListItemRow>
-
-          {filtered.map((skill, i) => (
-            <ListItemRow key={skill.id} isLast={i === filtered.length - 1}>
-              <Checkbox
-                checked={selected.has(skill.id)}
-                onCheckedChange={() => toggle(skill.id)}
-                aria-label={`选择 ${skill.name}`}
-              />
-
-              <div className="min-w-0 flex-1">
-                <div className="flex flex-wrap items-center gap-2">
-                  <span className="truncate text-sm font-medium">
-                    {skill.name}
-                  </span>
-                  {skill.origin.kind === "hub" ? (
-                    <Badge variant="outline" className="h-4 px-1.5 text-[10px]">
-                      Hub 托管
-                    </Badge>
-                  ) : skill.origin.kind === "external" ? (
-                    <Badge variant="outline" className="h-4 px-1.5 text-[10px]">
-                      外部来源
-                    </Badge>
-                  ) : (
-                    <Badge variant="outline" className="h-4 px-1.5 text-[10px]">
-                      原地 · {agentName(agents, skill.origin.ownerAgent)}
-                    </Badge>
-                  )}
-                  {skill.malformedFrontmatter && (
-                    <span
-                      className="text-xs text-red-600"
-                      title={skill.frontmatterError ?? undefined}
-                    >
-                      YAML 格式错误
+        <ListContainer cards>
+          {filtered.map((card) => {
+            const skill = card.skill;
+            const origins = hubSourceIds(card);
+            return (
+              <ListItemRow key={card.key} card>
+                <div className="min-w-0 flex-1">
+                  <div className="flex flex-wrap items-center gap-2">
+                    <span className="truncate text-sm font-medium">
+                      {skill.name}
                     </span>
-                  )}
-                  {skill.diagnostics?.map((message) => (
-                    <span key={message} className="text-xs text-red-600">
-                      {message}
-                    </span>
-                  ))}
-                  {skill.frontmatterExtra.length > 0 && (
-                    <Tooltip>
-                      <TooltipTrigger asChild>
-                        <span className="inline-flex cursor-default items-center gap-0.5 rounded-md bg-amber-100 px-1.5 py-0.5 text-[10px] font-semibold text-amber-700 dark:bg-amber-500/20 dark:text-amber-300">
-                          <TriangleAlert className="h-3 w-3" />
-                          跨端
-                        </span>
-                      </TooltipTrigger>
-                      <TooltipContent>
-                        <p className="font-medium">
-                          含非可移植 frontmatter 字段
-                        </p>
-                        <p className="pt-0.5 font-mono text-[10px]">
-                          {skill.frontmatterExtra.join(", ")}
-                        </p>
-                        <p className="pt-1 text-muted-foreground">
-                          这些字段是 Claude Code 专有的：注册到 Codex
-                          后会被忽略， 上传到 claude.ai 会直接报错。
-                        </p>
-                      </TooltipContent>
-                    </Tooltip>
+                    {origins.map((id) => (
+                      <span
+                        key={id}
+                        role="img"
+                        aria-label={`来源：${sourceOptions.find((o) => o.id === id)?.label ?? id}`}
+                        title={`${sourceOptions.find((o) => o.id === id)?.label ?? id}\n${card.sources
+                          .filter((s) =>
+                            hubSourceIds({ ...card, sources: [s] }).includes(
+                              id,
+                            ),
+                          )
+                          .map((s) => s.sourcePath)
+                          .join("\n")}`}
+                      >
+                        {id === "agent" ? (
+                          <Bot className="h-4 w-4 text-violet-500" />
+                        ) : id === "studio" ? (
+                          <Warehouse className="h-4 w-4 text-blue-500" />
+                        ) : id === "unknown" || id === "external" ? (
+                          <CircleHelp className="h-4 w-4 text-muted-foreground" />
+                        ) : (
+                          <AgentIcon agentId={id} className="h-4 w-4" />
+                        )}
+                      </span>
+                    ))}
+                    {card.sources.some((s) => s.origin.kind === "hub") && (
+                      <Badge
+                        variant="outline"
+                        className="h-4 px-1.5 text-[10px]"
+                      >
+                        Hub 托管
+                      </Badge>
+                    )}
+                    {!origins.length &&
+                      !card.sources.some((s) => s.origin.kind === "hub") && (
+                        <Badge variant="outline">外部来源</Badge>
+                      )}
+                    {card.sources.length > 1 && (
+                      <button
+                        className="text-xs text-muted-foreground hover:text-foreground"
+                        onClick={() => setSourceCard(card)}
+                      >
+                        {card.sources.length} 个来源
+                      </button>
+                    )}
+                    {catalog.filter(
+                      (c) => !c.unavailable && c.skill.name === skill.name,
+                    ).length > 1 && (
+                      <Badge variant="warning">同名 · 内容不同</Badge>
+                    )}
+                    {skill.malformedFrontmatter && (
+                      <span
+                        className="text-xs text-red-600"
+                        title={skill.frontmatterError ?? undefined}
+                      >
+                        YAML 格式错误
+                      </span>
+                    )}
+                    {skill.diagnostics?.map((message) => (
+                      <span key={message} className="text-xs text-red-600">
+                        {message}
+                      </span>
+                    ))}
+                    {skill.frontmatterExtra.length > 0 && (
+                      <Tooltip>
+                        <TooltipTrigger asChild>
+                          <span className="inline-flex cursor-default items-center gap-0.5 rounded-md bg-amber-100 px-1.5 py-0.5 text-[10px] font-semibold text-amber-700 dark:bg-amber-500/20 dark:text-amber-300">
+                            <TriangleAlert className="h-3 w-3" />
+                            跨端
+                          </span>
+                        </TooltipTrigger>
+                        <TooltipContent>
+                          <p className="font-medium">
+                            含非可移植 frontmatter 字段
+                          </p>
+                          <p className="pt-0.5 font-mono text-[10px]">
+                            {skill.frontmatterExtra.join(", ")}
+                          </p>
+                          <p className="pt-1 text-muted-foreground">
+                            这些字段是 Claude Code 专有的：注册到 Codex
+                            后会被忽略， 上传到 claude.ai 会直接报错。
+                          </p>
+                        </TooltipContent>
+                      </Tooltip>
+                    )}
+                  </div>
+                  {skill.description && (
+                    <p className="truncate pt-0.5 text-xs text-muted-foreground">
+                      {skill.description}
+                    </p>
                   )}
                 </div>
-                {skill.description && (
-                  <p className="truncate pt-0.5 text-xs text-muted-foreground">
-                    {skill.description}
+
+                <RowActions>
+                  {card.sources.length === 1 &&
+                    skill.origin.kind === "hub" &&
+                    skill.provenance && (
+                      <Button
+                        variant="ghost"
+                        size="icon"
+                        title="移出 Hub 并还原"
+                        aria-label={`还原 ${skill.name} 到原位置`}
+                        disabled={release.isPending}
+                        onClick={() => setReleaseTarget(skill)}
+                      >
+                        <Undo2 className="h-4 w-4" />
+                      </Button>
+                    )}
+                  <Button
+                    variant="ghost"
+                    size="icon"
+                    className="h-8 w-8"
+                    title={
+                      card.sources.length > 1 ||
+                      skill.origin.kind === "hub" ||
+                      !!skill.provenance
+                        ? "查看来源与收录记录"
+                        : "打开所在目录"
+                    }
+                    aria-label={
+                      card.sources.length > 1 ||
+                      skill.origin.kind === "hub" ||
+                      !!skill.provenance
+                        ? `查看 ${skill.name} 的来源`
+                        : `打开 ${skill.name} 所在目录`
+                    }
+                    onClick={() =>
+                      card.sources.length > 1 ||
+                      skill.origin.kind === "hub" ||
+                      !!skill.provenance
+                        ? setSourceCard(card)
+                        : void systemApi.revealPath(skill.sourcePath)
+                    }
+                  >
+                    <FolderOpen className="h-4 w-4" />
+                  </Button>
+                  {card.sources.length === 1 &&
+                    skill.origin.kind === "inPlace" && (
+                      <Button
+                        variant="ghost"
+                        size="icon"
+                        className="h-8 w-8"
+                        title="收编到 Hub"
+                        aria-label={`收编 ${skill.name} 到 Hub`}
+                        disabled={adopt.isPending}
+                        onClick={() => setAdoptTarget(skill)}
+                      >
+                        <Warehouse className="h-4 w-4" />
+                      </Button>
+                    )}
+                </RowActions>
+              </ListItemRow>
+            );
+          })}
+        </ListContainer>
+        {!filtered.length && (
+          <p className="py-6 text-center text-sm text-muted-foreground">
+            {query || sourceFilter ? "没有匹配的可用 skill" : "暂无可用 skill"}
+          </p>
+        )}
+        {invalid.length > 0 && (
+          <details className="mt-5 rounded-xl border border-amber-500/30 bg-amber-500/5 p-4">
+            <summary className="cursor-pointer text-sm font-medium">
+              失效来源（{invalid.length}）
+            </summary>
+            <p className="mt-2 text-xs text-muted-foreground">
+              这些入口暂时不可用，已保留原链接。恢复目标目录后会重新扫描显示。
+            </p>
+            <div className="mt-3 space-y-3">
+              {invalid.map((card) => (
+                <div
+                  key={card.key}
+                  className="flex items-center gap-3 rounded-lg border bg-background p-3"
+                >
+                  <div className="min-w-0 flex-1">
+                    <div className="flex items-center gap-2">
+                      <span className="text-sm font-medium">
+                        {card.skill.name}
+                      </span>
+                      {sourceAgentIds(card.skill).map((id) => (
+                        <span
+                          key={id}
+                          role="img"
+                          aria-label={`来源：${agentName(agents, id)}`}
+                          title={agentName(agents, id)}
+                        >
+                          <AgentIcon agentId={id} className="h-4 w-4" />
+                        </span>
+                      ))}
+                    </div>
+                    <p className="mt-1 text-xs text-amber-700 dark:text-amber-400">
+                      {card.skill.diagnostics?.join("；")}
+                    </p>
+                  </div>
+                  <Button
+                    variant="ghost"
+                    size="sm"
+                    onClick={() => setSourceCard(card)}
+                  >
+                    <Link2 className="h-4 w-4" />
+                    查看来源
+                  </Button>
+                </div>
+              ))}
+            </div>
+          </details>
+        )}
+      </div>
+
+      <Dialog
+        open={selectedSourceCard !== null}
+        onOpenChange={(open) => {
+          if (!open) setSourceCard(null);
+        }}
+      >
+        <DialogContent className="sm:max-w-2xl">
+          <DialogHeader>
+            <DialogTitle>{selectedSourceCard?.skill.name} · 来源</DialogTitle>
+            <DialogDescription>
+              {selectedSourceCard?.unavailable
+                ? "查看失效入口与目标路径；不会自动删除链接。"
+                : "相同内容合并展示，各来源文件与分组引用保持独立。"}
+            </DialogDescription>
+          </DialogHeader>
+          <div className="min-h-0 space-y-3 overflow-y-auto px-6 py-4">
+            {selectedSourceCard?.sources.map((source) => (
+              <div key={source.id} className="rounded-xl border p-4">
+                <div className="mb-2 flex items-center gap-2">
+                  {sourceAgentIds(source).map((id) => (
+                    <span
+                      key={id}
+                      className="inline-flex items-center gap-1 text-xs"
+                    >
+                      <AgentIcon agentId={id} className="h-4 w-4" />
+                      {agentName(agents, id)}
+                    </span>
+                  ))}
+                  {source.origin.kind === "hub" && (
+                    <Badge variant="outline">Hub 托管</Badge>
+                  )}
+                </div>
+                <p className="break-all font-mono text-xs">
+                  {source.sourcePath}
+                </p>
+                {sourceAgentIds(source).flatMap((id) =>
+                  (source.agents[id]?.entryPaths ?? [])
+                    .filter((p) => p !== source.sourcePath)
+                    .map((p) => (
+                      <p
+                        key={`${id}:${p}`}
+                        className="mt-2 break-all text-xs text-muted-foreground"
+                      >
+                        {agentName(agents, id)} 入口：{p}
+                      </p>
+                    )),
+                )}
+                {source.installation && (
+                  <p className="mt-3 break-all text-xs text-muted-foreground">
+                    由 Skill Studio{" "}
+                    {source.installation.source.startsWith("local:")
+                      ? "导入"
+                      : "安装"}{" "}
+                    · {source.installation.source.replace(/^local:/, "")} ·{" "}
+                    {source.installation.repositoryPath || "/"}
                   </p>
                 )}
-              </div>
-
-              <StatusDots skill={skill} agents={agents} />
-
-              <RowActions>
-                <DropdownMenu>
-                  <DropdownMenuTrigger asChild>
+                {source.provenance && (
+                  <div className="mt-3 space-y-2 text-xs text-muted-foreground">
+                    <p className="break-all">
+                      收录前位置：{source.provenance.originalPath}
+                    </p>
+                    <p className="break-all">
+                      原始备份：{source.provenance.backupPath}
+                    </p>
                     <Button
                       variant="ghost"
-                      size="icon"
-                      className="h-7 w-7"
-                      aria-label={`${skill.name} 的更多操作`}
+                      size="sm"
+                      onClick={() =>
+                        void systemApi.revealPath(source.provenance!.backupPath)
+                      }
                     >
-                      <MoreHorizontal className="h-4 w-4" />
+                      打开备份目录
                     </Button>
-                  </DropdownMenuTrigger>
-                  <DropdownMenuContent align="end">
-                    <DropdownMenuLabel>注册到</DropdownMenuLabel>
-                    {agents.map((a) => {
-                      const st = skill.agents[a.id]?.status;
-                      const isSource = st === "source";
-                      return (
-                        <DropdownMenuItem
-                          key={a.id}
-                          disabled={isSource || !a.detected}
+                  </div>
+                )}
+                {source.origin.kind === "hub" &&
+                  !source.provenance &&
+                  !source.installation && (
+                    <p className="mt-2 text-xs text-amber-700">
+                      缺少历史收录记录，无法确认原始来源和还原路径。不会自动迁移或删除。
+                    </p>
+                  )}
+                {source.diagnostics?.map((message) => (
+                  <p key={message} className="mt-2 text-xs text-amber-700">
+                    {message}
+                  </p>
+                ))}
+                <div className="mt-3 flex justify-end gap-2">
+                  {source.origin.kind === "hub" && source.provenance && (
+                    <Button
+                      variant="outline"
+                      size="sm"
+                      disabled={release.isPending}
+                      onClick={() => setReleaseTarget(source)}
+                    >
+                      <Undo2 className="h-4 w-4" />
+                      移出 Hub 并还原
+                    </Button>
+                  )}
+                  {selectedSourceCard.unavailable ? (
+                    sourceAgentIds(source).flatMap((id) =>
+                      (source.agents[id]?.entryPaths ?? []).map((path) => (
+                        <Button
+                          key={`${id}:${path}`}
+                          variant="outline"
+                          size="sm"
+                          title={path}
                           onClick={() =>
-                            register.mutate({
-                              skillIds: [skill.id],
-                              agentIds: [a.id],
-                            })
+                            void systemApi.revealPath(
+                              path.replace(/[/\\][^/\\]+$/, ""),
+                            )
                           }
                         >
-                          <AgentIcon agentId={a.id} className="h-4 w-4" />
-                          {a.displayName}
-                          {isSource && (
-                            <span className="ml-auto text-[10px] text-muted-foreground">
-                              真身在此
-                            </span>
-                          )}
-                        </DropdownMenuItem>
-                      );
-                    })}
-                    <DropdownMenuSeparator />
-                    <DropdownMenuItem
+                          <FolderOpen className="h-4 w-4" />
+                          打开 {agentName(agents, id)} 入口目录
+                        </Button>
+                      )),
+                    )
+                  ) : (
+                    <Button
+                      variant="outline"
+                      size="sm"
                       onClick={() =>
-                        void systemApi.revealPath(skill.sourcePath)
+                        void systemApi.revealPath(source.sourcePath)
                       }
                     >
                       <FolderOpen className="h-4 w-4" />
-                      打开所在目录
-                    </DropdownMenuItem>
-                    {skill.origin.kind === "inPlace" && (
-                      <DropdownMenuItem onClick={() => setAdoptTarget(skill)}>
+                      打开来源目录
+                    </Button>
+                  )}
+                  {!selectedSourceCard.unavailable &&
+                    source.origin.kind === "inPlace" && (
+                      <Button
+                        variant="outline"
+                        size="sm"
+                        disabled={adopt.isPending}
+                        onClick={() => {
+                          setSourceCard(null);
+                          setAdoptTarget(source);
+                        }}
+                      >
                         <Warehouse className="h-4 w-4" />
-                        收编到 Hub
-                      </DropdownMenuItem>
+                        收编此来源
+                      </Button>
                     )}
-                  </DropdownMenuContent>
-                </DropdownMenu>
-              </RowActions>
-            </ListItemRow>
-          ))}
-        </ListContainer>
-      </div>
+                </div>
+              </div>
+            ))}
+          </div>
+        </DialogContent>
+      </Dialog>
 
+      <ConfirmDialog
+        open={releaseTarget !== null}
+        onOpenChange={(open) => {
+          if (!open && !release.isPending) setReleaseTarget(null);
+        }}
+        variant="info"
+        title="移出 Hub 并还原"
+        confirmText="还原到原位置"
+        pending={release.isPending}
+        description={
+          <>
+            <span>
+              将当前 Hub
+              内容还原到收录前的位置，保留收录前和本次还原前的完整备份，并更新分组、项目与链接引用。原位置有冲突或副本被修改时会停止，不覆盖文件。
+            </span>
+            <span className="mt-2 block break-all font-mono text-xs">
+              {releaseTarget?.provenance?.originalPath}
+            </span>
+          </>
+        }
+        onConfirm={() => {
+          if (releaseTarget) release.mutate(releaseTarget.id);
+        }}
+      />
       <ConfirmDialog
         open={adoptTarget !== null}
         onOpenChange={(o) => !o && setAdoptTarget(null)}
@@ -347,7 +623,10 @@ export function LibraryPage() {
             会把 <span className="font-mono">{adoptTarget?.name}</span> 的真身
             移动到 Hub 目录集中托管，原位置按默认方式保留链接或副本，
             <span className="font-medium">该 agent 仍可正常使用</span>。
-            这一步会移动文件。
+            移动前会保存完整备份及原始来源，来源统计保持不变，可从 Hub 还原。
+            <span className="mt-2 block break-all font-mono text-xs">
+              {adoptTarget?.sourcePath}
+            </span>
           </>
         }
         onConfirm={() => {

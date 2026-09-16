@@ -6,7 +6,6 @@ import {
   agentState,
   claudeAgent,
   codexAgent,
-  emptyReport,
   handlers,
   makeSkill,
 } from "./mocks/tauri";
@@ -26,12 +25,14 @@ function setup(skills = [makeSkill()]) {
   handlers.set("scan_skills", () => skills);
 }
 
-describe("全局 Skill 页（需求 1）", () => {
+describe("Skill Hub", () => {
   it("空状态给出可操作的引导，而不是一句「暂无数据」", async () => {
     handlers.set("list_agents", () => [claudeAgent]);
     handlers.set("scan_skills", () => []);
     renderWithProviders(<LibraryPage />);
-    expect(await screen.findByText("还没有发现任何 skill")).toBeInTheDocument();
+    expect(
+      await screen.findByText("Skill Hub 还没有发现 skill"),
+    ).toBeInTheDocument();
     // 提示里要带上实际扫描的目录，用户才知道该往哪放
     expect(screen.getByText(/\.claude\/skills/)).toBeInTheDocument();
   });
@@ -41,7 +42,9 @@ describe("全局 Skill 页（需求 1）", () => {
     renderWithProviders(<LibraryPage />);
     expect(await screen.findByText("pdf-tools")).toBeInTheDocument();
     expect(screen.getByText("处理 PDF")).toBeInTheDocument();
-    expect(screen.getByText(/原地 · Claude Code/)).toBeInTheDocument();
+    expect(
+      screen.getByRole("img", { name: "来源：Claude Code" }),
+    ).toBeInTheDocument();
   });
 
   it("Hub 托管的 skill 用不同徽标区分", async () => {
@@ -72,66 +75,339 @@ describe("全局 Skill 页（需求 1）", () => {
     });
   });
 
-  it("勾选后出现批量操作入口，并带上已选数量", async () => {
-    setup([
-      makeSkill({ id: "a", name: "a" }),
-      makeSkill({ id: "b", name: "b" }),
-    ]);
-    handlers.set("register_skills", () => emptyReport());
-    const user = userEvent.setup();
-    renderWithProviders(<LibraryPage />);
-    await screen.findByText("a");
-
-    await user.click(screen.getByLabelText("选择 a"));
-    await user.click(screen.getByLabelText("选择 b"));
-
-    expect(screen.getByText("已选 2")).toBeInTheDocument();
-    expect(screen.getByRole("button", { name: /注册到…/ })).toBeInTheDocument();
-    expect(
-      screen.getByRole("button", { name: "取消选择" }),
-    ).toBeInTheDocument();
-  });
-
-  it("取消选择会收起批量操作入口", async () => {
-    setup([makeSkill({ id: "a", name: "a" })]);
-    const user = userEvent.setup();
-    renderWithProviders(<LibraryPage />);
-    await screen.findByText("a");
-
-    await user.click(screen.getByLabelText("选择 a"));
-    await user.click(screen.getByRole("button", { name: "取消选择" }));
-    expect(screen.queryByText(/已选/)).not.toBeInTheDocument();
-  });
-
-  it("全选只作用于当前筛选结果", async () => {
-    setup([
-      makeSkill({ id: "a", name: "alpha" }),
-      makeSkill({ id: "b", name: "beta" }),
-    ]);
-    const user = userEvent.setup({ pointerEventsCheck: 0 });
-    renderWithProviders(<LibraryPage />);
-    await screen.findByText("alpha");
-
-    await user.type(screen.getByPlaceholderText("按名称或描述搜索…"), "alpha");
-    await waitFor(() =>
-      expect(screen.queryByText("beta")).not.toBeInTheDocument(),
-    );
-    await user.click(screen.getByLabelText("全选"));
-    expect(screen.getByText("已选 1")).toBeInTheDocument();
-  });
-
-  it("被占用的目标以 Foreign 状态呈现", async () => {
-    setup([
-      makeSkill({
-        agents: {
-          "claude-code": agentState("source"),
-          codex: agentState("foreign"),
-        },
-      }),
-    ]);
+  it("Hub only exposes collection actions, not registration or removal", async () => {
+    setup();
     renderWithProviders(<LibraryPage />);
     await screen.findByText("pdf-tools");
-    // 状态点带 tooltip，这里只断言渲染出了两个 agent 的状态标签
-    expect(screen.getAllByText("Codex").length).toBeGreaterThan(0);
+    expect(
+      screen.getByRole("button", { name: "打开 pdf-tools 所在目录" }),
+    ).toBeInTheDocument();
+    expect(
+      screen.getByRole("button", { name: "收编 pdf-tools 到 Hub" }),
+    ).toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: /注册|移除/ })).toBeNull();
+    expect(screen.queryByRole("checkbox")).toBeNull();
   });
+});
+
+it("merges identical sources into one card and shows both origin logos", async () => {
+  setup([
+    makeSkill({
+      id: "one",
+      sourcePath: "/codex/pdf",
+      origin: { kind: "inPlace", ownerAgent: "codex" },
+      agents: {
+        codex: agentState("source"),
+        "claude-code": agentState("foreign"),
+      },
+    }),
+    makeSkill({
+      id: "two",
+      sourcePath: "/claude/pdf",
+      origin: { kind: "external" },
+      agents: {
+        codex: agentState("conflict"),
+        "claude-code": agentState("linked"),
+      },
+    }),
+  ]);
+  renderWithProviders(<LibraryPage />);
+  expect(await screen.findAllByText("pdf-tools")).toHaveLength(1);
+  expect(screen.getByRole("img", { name: "来源：Codex" })).toBeInTheDocument();
+  expect(
+    screen.getByRole("img", { name: "来源：Claude Code" }),
+  ).toBeInTheDocument();
+  const user = userEvent.setup();
+  await user.click(screen.getByRole("button", { name: "2 个来源" }));
+  expect(screen.getByText("/codex/pdf")).toBeInTheDocument();
+  expect(screen.getByText("/claude/pdf")).toBeInTheDocument();
+  expect(screen.getAllByRole("button", { name: "收编此来源" })).toHaveLength(1);
+});
+
+it("keeps differing contents separate and does not label foreign registrations as origins", async () => {
+  setup([
+    makeSkill({
+      id: "a",
+      sourcePath: "/a/pdf",
+      contentHash: "a",
+      agents: {
+        "claude-code": agentState("source"),
+        codex: agentState("foreign"),
+      },
+    }),
+    makeSkill({
+      id: "b",
+      sourcePath: "/b/pdf",
+      contentHash: "b",
+      agents: {
+        "claude-code": agentState("source"),
+        codex: agentState("conflict"),
+      },
+    }),
+  ]);
+  renderWithProviders(<LibraryPage />);
+  expect(await screen.findAllByText("pdf-tools")).toHaveLength(2);
+  expect(screen.getAllByText("同名 · 内容不同")).toHaveLength(2);
+  expect(screen.queryByRole("img", { name: "来源：Codex" })).toBeNull();
+});
+
+it("keeps broken links in a separate folded section with actual entry paths", async () => {
+  setup([
+    makeSkill({
+      id: "broken",
+      name: "broken",
+      origin: { kind: "external" },
+      contentHash: "",
+      sourcePath: "/missing/target",
+      diagnostics: ["目标目录不存在"],
+      agents: {
+        codex: {
+          ...agentState("brokenLink"),
+          entryPaths: ["/codex/skills/alias"],
+        },
+      },
+    }),
+  ]);
+  renderWithProviders(<LibraryPage />);
+  const summary = await screen.findByText("失效来源（1）");
+  expect(summary.closest("details")).not.toHaveAttribute("open");
+  const user = userEvent.setup();
+  await user.click(summary);
+  expect(screen.getByText("目标目录不存在")).toBeVisible();
+  await user.click(screen.getByRole("button", { name: "查看来源" }));
+  expect(screen.getByText("/missing/target")).toBeVisible();
+  expect(screen.getByText("Codex 入口：/codex/skills/alias")).toBeVisible();
+  expect(screen.queryByRole("button", { name: /删除|收编此来源/ })).toBeNull();
+});
+
+it("counts unique cards per installation source and combines source filtering with search", async () => {
+  handlers.set("list_agents", () => [claudeAgent, codexAgent]);
+  handlers.set("scan_skills", () => [
+    makeSkill({ id: "a", name: "Shared", contentHash: "same" }),
+    makeSkill({
+      id: "b",
+      name: "Shared",
+      contentHash: "same",
+      sourcePath: "/home/u/.codex/skills/shared",
+      root: "/home/u/.codex/skills",
+      origin: { kind: "inPlace", ownerAgent: "codex" },
+      agents: {
+        codex: agentState("source"),
+        "claude-code": agentState("foreign"),
+      },
+    }),
+    makeSkill({
+      id: "hub",
+      name: "StudioOnly",
+      sourceIds: ["studio"],
+      origin: { kind: "hub" },
+      agents: {},
+    }),
+    makeSkill({
+      id: "neutral",
+      name: "Neutral",
+      root: "/home/u/.agents/skills",
+      sourcePath: "/home/u/.agents/skills/neutral",
+      origin: { kind: "inPlace", ownerAgent: "codex" },
+      agents: {
+        codex: {
+          ...agentState("source"),
+          entryPaths: ["/home/u/.agents/skills/neutral"],
+        },
+      },
+    }),
+    makeSkill({ id: "broken", name: "Broken", diagnostics: ["目标不存在"] }),
+  ]);
+  const user = userEvent.setup();
+  renderWithProviders(<LibraryPage />);
+  expect(
+    await screen.findByRole("button", { name: "已安装 3 个" }),
+  ).toBeInTheDocument();
+  expect(
+    screen.getByRole("button", { name: "Claude Code: 1" }),
+  ).toBeInTheDocument();
+  expect(screen.getByRole("button", { name: "Codex: 1" })).toBeInTheDocument();
+  expect(
+    screen.getByRole("button", { name: "Skill Studio: 1" }),
+  ).toBeInTheDocument();
+  await user.click(screen.getByRole("button", { name: "Claude Code: 1" }));
+  expect(screen.getAllByText("Shared")).toHaveLength(1);
+  expect(screen.queryByText("StudioOnly")).toBeNull();
+  await user.type(screen.getByPlaceholderText("按名称或描述搜索…"), "Neutral");
+  expect(screen.getByText("没有匹配的可用 skill")).toBeInTheDocument();
+  await user.click(screen.getByRole("button", { name: "Agent: 1" }));
+  expect(screen.getByText("Neutral")).toBeInTheDocument();
+  expect(
+    screen.getByRole("button", { name: "已安装 3 个" }),
+  ).toBeInTheDocument();
+  await user.click(screen.getByRole("button", { name: "清除搜索" }));
+  await user.click(screen.getByRole("button", { name: "已安装 3 个" }));
+  expect(screen.getByText("StudioOnly")).toBeInTheDocument();
+  expect(screen.getByRole("button", { name: "Agent: 1" })).toHaveAttribute(
+    "aria-pressed",
+    "false",
+  );
+});
+
+it("shows Agent and Codex logos for a shared skill with a Codex copy, matching the counters", async () => {
+  handlers.set("list_agents", () => [claudeAgent, codexAgent]);
+  handlers.set("scan_skills", () => [
+    makeSkill({
+      name: "yuque",
+      sourceIds: ["agent", "codex"],
+      sourcePath: "/home/u/.agents/skills/yuque",
+      root: "/home/u/.agents/skills",
+      origin: { kind: "external" },
+      agents: {
+        codex: {
+          ...agentState("copied"),
+          entryPaths: [
+            "/home/u/.codex/skills/yuque",
+            "/home/u/.agents/skills/yuque",
+          ],
+        },
+      },
+    }),
+  ]);
+  renderWithProviders(<LibraryPage />);
+  expect(
+    await screen.findByRole("img", { name: "来源：Agent" }),
+  ).toBeInTheDocument();
+  expect(screen.getByRole("img", { name: "来源：Codex" })).toBeInTheDocument();
+  expect(screen.getByRole("button", { name: "Agent: 1" })).toBeInTheDocument();
+  expect(screen.getByRole("button", { name: "Codex: 1" })).toBeInTheDocument();
+  expect(
+    screen.getByRole("button", { name: "已安装 1 个" }),
+  ).toBeInTheDocument();
+});
+
+it("keeps original source counts for collected cards and restores via the source record", async () => {
+  handlers.set("list_agents", () => [claudeAgent, codexAgent]);
+  let collected = true;
+  const provenance = {
+    sourceIds: ["agent", "codex"],
+    originalPath: "/home/u/.agents/skills/yuque",
+    originalRoot: "/home/u/.agents/skills",
+    originalOrigin: { kind: "inPlace" as const, ownerAgent: "codex" },
+    backupPath: "/home/u/.skill-studio/skill-backups/snapshot",
+    originalHash: "abc",
+    collectedAt: 1,
+    entryPaths: [],
+  };
+  handlers.set("scan_skills", () => [
+    makeSkill({
+      id: collected ? "hub-id" : "original-id",
+      name: "yuque",
+      sourceIds: ["agent", "codex"],
+      provenance,
+      origin: collected ? { kind: "hub" } : provenance.originalOrigin,
+      sourcePath: collected
+        ? "/home/u/.skill-studio/skills/yuque"
+        : provenance.originalPath,
+      agents: {},
+    }),
+  ]);
+  handlers.set("release_from_hub", (args) => {
+    expect(args.skillId).toBe("hub-id");
+    collected = false;
+    return {};
+  });
+  const user = userEvent.setup();
+  renderWithProviders(<LibraryPage />);
+  expect(
+    await screen.findByRole("button", { name: "Skill Studio: 0" }),
+  ).toBeInTheDocument();
+  expect(screen.getByRole("button", { name: "Agent: 1" })).toBeInTheDocument();
+  expect(screen.getByRole("button", { name: "Codex: 1" })).toBeInTheDocument();
+  await user.click(screen.getByRole("button", { name: "还原 yuque 到原位置" }));
+  expect(screen.getByRole("dialog")).toHaveTextContent(provenance.originalPath);
+  await user.click(screen.getByRole("button", { name: "还原到原位置" }));
+  await waitFor(() => expect(screen.queryByRole("dialog")).toBeNull());
+  expect(
+    screen.getByRole("button", { name: "Skill Studio: 0" }),
+  ).toBeInTheDocument();
+  expect(screen.getByRole("button", { name: "Codex: 1" })).toBeInTheDocument();
+  expect(screen.getByRole("button", { name: "Agent: 1" })).toBeInTheDocument();
+  expect(
+    screen.queryByRole("button", { name: "还原 yuque 到原位置" }),
+  ).toBeNull();
+});
+
+it("does not invent a source or offer automatic restoration for historical Hub items", async () => {
+  handlers.set("scan_skills", () => [
+    makeSkill({ name: "legacy", origin: { kind: "hub" }, agents: {} }),
+  ]);
+  renderWithProviders(<LibraryPage />);
+  expect(
+    await screen.findByRole("button", { name: "来源待确认: 1" }),
+  ).toBeInTheDocument();
+  expect(
+    screen.getByRole("button", { name: "Skill Studio: 0" }),
+  ).toBeInTheDocument();
+  expect(screen.queryByRole("button", { name: /还原 .* 到原位置/ })).toBeNull();
+});
+
+it("collects and restores one source of a merged card while retaining unique source counters", async () => {
+  handlers.set("list_agents", () => [claudeAgent, codexAgent]);
+  let collected = false;
+  const provenance = {
+    sourceIds: ["claude-code"],
+    originalPath: "/home/u/.claude/skills/demo",
+    originalRoot: "/home/u/.claude/skills",
+    originalOrigin: { kind: "inPlace" as const, ownerAgent: "claude-code" },
+    backupPath: "/tmp/backup",
+    originalHash: "same",
+    collectedAt: 1,
+    entryPaths: [],
+  };
+  handlers.set("scan_skills", () => [
+    makeSkill({
+      id: collected ? "hub" : "original",
+      name: "demo",
+      contentHash: "same",
+      sourceIds: ["claude-code"],
+      origin: collected ? { kind: "hub" } : provenance.originalOrigin,
+      provenance: collected ? provenance : null,
+      sourcePath: collected ? "/hub/demo" : provenance.originalPath,
+    }),
+    makeSkill({
+      id: "external",
+      name: "demo",
+      contentHash: "same",
+      sourceIds: ["codex"],
+      origin: { kind: "external" },
+      sourcePath: "/external/demo",
+    }),
+  ]);
+  handlers.set("adopt_to_hub", (args) => {
+    expect(args.skillId).toBe("original");
+    collected = true;
+    return {};
+  });
+  handlers.set("release_from_hub", (args) => {
+    expect(args.skillId).toBe("hub");
+    collected = false;
+    return {};
+  });
+  const user = userEvent.setup();
+  renderWithProviders(<LibraryPage />);
+  await user.click(await screen.findByRole("button", { name: "2 个来源" }));
+  await user.click(screen.getByRole("button", { name: "收编此来源" }));
+  await user.click(screen.getByRole("button", { name: "收编" }));
+  await waitFor(() => expect(collected).toBe(true));
+  await screen.findByText("Hub 托管");
+  await user.click(screen.getByRole("button", { name: "2 个来源" }));
+  await user.click(screen.getByRole("button", { name: "移出 Hub 并还原" }));
+  await user.click(screen.getByRole("button", { name: "还原到原位置" }));
+  await waitFor(() => expect(screen.queryByRole("dialog")).toBeNull());
+  expect(
+    screen.getByRole("button", { name: "已安装 1 个" }),
+  ).toBeInTheDocument();
+  expect(
+    screen.getByRole("button", { name: "Claude Code: 1" }),
+  ).toBeInTheDocument();
+  expect(screen.getByRole("button", { name: "Codex: 1" })).toBeInTheDocument();
+  expect(
+    screen.getByRole("button", { name: "Skill Studio: 0" }),
+  ).toBeInTheDocument();
 });

@@ -1,0 +1,151 @@
+import { fireEvent, screen, waitFor } from "@testing-library/react";
+import { expect, it } from "vitest";
+import { InstallSkillsPage } from "@/pages/InstallSkillsPage";
+import { LibraryPage } from "@/pages/LibraryPage";
+import { handlers, calls, makeSkill } from "./mocks/tauri";
+import { renderWithProviders } from "./utils/render";
+import type { SkillView } from "@/types";
+
+const hit = {
+  skillId: "demo",
+  name: "Demo",
+  source: "owner/repo",
+  installs: 1234,
+};
+function search() {
+  fireEvent.change(screen.getByRole("textbox", { name: "搜索 skills.sh" }), {
+    target: { value: "demo" },
+  });
+  fireEvent.click(screen.getByRole("button", { name: "搜索技能" }));
+}
+
+it("requires two characters, installs the selected result and refreshes Studio origin", async () => {
+  let skills: SkillView[] = [];
+  handlers.set("scan_skills", () => skills);
+  handlers.set("search_catalog_skills", () => [hit]);
+  handlers.set("install_catalog_skill", () => {
+    skills = [
+      makeSkill({
+        name: "demo",
+        origin: { kind: "hub" },
+        sourceIds: ["studio"],
+        installation: {
+          source: hit.source,
+          skillId: hit.skillId,
+          repositoryPath: "skills/demo",
+          installedAt: 123,
+          contentHash: "hash",
+        },
+      }),
+    ];
+    return skills[0];
+  });
+  const view = renderWithProviders(<InstallSkillsPage />);
+  expect(screen.getByRole("button", { name: "搜索技能" })).toBeDisabled();
+  fireEvent.change(screen.getByRole("textbox"), { target: { value: "a" } });
+  expect(screen.getByRole("button", { name: "搜索技能" })).toBeDisabled();
+  search();
+  expect(await screen.findByText("Demo")).toBeInTheDocument();
+  expect(screen.getByText("owner/repo")).toBeInTheDocument();
+  fireEvent.click(screen.getByRole("button", { name: "安装" }));
+  expect(await screen.findByRole("button", { name: "已安装" })).toBeDisabled();
+  expect(calls).toContainEqual({
+    command: "install_catalog_skill",
+    args: { source: "owner/repo", skillId: "demo" },
+  });
+  view.unmount();
+  renderWithProviders(<LibraryPage />);
+  expect(
+    await screen.findByRole("img", { name: "来源：Skill Studio" }),
+  ).toBeInTheDocument();
+  expect(
+    screen.getByRole("button", { name: /Skill Studio.*1/ }),
+  ).toBeInTheDocument();
+});
+
+it("shows search errors, retries and reports empty results", async () => {
+  handlers.set("search_catalog_skills", () => {
+    throw new Error("offline");
+  });
+  renderWithProviders(<InstallSkillsPage />);
+  search();
+  expect(await screen.findByRole("alert")).toHaveTextContent("offline");
+  handlers.set("search_catalog_skills", () => []);
+  fireEvent.click(screen.getByRole("button", { name: "重试" }));
+  expect(await screen.findByText(/没有找到匹配/)).toBeInTheDocument();
+});
+
+it("failed installs remain retryable and do not show installed", async () => {
+  handlers.set("search_catalog_skills", () => [hit]);
+  handlers.set("install_catalog_skill", () => {
+    throw new Error("Hub 已有同名 skill");
+  });
+  renderWithProviders(<InstallSkillsPage />);
+  search();
+  fireEvent.click(await screen.findByRole("button", { name: "安装" }));
+  expect(await screen.findByRole("alert")).toHaveTextContent(
+    "Hub 已有同名 skill",
+  );
+  await waitFor(() =>
+    expect(screen.getByRole("button", { name: "安装" })).toBeEnabled(),
+  );
+  expect(screen.queryByRole("button", { name: "已安装" })).toBeNull();
+});
+
+it("local tab scans a collection, imports a selected skill and refreshes its state", async () => {
+  let skills: SkillView[] = [];
+  const path = "/local/collection/demo";
+  handlers.set("scan_skills", () => skills);
+  handlers.set("discover_local_skills", () => [
+    { path, name: "Local demo", description: "resource", error: null },
+  ]);
+  handlers.set("import_local_skill", () => {
+    skills = [
+      makeSkill({
+        name: "demo",
+        sourceIds: ["studio"],
+        installation: {
+          source: `local:${path}`,
+          skillId: "demo",
+          repositoryPath: "",
+          installedAt: 123,
+          contentHash: "hash",
+        },
+      }),
+    ];
+    return skills[0];
+  });
+  renderWithProviders(<InstallSkillsPage />);
+  fireEvent.click(screen.getByRole("tab", { name: "本地" }));
+  fireEvent.change(screen.getByRole("textbox", { name: "本地目录" }), {
+    target: { value: "/local/collection" },
+  });
+  fireEvent.click(screen.getByRole("button", { name: "扫描" }));
+  expect(await screen.findByText("Local demo")).toBeInTheDocument();
+  expect(calls).toContainEqual({
+    command: "discover_local_skills",
+    args: { path: "/local/collection" },
+  });
+  fireEvent.click(screen.getByRole("button", { name: "导入" }));
+  expect(await screen.findByRole("button", { name: "已导入" })).toBeDisabled();
+  expect(calls).toContainEqual({
+    command: "import_local_skill",
+    args: { path },
+  });
+});
+
+it("local scan handles an empty folder and scan errors", async () => {
+  handlers.set("discover_local_skills", () => []);
+  renderWithProviders(<InstallSkillsPage />);
+  fireEvent.click(screen.getByRole("tab", { name: "本地" }));
+  fireEvent.change(screen.getByRole("textbox", { name: "本地目录" }), {
+    target: { value: "/empty" },
+  });
+  fireEvent.click(screen.getByRole("button", { name: "扫描" }));
+  expect(await screen.findByText(/该目录未发现/)).toBeInTheDocument();
+  handlers.set("discover_local_skills", () => {
+    throw new Error("目录不存在");
+  });
+  fireEvent.click(screen.getByRole("button", { name: "扫描" }));
+  expect(await screen.findByRole("alert")).toHaveTextContent("目录不存在");
+});

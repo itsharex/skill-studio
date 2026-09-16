@@ -1,10 +1,10 @@
+import { PageTools } from "@/components/common/PageTools";
 import { useQueuedDraft } from "@/hooks/useQueuedDraft";
 import { useMemo, useState } from "react";
 import {
   ArrowLeft,
   FolderGit2,
   FolderOpen,
-  Plus,
   Trash2,
   Upload,
 } from "lucide-react";
@@ -41,7 +41,6 @@ import {
   ListItemRow,
   RowActions,
 } from "@/components/common/ListItemRow";
-import { ListToolbar } from "@/components/common/ListToolbar";
 import { projectsApi, systemApi } from "@/lib/api";
 import {
   useAgents,
@@ -61,19 +60,42 @@ export function ProjectsPage() {
   const createProject = useCreateProject();
   const deleteProject = useDeleteProject();
 
+  const [query, setQuery] = useState("");
+  const filtered = projects.filter((p) =>
+    `${p.name} ${p.root}`.toLowerCase().includes(query.trim().toLowerCase()),
+  );
   const [detail, setDetail] = useState<string | null>(null);
   const [creating, setCreating] = useState(false);
   const [deleting, setDeleting] = useState<ProjectBinding | null>(null);
   const [form, setForm] = useState({ name: "", root: "" });
 
+  const tools = (
+    <PageTools
+      query={query}
+      onQueryChange={(v) => {
+        setQuery(v);
+        setDetail(null);
+      }}
+      placeholder="搜索项目…"
+      createLabel="添加项目"
+      onCreate={() => {
+        setDetail(null);
+        setForm({ name: "", root: "" });
+        setCreating(true);
+      }}
+    />
+  );
   const active = projects.find((p) => p.id === detail) ?? null;
   if (active) {
     return (
-      <ProjectDetail
-        key={active.id}
-        project={active}
-        onBack={() => setDetail(null)}
-      />
+      <>
+        {tools}
+        <ProjectDetail
+          key={active.id}
+          project={active}
+          onBack={() => setDetail(null)}
+        />
+      </>
     );
   }
 
@@ -86,24 +108,10 @@ export function ProjectsPage() {
 
   return (
     <div className="flex min-h-0 flex-1 flex-col">
-      <ListToolbar
-        count={projects.length}
-        total={projects.length}
-        unit="个项目"
-        query=""
-        onQueryChange={() => {}}
-      >
-        <Button
-          size="sm"
-          onClick={() => {
-            setForm({ name: "", root: "" });
-            setCreating(true);
-          }}
-        >
-          <Plus className="h-4 w-4" />
-          添加项目
-        </Button>
-      </ListToolbar>
+      {tools}
+      <p className="py-4 text-sm text-muted-foreground">
+        共 {filtered.length} 个项目
+      </p>
 
       <div className="min-h-0 flex-1 overflow-y-auto pb-6">
         {projects.length === 0 ? (
@@ -111,25 +119,13 @@ export function ProjectsPage() {
             icon={FolderGit2}
             title="还没有项目"
             description="绑定一个项目目录，就能让某些 skill 只对这个项目生效。项目级默认用文件复制而不是软链——软链进 git 是一个指向本机绝对路径的死链。"
-            action={
-              <Button
-                size="sm"
-                onClick={() => {
-                  setForm({ name: "", root: "" });
-                  setCreating(true);
-                }}
-              >
-                <Plus className="h-4 w-4" />
-                添加项目
-              </Button>
-            }
           />
         ) : (
           <ListContainer>
-            {projects.map((p, i) => (
+            {filtered.map((p, i) => (
               <ListItemRow
                 key={p.id}
-                isLast={i === projects.length - 1}
+                isLast={i === filtered.length - 1}
                 onClick={() => setDetail(p.id)}
               >
                 <div className="flex h-8 w-8 shrink-0 items-center justify-center rounded-lg border border-border bg-muted">
@@ -465,7 +461,12 @@ function ProjectDetail({
                     checked={draft.value.groupIds.includes(g.id)}
                     aria-label={g.name}
                   />
-                  <span className="flex-1 text-sm font-medium">{g.name}</span>
+                  <span className="flex-1 text-sm font-medium">
+                    {g.name}
+                    {g.agentId
+                      ? ` · ${agents.find((a) => a.id === g.agentId)?.displayName ?? g.agentId}`
+                      : ""}
+                  </span>
                   <Badge variant="outline" className="h-4 px-1.5 text-[10px]">
                     {g.skillIds.length} 个
                   </Badge>

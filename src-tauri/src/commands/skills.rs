@@ -71,3 +71,64 @@ pub fn prune_missing(state: State<'_, AppState>) -> Result<usize, String> {
         .mutate(|studio, config| studio.prune(config))
         .map_err(Into::into)
 }
+
+#[tauri::command(rename_all = "camelCase")]
+pub fn release_from_hub(state: State<'_, AppState>, skill_id: String) -> Result<Skill, String> {
+    state.release_from_hub(&skill_id).map_err(Into::into)
+}
+
+#[tauri::command]
+pub async fn search_catalog_skills(
+    query: String,
+) -> Result<Vec<skill_studio_core::services::marketplace::CatalogSkill>, String> {
+    tauri::async_runtime::spawn_blocking(move || {
+        skill_studio_core::services::marketplace::search(&query).map_err(String::from)
+    })
+    .await
+    .map_err(|e| e.to_string())?
+}
+
+#[tauri::command(rename_all = "camelCase")]
+pub async fn install_catalog_skill(
+    app: tauri::AppHandle,
+    source: String,
+    skill_id: String,
+) -> Result<Skill, String> {
+    use tauri::Manager;
+    tauri::async_runtime::spawn_blocking(move || {
+        let prepared = skill_studio_core::services::marketplace::prepare(&source, &skill_id)
+            .map_err(String::from)?;
+        app.state::<AppState>()
+            .install_catalog_skill(&prepared)
+            .map_err(String::from)
+    })
+    .await
+    .map_err(|e| e.to_string())?
+}
+
+#[tauri::command]
+pub async fn discover_local_skills(
+    path: String,
+) -> Result<Vec<skill_studio_core::services::marketplace::LocalSkill>, String> {
+    tauri::async_runtime::spawn_blocking(move || {
+        skill_studio_core::services::marketplace::discover_local(std::path::Path::new(&path))
+            .map_err(String::from)
+    })
+    .await
+    .map_err(|e| e.to_string())?
+}
+
+#[tauri::command]
+pub async fn import_local_skill(app: tauri::AppHandle, path: String) -> Result<Skill, String> {
+    use tauri::Manager;
+    tauri::async_runtime::spawn_blocking(move || {
+        let prepared =
+            skill_studio_core::services::marketplace::prepare_local(std::path::Path::new(&path))
+                .map_err(String::from)?;
+        app.state::<AppState>()
+            .install_catalog_skill(&prepared)
+            .map_err(String::from)
+    })
+    .await
+    .map_err(|e| e.to_string())?
+}

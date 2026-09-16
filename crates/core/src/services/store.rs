@@ -56,6 +56,7 @@ impl Store {
     /// 直接报错，由上层提示用户去 `backups/` 找回。
     pub fn load(&self) -> Result<AppConfig> {
         super::transaction::recover(&self.dir.join("migration.json"))?;
+        super::transaction::recover(&self.dir.join("group-switch.json"))?;
         let path = self.config_path();
         match atomic::read_json_file::<AppConfig>(&path)? {
             Some(mut config) => {
@@ -66,7 +67,7 @@ impl Store {
         }
     }
 
-    /// 配置结构迁移。目前只有 v1，留好入口。
+    /// v2 adds optional Agent ownership and active combinations. Legacy groups stay shared.
     fn migrate(&self, config: &mut AppConfig) -> Result<()> {
         if config.version > CONFIG_VERSION {
             return Err(Error::config(format!(

@@ -1,7 +1,6 @@
 import { act, fireEvent, screen, waitFor } from "@testing-library/react";
 import { expect, it } from "vitest";
 import { ProjectsPage } from "@/pages/ProjectsPage";
-import { GroupsPage } from "@/pages/GroupsPage";
 import {
   handlers,
   makeProject,
@@ -97,34 +96,4 @@ it("preserves the draft after a failed save, blocks apply, and retries the lates
   fireEvent.click(screen.getByRole("button", { name: "重试保存" }));
   await waitFor(() => expect(updates()).toHaveLength(2));
   expect((updates()[1].args as typeof project).skillIds).toEqual(["a", "b"]);
-});
-
-it("serializes rapid group member edits and back waits for persistence", async () => {
-  let group = makeGroup({ id: "g", name: "My group", skillIds: [] });
-  handlers.set("list_groups", () => [group]);
-  handlers.set("scan_skills", () => [
-    makeSkill({ id: "a", name: "Alpha" }),
-    makeSkill({ id: "b", name: "Beta" }),
-  ]);
-  const first = deferred<unknown>();
-  let count = 0;
-  handlers.set("set_group_skills", async (args) => {
-    count++;
-    if (count === 1) await first.promise;
-    group = { ...group, skillIds: args.skillIds };
-    return group;
-  });
-  renderWithProviders(<GroupsPage />);
-  fireEvent.click(await screen.findByText("My group"));
-  fireEvent.click(await screen.findByRole("checkbox", { name: "添加 Alpha" }));
-  await waitFor(() =>
-    expect(calls.filter((c) => c.command === "set_group_skills")).toHaveLength(
-      1,
-    ),
-  );
-  fireEvent.click(screen.getByRole("checkbox", { name: "添加 Beta" }));
-  fireEvent.click(screen.getByTitle("返回"));
-  expect(calls.filter((c) => c.command === "set_group_skills")).toHaveLength(1);
-  await act(async () => first.resolve({}));
-  await waitFor(() => expect(group.skillIds).toEqual(["a", "b"]));
 });

@@ -1,7 +1,26 @@
 import { invoke } from "@tauri-apps/api/core";
-import type { LinkMode, LinkReport, Skill, SkillView } from "@/types";
+import type {
+  CatalogSkill,
+  LocalSkill,
+  LinkMode,
+  LinkReport,
+  Skill,
+  SkillView,
+} from "@/types";
 
 export const skillsApi = {
+  async discoverLocal(path: string): Promise<LocalSkill[]> {
+    return await invoke("discover_local_skills", { path });
+  },
+  async importLocal(path: string): Promise<Skill> {
+    return await invoke("import_local_skill", { path });
+  },
+  async searchCatalog(query: string): Promise<CatalogSkill[]> {
+    return await invoke("search_catalog_skills", { query });
+  },
+  async installCatalog(source: string, skillId: string): Promise<Skill> {
+    return await invoke("install_catalog_skill", { source, skillId });
+  },
   async scan(): Promise<SkillView[]> {
     return await invoke("scan_skills");
   },
@@ -39,6 +58,10 @@ export const skillsApi = {
 
   async adoptToHub(skillId: string): Promise<Skill> {
     return await invoke("adopt_to_hub", { skillId });
+  },
+
+  async releaseFromHub(skillId: string): Promise<Skill> {
+    return await invoke("release_from_hub", { skillId });
   },
 
   async prune(): Promise<number> {

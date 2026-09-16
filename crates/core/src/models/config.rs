@@ -8,7 +8,7 @@ use super::project::ProjectBinding;
 use super::skill::LinkMode;
 
 /// 当前配置结构版本。改结构时 +1 并在 store 里加迁移分支。
-pub const CONFIG_VERSION: u32 = 1;
+pub const CONFIG_VERSION: u32 = 2;
 
 /// 某个 skill 在某个 agent 上的注册记录。
 ///
@@ -46,6 +46,8 @@ pub struct Settings {
     /// 新建注册时的默认链接方式
     #[serde(default)]
     pub default_link_mode: LinkMode,
+    #[serde(default = "default_preserve_manual_skills")]
+    pub preserve_manual_skills: bool,
     /// 界面语言
     #[serde(default = "default_language")]
     pub language: String,
@@ -64,6 +66,10 @@ pub struct Settings {
     pub backup_keep: usize,
 }
 
+fn default_preserve_manual_skills() -> bool {
+    true
+}
+
 fn default_language() -> String {
     "zh".to_string()
 }
@@ -80,6 +86,7 @@ impl Default for Settings {
     fn default() -> Self {
         Self {
             default_link_mode: LinkMode::default(),
+            preserve_manual_skills: true,
             language: default_language(),
             theme: default_theme(),
             agent_dir_overrides: HashMap::new(),
@@ -87,6 +94,31 @@ impl Default for Settings {
             backup_keep: default_backup_keep(),
         }
     }
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct SkillInstallation {
+    pub source: String,
+    pub skill_id: String,
+    pub repository_path: String,
+    pub installed_at: i64,
+    pub content_hash: String,
+}
+
+/// Durable provenance and recovery information; independent of the current storage location.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct SkillProvenance {
+    pub source_ids: Vec<String>,
+    pub original_path: PathBuf,
+    pub original_root: PathBuf,
+    pub original_origin: super::skill::SkillOrigin,
+    pub backup_path: PathBuf,
+    pub original_hash: String,
+    pub collected_at: i64,
+    #[serde(default)]
+    pub entry_paths: Vec<PathBuf>,
 }
 
 /// 落盘的根结构：`~/.skill-studio/config.json`
@@ -104,11 +136,17 @@ pub struct AppConfig {
     #[serde(default)]
     pub groups: Vec<Group>,
     #[serde(default)]
+    pub active_groups: HashMap<String, super::group::ActiveGroup>,
+    #[serde(default)]
     pub projects: Vec<ProjectBinding>,
     #[serde(default)]
     pub registrations: Registrations,
     #[serde(default)]
     pub skill_meta: HashMap<String, SkillMeta>,
+    #[serde(default)]
+    pub skill_provenance: HashMap<String, SkillProvenance>,
+    #[serde(default)]
+    pub skill_installations: HashMap<String, SkillInstallation>,
 }
 
 fn default_version() -> u32 {
@@ -121,9 +159,12 @@ impl Default for AppConfig {
             version: CONFIG_VERSION,
             settings: Settings::default(),
             groups: Vec::new(),
+            active_groups: HashMap::new(),
             projects: Vec::new(),
             registrations: HashMap::new(),
             skill_meta: HashMap::new(),
+            skill_provenance: HashMap::new(),
+            skill_installations: HashMap::new(),
         }
     }
 }

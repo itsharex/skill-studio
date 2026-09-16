@@ -1,14 +1,14 @@
 use serde::{Deserialize, Serialize};
 
-/// 分组。纯元数据，不持有任何文件。
-///
-/// 应用语义是**一次性 Add / Remove**（等同 cc-switch 生态里 Skills Manager 的
-/// Presets）：点一下把组内 skill 批量注册或批量移除，不做持续对账，
-/// 因此永远不会误删用户手动添加的 skill。
+/// A saved skill combination. Agent-owned groups are activated exclusively;
+/// legacy shared groups remain available to existing project bindings.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct Group {
     pub id: String,
+    /// None denotes a legacy shared group; retained for existing project bindings.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub agent_id: Option<String>,
     pub name: String,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub description: Option<String>,
@@ -36,6 +36,7 @@ impl Group {
     pub fn new(id: String, name: String) -> Self {
         Self {
             id,
+            agent_id: None,
             name,
             description: None,
             icon: None,
@@ -100,4 +101,30 @@ mod tests {
         assert!(!json.contains("description"), "{json}");
         assert!(!json.contains("icon"), "{json}");
     }
+}
+
+/// Exact entries installed by a group, separate from manual registrations.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct GroupEntry {
+    pub skill_id: String,
+    pub source_path: std::path::PathBuf,
+    pub target_path: std::path::PathBuf,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ActiveGroup {
+    pub group_id: String,
+    pub skill_ids: Vec<String>,
+    pub entries: Vec<GroupEntry>,
+    /// Manual entries temporarily disabled by this combination; restored on stop.
+    #[serde(default)]
+    pub suspended_manual: Vec<GroupEntry>,
+    #[serde(default = "default_preserve_manual")]
+    pub preserve_manual_skills: bool,
+}
+
+fn default_preserve_manual() -> bool {
+    true
 }

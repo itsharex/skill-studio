@@ -51,12 +51,37 @@ export interface AgentSkillState {
 }
 
 /** 后端用 #[serde(flatten)] 把 Skill 摊平进来 */
+export interface CatalogSkill {
+  skillId: string;
+  name: string;
+  source: string;
+  installs: number;
+}
+
 export interface SkillView extends Skill {
+  installation?: {
+    source: string;
+    skillId: string;
+    repositoryPath: string;
+    installedAt: number;
+    contentHash: string;
+  } | null;
   agents: Record<string, AgentSkillState>;
   groupIds: string[];
   malformedFrontmatter: boolean;
   frontmatterError?: string | null;
   diagnostics?: string[];
+  sourceIds?: string[];
+  provenance?: {
+    sourceIds: string[];
+    originalPath: string;
+    originalRoot: string;
+    originalOrigin: SkillOrigin;
+    backupPath: string;
+    originalHash: string;
+    collectedAt: number;
+    entryPaths: string[];
+  } | null;
 }
 
 export interface AgentInfo {
@@ -75,6 +100,7 @@ export interface AgentInfo {
 }
 
 export interface Group {
+  agentId?: string | null;
   id: string;
   name: string;
   description?: string | null;
@@ -99,6 +125,7 @@ export interface ProjectBinding {
 
 export interface Settings {
   defaultLinkMode: LinkMode;
+  preserveManualSkills?: boolean;
   language: string;
   theme: string;
   agentDirOverrides: Record<string, string>;
@@ -124,6 +151,15 @@ export interface AppConfig {
   version: number;
   settings: Settings;
   groups: Group[];
+  activeGroups?: Record<
+    string,
+    {
+      groupId: string;
+      preserveManualSkills?: boolean;
+      skillIds: string[];
+      entries: { skillId: string; sourcePath: string; targetPath: string }[];
+    }
+  >;
   projects: ProjectBinding[];
   registrations: Record<string, Record<string, Registration>>;
   skillMeta: Record<string, SkillMeta>;
@@ -145,10 +181,18 @@ export interface LinkReport {
 
 export interface SettingsPatch {
   defaultLinkMode?: LinkMode;
+  preserveManualSkills?: boolean;
   language?: string;
   theme?: string;
   agentDirOverrides?: Record<string, string>;
   hubDir?: string;
   clearHubDir?: boolean;
   backupKeep?: number;
+}
+
+export interface LocalSkill {
+  path: string;
+  name: string;
+  description?: string | null;
+  error?: string | null;
 }

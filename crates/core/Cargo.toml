@@ -7,6 +7,9 @@ license      = { workspace = true }
 description  = "Core logic for Skill Studio: agent registry, skill scanning, link engine"
 
 [dependencies]
+reqwest = { version = "0.12", default-features = false, features = ["blocking", "rustls-tls"] }
+zip = { version = "2.4.2", default-features = false, features = ["deflate"] }
+tempfile = { workspace = true }
 fs2 = "0.4.3"
 serde      = { workspace = true }
 serde_json = { workspace = true }
@@ -25,5 +28,4 @@ toml_edit  = { workspace = true }
 windows-sys = { version = "0.61", features = ["Win32_Storage_FileSystem", "Win32_Foundation"] }
 
 [dev-dependencies]
-tempfile    = { workspace = true }
 serial_test = "3"

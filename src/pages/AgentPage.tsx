@@ -1,10 +1,10 @@
 import { useMemo, useState } from "react";
 import {
   FolderOpen,
-  Minus,
   Plus,
   RefreshCw,
   TriangleAlert,
+  Trash2,
 } from "lucide-react";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
@@ -31,11 +31,8 @@ import {
 import { ListToolbar } from "@/components/common/ListToolbar";
 import { STATUS_HINT, STATUS_LABEL } from "@/lib/linkReport";
 import { systemApi } from "@/lib/api";
-import { cn } from "@/lib/utils";
 import {
   useAgents,
-  useApplyGroup,
-  useGroups,
   useRegisterSkills,
   useSetSkillEnabled,
   useSkills,
@@ -64,16 +61,21 @@ function statusBadgeVariant(
   }
 }
 
-export function AgentPage({ agentId }: { agentId: string }) {
+export function AgentSkills({
+  agentId,
+  searchQuery,
+}: {
+  agentId: string;
+  searchQuery?: string;
+}) {
   const { data: agents = [] } = useAgents();
   const { data: skills = [] } = useSkills();
-  const { data: groups = [] } = useGroups();
-  const applyGroup = useApplyGroup();
   const register = useRegisterSkills();
   const unregister = useUnregisterSkills();
   const setEnabled = useSetSkillEnabled();
 
-  const [query, setQuery] = useState("");
+  const [localQuery, setQuery] = useState("");
+  const query = searchQuery ?? localQuery;
   const agent = agents.find((a) => a.id === agentId);
 
   /** 这个 agent 上"有东西"的 skill：真身在此、已注册、或占用/异常都要显示 */
@@ -170,86 +172,8 @@ export function AgentPage({ agentId }: { agentId: string }) {
         )}
       </div>
 
-      {/* 分组 pill 条 —— 一次性 Add / Remove */}
-      {groups.length > 0 && (
-        <div className="flex flex-wrap items-center gap-2 pt-4">
-          <span className="text-xs font-semibold uppercase tracking-wide text-muted-foreground">
-            分组
-          </span>
-          {groups.map((g) => {
-            const total = g.skillIds.length;
-            const registered = g.skillIds.filter((id) => {
-              const st = skills.find((s) => s.id === id)?.agents[agentId]
-                ?.status;
-              return st !== undefined && st !== "notLinked";
-            }).length;
-            const full = total > 0 && registered === total;
-            return (
-              <DropdownMenu key={g.id}>
-                <DropdownMenuTrigger asChild>
-                  <button
-                    type="button"
-                    className={cn(
-                      "inline-flex items-center gap-1.5 rounded-full border px-2.5 py-1 text-xs font-medium transition-all",
-                      full
-                        ? "border-blue-500/60 bg-blue-500/10 text-blue-600 dark:text-blue-400"
-                        : "border-border-default text-muted-foreground hover:border-border-hover hover:text-foreground",
-                    )}
-                  >
-                    {g.name}
-                    <span className="tabular-nums opacity-70">
-                      {registered}/{total}
-                    </span>
-                  </button>
-                </DropdownMenuTrigger>
-                <DropdownMenuContent align="start">
-                  <DropdownMenuLabel>{g.name}</DropdownMenuLabel>
-                  <DropdownMenuItem
-                    disabled={total === 0}
-                    onClick={() =>
-                      applyGroup.mutate({
-                        groupId: g.id,
-                        agentIds: [agentId],
-                        mode: "add",
-                      })
-                    }
-                  >
-                    <Plus className="h-4 w-4" />
-                    应用到本 agent
-                  </DropdownMenuItem>
-                  <DropdownMenuItem
-                    destructive
-                    disabled={registered === 0}
-                    onClick={() =>
-                      applyGroup.mutate({
-                        groupId: g.id,
-                        agentIds: [agentId],
-                        mode: "remove",
-                      })
-                    }
-                  >
-                    <Minus className="h-4 w-4" />
-                    从本 agent 移除
-                  </DropdownMenuItem>
-                </DropdownMenuContent>
-              </DropdownMenu>
-            );
-          })}
-          <Tooltip>
-            <TooltipTrigger asChild>
-              <span className="cursor-default text-[11px] text-muted-foreground">
-                一次性应用
-              </span>
-            </TooltipTrigger>
-            <TooltipContent>
-              点击是一次性操作：只加/只减组内 skill， 该 agent 上其他 skill
-              一律不动，不会误删你手动添加的。
-            </TooltipContent>
-          </Tooltip>
-        </div>
-      )}
-
       <ListToolbar
+        hideSearch={searchQuery !== undefined}
         count={filtered.length}
         total={present.length}
         unit="个 skill"
@@ -301,8 +225,8 @@ export function AgentPage({ agentId }: { agentId: string }) {
             }
           />
         ) : (
-          <ListContainer>
-            {filtered.map((skill, i) => {
+          <ListContainer cards>
+            {filtered.map((skill) => {
               const state = skill.agents[agentId]!;
               const attention =
                 state.status === "copyModified" ||
@@ -314,7 +238,7 @@ export function AgentPage({ agentId }: { agentId: string }) {
               return (
                 <ListItemRow
                   key={skill.id}
-                  isLast={i === filtered.length - 1}
+                  card
                   className={attention ? "bg-red-500/5" : undefined}
                 >
                   <div className="min-w-0 flex-1">
@@ -367,58 +291,59 @@ export function AgentPage({ agentId }: { agentId: string }) {
                     )}
                   </div>
 
-                  {state.status === "copyStale" && (
-                    <Button
-                      variant="outline"
-                      size="sm"
-                      onClick={() =>
-                        register.mutate({
-                          skillIds: [skill.id],
-                          agentIds: [agentId],
-                          mode: "copy",
-                        })
-                      }
-                    >
-                      <RefreshCw className="h-3.5 w-3.5" />
-                      重新复制
-                    </Button>
-                  )}
-
-                  {/* 原生启停：只在该 agent 支持、且 skill 确实可用时才给开关 */}
-                  {agent.supportsNativeToggle &&
-                    state.status !== "copyDamaged" &&
-                    state.status !== "foreign" &&
-                    state.status !== "conflict" &&
-                    state.status !== "brokenLink" && (
-                      <Tooltip>
-                        <TooltipTrigger asChild>
-                          <div>
-                            <Switch
-                              checked={!state.disabled}
-                              onCheckedChange={(next) =>
-                                setEnabled.mutate({
-                                  skillId: skill.id,
-                                  agentId,
-                                  enabled: next,
-                                })
-                              }
-                              aria-label={`启用 ${skill.name}`}
-                            />
-                          </div>
-                        </TooltipTrigger>
-                        <TooltipContent>
-                          用 {agent.displayName} 自己的配置开关启停，
-                          不删文件、随时可恢复
-                        </TooltipContent>
-                      </Tooltip>
+                  <RowActions>
+                    {state.status === "copyStale" && (
+                      <Button
+                        variant="outline"
+                        size="sm"
+                        onClick={() =>
+                          register.mutate({
+                            skillIds: [skill.id],
+                            agentIds: [agentId],
+                            mode: "copy",
+                          })
+                        }
+                      >
+                        <RefreshCw className="h-3.5 w-3.5" />
+                        重新复制
+                      </Button>
                     )}
 
-                  <RowActions>
+                    {/* 原生启停：只在该 agent 支持、且 skill 确实可用时才给开关 */}
+                    {agent.supportsNativeToggle &&
+                      state.status !== "copyDamaged" &&
+                      state.status !== "foreign" &&
+                      state.status !== "conflict" &&
+                      state.status !== "brokenLink" && (
+                        <Tooltip>
+                          <TooltipTrigger asChild>
+                            <div>
+                              <Switch
+                                checked={!state.disabled}
+                                onCheckedChange={(next) =>
+                                  setEnabled.mutate({
+                                    skillId: skill.id,
+                                    agentId,
+                                    enabled: next,
+                                  })
+                                }
+                                aria-label={`启用 ${skill.name}`}
+                              />
+                            </div>
+                          </TooltipTrigger>
+                          <TooltipContent>
+                            用 {agent.displayName} 自己的配置开关启停，
+                            不删文件、随时可恢复
+                          </TooltipContent>
+                        </Tooltip>
+                      )}
+
                     <Button
                       variant="ghost"
                       size="icon"
-                      className="h-7 w-7"
+                      className="h-8 w-8"
                       title="打开所在目录"
+                      aria-label={`打开 ${skill.name} 所在目录`}
                       onClick={() =>
                         void systemApi.revealPath(state.targetPath)
                       }
@@ -429,8 +354,10 @@ export function AgentPage({ agentId }: { agentId: string }) {
                       <Button
                         variant="ghost"
                         size="icon"
-                        className="h-7 w-7 hover:text-red-500"
+                        className="h-8 w-8 hover:text-red-500"
                         title="从本 agent 移除"
+                        aria-label={`从 ${agent.displayName} 移除 ${skill.name}`}
+                        disabled={unregister.isPending}
                         onClick={() =>
                           unregister.mutate({
                             skillIds: [skill.id],
@@ -438,7 +365,7 @@ export function AgentPage({ agentId }: { agentId: string }) {
                           })
                         }
                       >
-                        <Minus className="h-4 w-4" />
+                        <Trash2 className="h-4 w-4" />
                       </Button>
                     )}
                   </RowActions>

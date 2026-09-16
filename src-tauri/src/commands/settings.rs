@@ -26,6 +26,7 @@ pub fn get_settings(state: State<'_, AppState>) -> Result<Settings, String> {
 #[serde(rename_all = "camelCase", default)]
 pub struct SettingsPatch {
     pub default_link_mode: Option<LinkMode>,
+    pub preserve_manual_skills: Option<bool>,
     pub language: Option<String>,
     pub theme: Option<String>,
     pub agent_dir_overrides: Option<HashMap<String, PathBuf>>,
@@ -43,6 +44,9 @@ pub fn update_settings(
     state
         .mutate(|_, config| {
             let s = &mut config.settings;
+            if let Some(preserve) = patch.preserve_manual_skills {
+                s.preserve_manual_skills = preserve;
+            }
             if let Some(m) = patch.default_link_mode {
                 s.default_link_mode = m;
             }
@@ -54,10 +58,20 @@ pub fn update_settings(
             }
             if let Some(o) = patch.agent_dir_overrides {
                 // 空路径视为取消该 agent 的覆盖
-                s.agent_dir_overrides = o
+                let next: HashMap<_, _> = o
                     .into_iter()
                     .filter(|(_, v)| !v.as_os_str().is_empty())
                     .collect();
+                if config
+                    .active_groups
+                    .keys()
+                    .any(|id| next.get(id) != s.agent_dir_overrides.get(id))
+                {
+                    return Err(skill_studio_core::Error::invalid(
+                        "请先停用该 Agent 的分组，再修改目录",
+                    ));
+                }
+                s.agent_dir_overrides = next;
             }
             if patch.clear_hub_dir.unwrap_or(false) {
                 s.hub_dir = None;

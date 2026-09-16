@@ -8,7 +8,7 @@ use serde::{Deserialize, Serialize};
 
 use crate::error::{Error, Result};
 use crate::models::agent::{AgentInfo, AGENTS};
-use crate::models::config::{AppConfig, Registration};
+use crate::models::config::{AppConfig, Registration, SkillProvenance};
 use crate::models::group::GroupApplyMode;
 use crate::models::skill::{
     skill_id_for, LinkMode, LinkReport, LinkResult, LinkStatus, Skill, SkillOrigin,
@@ -43,6 +43,9 @@ pub struct SkillView {
     pub malformed_frontmatter: bool,
     pub frontmatter_error: Option<String>,
     pub diagnostics: Vec<String>,
+    pub source_ids: Vec<String>,
+    pub provenance: Option<SkillProvenance>,
+    pub installation: Option<crate::models::config::SkillInstallation>,
 }
 
 pub struct Studio {
@@ -217,11 +220,39 @@ impl Studio {
                     .collect();
                 let fm = scanner::parse_frontmatter(&skill.source_path.join(scanner::SKILL_FILE));
                 let diagnostics = if !skill.source_path.join(scanner::SKILL_FILE).is_file() {
-                    vec!["链接目标不可用：目标缺失、存在循环，或不含 SKILL.md".into()]
+                    vec![match std::fs::metadata(&skill.source_path) {
+                        Err(e) if e.kind() == std::io::ErrorKind::NotFound => {
+                            "目标目录不存在".into()
+                        }
+                        Err(e) => format!("无法访问链接目标：{e}"),
+                        Ok(meta) if !meta.is_dir() => "链接目标不是目录".into(),
+                        Ok(_) => {
+                            match std::fs::metadata(skill.source_path.join(scanner::SKILL_FILE)) {
+                                Err(e) if e.kind() == std::io::ErrorKind::NotFound => {
+                                    "目标目录中缺少 SKILL.md".into()
+                                }
+                                Err(e) => format!("无法读取 SKILL.md：{e}"),
+                                Ok(_) => "目标中的 SKILL.md 不是普通文件".into(),
+                            }
+                        }
+                    }]
                 } else {
                     vec![]
                 };
+                let provenance = config.skill_provenance.get(&skill.id).cloned();
+                let installation = config.skill_installations.get(&skill.id).cloned();
+                let source_ids = if installation.is_some() {
+                    vec!["studio".into()]
+                } else {
+                    provenance
+                        .as_ref()
+                        .map(|p| p.source_ids.clone())
+                        .unwrap_or_else(|| original_source_ids(config, &skill, &agents))
+                };
                 SkillView {
+                    source_ids,
+                    provenance,
+                    installation,
                     malformed_frontmatter: fm.malformed,
                     frontmatter_error: fm.error,
                     diagnostics,
@@ -490,6 +521,9 @@ impl Studio {
         mode: GroupApplyMode,
         force: bool,
     ) -> Result<LinkReport> {
+        if config.group(group_id).is_some_and(|g| g.agent_id.is_some()) {
+            return Err(Error::invalid("Agent 分组请使用启用/切换操作"));
+        }
         let skill_ids = config
             .group(group_id)
             .ok_or_else(|| Error::NotFound(format!("分组 {group_id}")))?
@@ -513,26 +547,27 @@ impl Studio {
             .ok_or_else(|| Error::NotFound(format!("项目 {project_id}")))?
             .clone();
 
-        // 直接指定的 skill + 所绑分组展开后的 skill，去重
-        let mut ids: Vec<String> = project.skill_ids.clone();
-        let mut seen: HashSet<String> = ids.iter().cloned().collect();
-        for gid in &project.group_ids {
-            if let Some(group) = config.group(gid) {
-                for sid in &group.skill_ids {
-                    if seen.insert(sid.clone()) {
-                        ids.push(sid.clone());
+        let mut report = LinkReport::default();
+        for agent_id in &project.agent_ids {
+            let mut ids = project.skill_ids.clone();
+            let mut seen: HashSet<String> = ids.iter().cloned().collect();
+            for gid in &project.group_ids {
+                if let Some(group) = config.group(gid) {
+                    if group
+                        .agent_id
+                        .as_ref()
+                        .is_some_and(|owner| owner != agent_id)
+                    {
+                        continue;
+                    }
+                    for sid in &group.skill_ids {
+                        if seen.insert(sid.clone()) {
+                            ids.push(sid.clone());
+                        }
                     }
                 }
             }
-        }
-        if ids.is_empty() {
-            return Ok(LinkReport::default());
-        }
-
-        let skills = self.resolve_skills(config, &ids)?;
-        let mut report = LinkReport::default();
-
-        for agent_id in &project.agent_ids {
+            let skills = self.resolve_skills(config, &ids)?;
             let agent = crate::models::agent::require_agent(agent_id)?;
             let Some(root) = agent.project_root(&project.root) else {
                 report.push_err(LinkResult {
@@ -651,9 +686,39 @@ impl Studio {
     ///
     /// 移动前会校验 Hub 与所有 agent 目录不重叠，且目标不存在。
     pub fn adopt_to_hub(&self, config: &mut AppConfig, skill_id: &str) -> Result<Skill> {
+        self.relocate_hub_skill(config, skill_id, false)
+    }
+
+    pub fn release_from_hub(&self, config: &mut AppConfig, skill_id: &str) -> Result<Skill> {
+        self.relocate_hub_skill(config, skill_id, true)
+    }
+
+    fn relocate_hub_skill(
+        &self,
+        config: &mut AppConfig,
+        skill_id: &str,
+        restore: bool,
+    ) -> Result<Skill> {
+        if config.active_groups.values().any(|g| {
+            g.skill_ids.iter().any(|id| id == skill_id)
+                || g.suspended_manual.iter().any(|e| e.skill_id == skill_id)
+        }) {
+            return Err(Error::invalid(
+                "请先停用包含或暂时停用此 skill 的分组，再迁移",
+            ));
+        }
         let skill = self.find_skill(config, skill_id)?;
-        if matches!(skill.origin, SkillOrigin::Hub) {
+        if !restore && matches!(skill.origin, SkillOrigin::Hub) {
             return Ok(skill);
+        }
+        if restore && !matches!(skill.origin, SkillOrigin::Hub) {
+            return Err(Error::invalid("此 skill 不在 Hub 中"));
+        }
+        let saved = config.skill_provenance.get(skill_id).cloned();
+        if restore && saved.is_none() {
+            return Err(Error::invalid(
+                "缺少原始来源与备份记录，不能自动还原；请先确认历史来源",
+            ));
         }
         if matches!(skill.origin, SkillOrigin::External) {
             return Err(Error::invalid(
@@ -669,8 +734,48 @@ impl Studio {
         linker::ensure_distinct_roots(&hub, &all_roots)?;
 
         std::fs::create_dir_all(&hub).map_err(|e| Error::io(&hub, e))?;
-        let target = hub.join(&skill.name);
-        if target.exists() || scanner::is_symlink_or_junction(&target) {
+        let target = if restore {
+            saved.as_ref().unwrap().original_path.clone()
+        } else {
+            hub.join(&skill.name)
+        };
+        scanner::validate_sync_source(&skill.source_path)?;
+        if restore {
+            let parent = target
+                .parent()
+                .ok_or_else(|| Error::invalid("原始目录无效"))?;
+            let resolved_parent = parent.canonicalize().map_err(|e| Error::io(parent, e))?;
+            let resolved_target = resolved_parent.join(
+                target
+                    .file_name()
+                    .ok_or_else(|| Error::invalid("原始目录无效"))?,
+            );
+            let resolved_source = skill
+                .source_path
+                .canonicalize()
+                .map_err(|e| Error::io(&skill.source_path, e))?;
+            if crate::fs::paths::path_is_within(&resolved_target, &resolved_source)
+                || crate::fs::paths::path_is_within(&resolved_source, &resolved_target)
+            {
+                return Err(Error::invalid("原目录已重定向至 Hub，不能自动还原"));
+            }
+            if crate::fs::paths::path_is_within(&target, &skill.source_path)
+                || crate::fs::paths::path_is_within(&skill.source_path, &target)
+            {
+                return Err(Error::invalid("还原目录与 Hub 来源重叠"));
+            }
+            if target.symlink_metadata().is_ok() {
+                let status = linker::link_status(&skill.source_path, &target);
+                if !matches!(
+                    status,
+                    LinkStatus::Linked | LinkStatus::Copied | LinkStatus::CopyStale
+                ) {
+                    return Err(Error::invalid(
+                        "原位置已被占用或副本已修改，不能覆盖；请先处理冲突",
+                    ));
+                }
+            }
+        } else if target.exists() || scanner::is_symlink_or_junction(&target) {
             return Err(Error::invalid(format!(
                 "Hub 里已存在同名 skill: {}",
                 target.display()
@@ -701,6 +806,9 @@ impl Studio {
                 }
             }
         }
+        if let Some(record) = &saved {
+            candidates.extend(record.entry_paths.clone());
+        }
         let mut seen = HashSet::new();
         let mut copies = Vec::new();
         let mut links = Vec::new();
@@ -710,7 +818,10 @@ impl Studio {
                 .canonicalize()
                 .unwrap_or_else(|_| parent.to_path_buf())
                 .join(dest.file_name().unwrap());
-            if !seen.insert(key) || crate::fs::paths::is_same_path(&dest, &old_path) {
+            if !seen.insert(key)
+                || crate::fs::paths::is_same_path(&dest, &old_path)
+                || (restore && crate::fs::paths::is_same_path(&dest, &target))
+            {
                 continue;
             }
             match std::fs::symlink_metadata(&dest) {
@@ -735,12 +846,79 @@ impl Studio {
                 )));
             }
         }
+        let backup_path = self.store.dir().join("skill-backups").join(format!(
+            "{}-{}",
+            skill.id,
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap_or_default()
+                .as_nanos()
+        ));
+        let source_ids = saved
+            .as_ref()
+            .map(|p| p.source_ids.clone())
+            .unwrap_or_else(|| {
+                original_source_ids(config, &skill, &self.agent_states(config, &skill))
+            });
+        let record = if restore {
+            saved.clone().unwrap()
+        } else {
+            SkillProvenance {
+                source_ids,
+                original_path: old_path.clone(),
+                original_root: skill.root.clone(),
+                original_origin: skill.origin.clone(),
+                backup_path: backup_path.clone(),
+                original_hash: scanner::dir_content_hash(&old_path)?,
+                collected_at: linker::now_secs(),
+                entry_paths: links
+                    .iter()
+                    .cloned()
+                    .chain(
+                        copies
+                            .iter()
+                            .filter_map(|(p, _)| p.parent().map(|p| p.to_path_buf())),
+                    )
+                    .chain(std::iter::once(old_path.clone()))
+                    .collect(),
+            }
+        };
         let mut next = config.clone();
         migrate_skill_id(&mut next, &skill.id, &new_id);
+        next.skill_provenance.insert(new_id.clone(), record.clone());
+        if restore {
+            if let Some(regs) = next.registrations.get_mut(&new_id) {
+                regs.retain(|_, r| r.target_path != target);
+            }
+        }
         let mut tx =
             super::transaction::Transaction::begin(self.store.dir().join("migration.json"))?;
         let operation = (|| -> Result<()> {
             let before = scanner::dir_content_hash(&old_path)?;
+            if !restore && before != record.original_hash {
+                return Err(Error::invalid("来源在备份前发生变化，请重试"));
+            }
+            // Keep a permanent verified snapshot separate from the temporary undo journal.
+            tx.reserve(&backup_path)?;
+            linker::copy_tree(&old_path, &backup_path.join("content"))?;
+            if scanner::dir_content_hash(&backup_path.join("content"))? != before {
+                return Err(Error::invalid("备份校验失败"));
+            }
+            crate::fs::atomic::write_json_file(&backup_path.join("provenance.json"), &record)?;
+            crate::fs::atomic::write_json_file(&backup_path.join("config.json"), config)?;
+            crate::fs::atomic::write_json_file(
+                &backup_path.join("snapshot.json"),
+                &serde_json::json!({ "operation": if restore { "release" } else { "adopt" }, "source": old_path, "destination": target, "contentHash": before, "createdAt": linker::now_secs() }),
+            )?;
+            if restore
+                && target.symlink_metadata().is_ok()
+                && !matches!(
+                    linker::link_status(&old_path, &target),
+                    LinkStatus::Linked | LinkStatus::Copied | LinkStatus::CopyStale
+                )
+            {
+                return Err(Error::invalid("原位置发生变化，停止还原"));
+            }
             tx.reserve(&target)?;
             linker::copy_tree(&old_path, &target)?;
             if scanner::dir_content_hash(&target)? != before
@@ -750,55 +928,57 @@ impl Studio {
             }
             scanner::validate_sync_source(&target)?;
             tx.reserve(&old_path)?;
-            // Stay inside the outer journal: a nested copy transaction could undo
-            // the restored source during startup recovery.
-            let mode = config.settings.default_link_mode;
-            let linked = if mode == LinkMode::Copy {
-                false
-            } else {
-                match linker::create_symlink(&target, &old_path) {
-                    Ok(()) => true,
-                    Err(err) if mode == LinkMode::Symlink => return Err(err),
-                    Err(_) => false,
+            if !restore {
+                // Stay inside the outer journal: a nested copy transaction could undo
+                // the restored source during startup recovery.
+                let mode = config.settings.default_link_mode;
+                let linked = if mode == LinkMode::Copy {
+                    false
+                } else {
+                    match linker::create_symlink(&target, &old_path) {
+                        Ok(()) => true,
+                        Err(err) if mode == LinkMode::Symlink => return Err(err),
+                        Err(_) => false,
+                    }
+                };
+                let done = if linked {
+                    linker::Registered {
+                        mode: LinkMode::Symlink,
+                        status: LinkStatus::Linked,
+                        source_hash: None,
+                    }
+                } else {
+                    linker::copy_tree(&target, &old_path)?;
+                    if scanner::dir_content_hash(&old_path)? != before {
+                        return Err(Error::invalid("原位置副本校验失败"));
+                    }
+                    crate::fs::atomic::write_json_file(
+                        &old_path.join(scanner::COPY_SIDECAR),
+                        &scanner::CopySidecar {
+                            skill_id: new_id.clone(),
+                            source_path: target.clone(),
+                            source_hash: before.clone(),
+                            copied_at: linker::now_secs(),
+                        },
+                    )?;
+                    linker::Registered {
+                        mode: LinkMode::Copy,
+                        status: LinkStatus::Copied,
+                        source_hash: Some(before),
+                    }
+                };
+                if let SkillOrigin::InPlace { ref owner_agent } = skill.origin {
+                    next.set_registration(
+                        &new_id,
+                        owner_agent,
+                        Registration {
+                            mode: done.mode,
+                            target_path: old_path.clone(),
+                            registered_at: linker::now_secs(),
+                            source_hash_at_copy: done.source_hash,
+                        },
+                    );
                 }
-            };
-            let done = if linked {
-                linker::Registered {
-                    mode: LinkMode::Symlink,
-                    status: LinkStatus::Linked,
-                    source_hash: None,
-                }
-            } else {
-                linker::copy_tree(&target, &old_path)?;
-                if scanner::dir_content_hash(&old_path)? != before {
-                    return Err(Error::invalid("原位置副本校验失败"));
-                }
-                crate::fs::atomic::write_json_file(
-                    &old_path.join(scanner::COPY_SIDECAR),
-                    &scanner::CopySidecar {
-                        skill_id: new_id.clone(),
-                        source_path: target.clone(),
-                        source_hash: before.clone(),
-                        copied_at: linker::now_secs(),
-                    },
-                )?;
-                linker::Registered {
-                    mode: LinkMode::Copy,
-                    status: LinkStatus::Copied,
-                    source_hash: Some(before),
-                }
-            };
-            if let SkillOrigin::InPlace { ref owner_agent } = skill.origin {
-                next.set_registration(
-                    &new_id,
-                    owner_agent,
-                    Registration {
-                        mode: done.mode,
-                        target_path: old_path.clone(),
-                        registered_at: linker::now_secs(),
-                        source_hash_at_copy: done.source_hash,
-                    },
-                );
             }
             for dest in &links {
                 tx.reserve(dest)?;
@@ -827,8 +1007,12 @@ impl Studio {
         let mut adopted = skill;
         adopted.id = new_id;
         adopted.source_path = target;
-        adopted.root = hub;
-        adopted.origin = SkillOrigin::Hub;
+        adopted.root = if restore { record.original_root } else { hub };
+        adopted.origin = if restore {
+            record.original_origin
+        } else {
+            SkillOrigin::Hub
+        };
         Ok(adopted)
     }
 
@@ -861,6 +1045,9 @@ impl Studio {
 }
 
 fn migrate_skill_id(config: &mut AppConfig, old: &str, new: &str) {
+    if let Some(provenance) = config.skill_provenance.remove(old) {
+        config.skill_provenance.insert(new.into(), provenance);
+    }
     for group in &mut config.groups {
         for id in &mut group.skill_ids {
             if id == old {
@@ -919,4 +1106,49 @@ fn result(
         status,
         message,
     }
+}
+
+fn original_source_ids(
+    config: &AppConfig,
+    skill: &Skill,
+    states: &HashMap<String, AgentSkillState>,
+) -> Vec<String> {
+    // Historical Hub items without a collection record have unknown origins; storage is not provenance.
+    if matches!(skill.origin, SkillOrigin::Hub) {
+        return vec!["unknown".into()];
+    }
+    let shared = |path: &std::path::Path| {
+        path.components()
+            .any(|c| c.as_os_str() == ".agents" || c.as_os_str() == ".agent")
+    };
+    let mut ids = HashSet::new();
+    if shared(&skill.source_path) || shared(&skill.root) {
+        ids.insert("agent".to_string());
+    } else if let SkillOrigin::InPlace { owner_agent } = &skill.origin {
+        ids.insert(owner_agent.clone());
+    }
+    for (id, state) in states {
+        if !matches!(state.status, LinkStatus::Source | LinkStatus::Linked) {
+            continue;
+        }
+        for path in &state.entry_paths {
+            if config
+                .registration(&skill.id, id)
+                .is_some_and(|r| r.target_path == *path)
+            {
+                continue;
+            }
+            ids.insert(if shared(path) {
+                "agent".into()
+            } else {
+                id.clone()
+            });
+        }
+    }
+    if ids.is_empty() {
+        ids.insert("external".into());
+    }
+    let mut ids: Vec<_> = ids.into_iter().collect();
+    ids.sort();
+    ids
 }

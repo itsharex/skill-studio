@@ -2,6 +2,22 @@ import { invoke } from "@tauri-apps/api/core";
 import type { Group, GroupApplyMode, LinkReport } from "@/types";
 
 export const groupsApi = {
+  async saveAgent(
+    groupId: string | null,
+    agentId: string,
+    name: string,
+    skillIds: string[],
+  ): Promise<Group> {
+    return await invoke("save_agent_group", {
+      groupId,
+      agentId,
+      name,
+      skillIds,
+    });
+  },
+  async activate(agentId: string, groupId: string | null): Promise<void> {
+    return await invoke("activate_agent_group", { agentId, groupId });
+  },
   async list(): Promise<Group[]> {
     return await invoke("list_groups");
   },
