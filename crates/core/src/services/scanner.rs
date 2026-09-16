@@ -218,11 +218,13 @@ pub fn is_symlink_or_junction(path: &Path) -> bool {
     if meta.file_type().is_symlink() {
         return true;
     }
+    // 块尾表达式而非 return —— cfg 剥离后它就是函数尾表达式，
+    // 写 return 会在 Windows 上触发 clippy::needless_return。
     #[cfg(windows)]
     {
         use std::os::windows::fs::MetadataExt;
         const FILE_ATTRIBUTE_REPARSE_POINT: u32 = 0x400;
-        return meta.file_attributes() & FILE_ATTRIBUTE_REPARSE_POINT != 0;
+        meta.file_attributes() & FILE_ATTRIBUTE_REPARSE_POINT != 0
     }
     #[cfg(not(windows))]
     false

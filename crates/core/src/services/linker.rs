@@ -133,9 +133,11 @@ fn create_junction(source: &Path, dest: &Path) -> std::io::Result<()> {
 ///
 /// Windows 上 junction 是目录类型，`remove_file` 无效，必须先试 `remove_dir`。
 pub fn remove_symlink_or_junction(path: &Path) -> std::io::Result<()> {
+    // 两个分支都写成块尾表达式（而不是 `return`）：cfg 剥离后剩下的那个块就是
+    // 函数尾表达式，写 return 会在对应平台上触发 clippy::needless_return。
     #[cfg(windows)]
     {
-        return fs::remove_dir(path).or_else(|_| fs::remove_file(path));
+        fs::remove_dir(path).or_else(|_| fs::remove_file(path))
     }
     #[cfg(not(windows))]
     {
