@@ -24,6 +24,7 @@ import {
   Unplug,
 } from "lucide-react";
 import { toast } from "sonner";
+import { SettingCard, SettingsSection } from "@/components/common/SettingCard";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
@@ -785,31 +786,26 @@ export function ServerSettings() {
   const guard = useNavigationGuard();
   if (!ctx) return null;
   return (
-    <section className="space-y-4">
-      <div className="flex justify-between">
-        <div>
-          <h2 className="font-semibold">服务器连接</h2>
-          <p className="text-sm text-muted-foreground">
-            连接记录保存在本机。移除记录不会删除服务器上的内容。
-          </p>
-        </div>
+    <SettingsSection
+      title="服务器连接"
+      icon={<Server />}
+      action={
         <Button onClick={() => ctx.edit()}>
           <Plus className="mr-2 h-4 w-4" />
           添加服务器
         </Button>
-      </div>
+      }
+    >
+      <p className="text-xs text-muted-foreground">
+        连接记录保存在本机。移除记录不会删除服务器上的内容。
+      </p>
       {ctx.servers.map((s) => (
-        <div
+        <SettingCard
           key={s.id}
-          className="flex items-center gap-3 rounded-xl border p-4"
+          title={s.name}
+          icon={<Server />}
+          description={<span className="break-all">{s.host}</span>}
         >
-          <Server className="h-5 w-5" />
-          <div className="min-w-0 flex-1">
-            <div>{s.name}</div>
-            <div className="truncate text-xs text-muted-foreground">
-              {s.host}
-            </div>
-          </div>
           <Button
             variant="outline"
             disabled={!!ctx.connecting}
@@ -820,6 +816,7 @@ export function ServerSettings() {
           <Button
             aria-label={`编辑 ${s.name}`}
             variant="ghost"
+            size="icon"
             onClick={() => ctx.edit(s)}
           >
             <Pencil className="h-4 w-4" />
@@ -827,12 +824,13 @@ export function ServerSettings() {
           <Button
             aria-label={`移除 ${s.name}`}
             variant="ghost"
+            size="icon"
             onClick={() => guard(() => void ctx.remove(s))}
           >
             <Trash2 className="h-4 w-4" />
           </Button>
-        </div>
+        </SettingCard>
       ))}
-    </section>
+    </SettingsSection>
   );
 }

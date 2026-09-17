@@ -4,7 +4,7 @@ import { toast } from "sonner";
 import { SkillStudioIcon } from "@/components/common/SkillStudioIcon";
 import { ThemeToggle } from "@/components/common/ThemeToggle";
 import { Switch } from "@/components/ui/switch";
-import { useEffect, useState, type ReactNode } from "react";
+import { useEffect, useState } from "react";
 import {
   FolderOpen,
   Github,
@@ -34,6 +34,7 @@ import {
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { AgentIcon } from "@/components/common/AgentIcon";
 import { ConfirmDialog } from "@/components/common/ConfirmDialog";
+import { SettingCard, SettingsSection } from "@/components/common/SettingCard";
 import { projectsApi, settingsApi, systemApi } from "@/lib/api";
 import {
   useAgents,
@@ -48,63 +49,6 @@ import type { LinkMode } from "@/types";
 
 type SettingsTab =
   "general" | "directories" | "maintenance" | "servers" | "about";
-
-function SettingsSection({
-  title,
-  icon,
-  children,
-}: {
-  title: string;
-  icon: ReactNode;
-  children: ReactNode;
-}) {
-  return (
-    <section className="space-y-3">
-      <h3 className="flex items-center gap-2 border-b border-border/60 pb-3 text-sm font-semibold">
-        <span className="text-blue-500 [&>*]:h-5 [&>*]:w-5">{icon}</span>
-        {title}
-      </h3>
-      <div className="space-y-3">{children}</div>
-    </section>
-  );
-}
-function SettingCard({
-  title,
-  description,
-  icon,
-  children,
-  details,
-}: {
-  title: ReactNode;
-  description?: ReactNode;
-  icon: ReactNode;
-  children?: ReactNode;
-  details?: ReactNode;
-}) {
-  return (
-    <div className="rounded-xl border border-border-default bg-card px-5 py-4">
-      <div className="flex items-center gap-4">
-        <div className="flex h-10 w-10 shrink-0 items-center justify-center rounded-lg border border-border-default bg-background text-blue-500 [&>*]:h-5 [&>*]:w-5">
-          {icon}
-        </div>
-        <div className="min-w-0 flex-1">
-          <div className="text-sm font-medium">{title}</div>
-          {description && (
-            <div className="mt-1 text-xs leading-relaxed text-muted-foreground">
-              {description}
-            </div>
-          )}
-        </div>
-        {children && (
-          <div className="flex shrink-0 items-center gap-2">{children}</div>
-        )}
-      </div>
-      {details && (
-        <div className="mt-4 border-t border-border/60 pt-4">{details}</div>
-      )}
-    </div>
-  );
-}
 
 /**
  * 设置页。布局对齐 cc-switch：上方一条分段标签栏、下方内容区，**没有侧栏**
