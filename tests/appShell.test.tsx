@@ -20,6 +20,25 @@ function withAgents() {
 }
 
 describe("窗口壳与侧栏导航", () => {
+  it("hides disabled application navigation while keeping Hub available", async () => {
+    withAgents();
+    handlers.set("get_settings", () => ({
+      ...defaultSettings(),
+      disabledAgents: ["codex"],
+    }));
+    renderWithProviders(<App />);
+    const nav = within(screen.getByRole("navigation", { name: "主导航" }));
+    await waitFor(() => {
+      expect(
+        nav.getByRole("button", { name: /Claude Code/ }),
+      ).toBeInTheDocument();
+      expect(
+        nav.queryByRole("button", { name: /Codex/ }),
+      ).not.toBeInTheDocument();
+    });
+    expect(nav.getByRole("button", { name: "Skill Hub" })).toBeInTheDocument();
+  });
+
   it("首次启动默认停在「Skill Hub」并高亮该项", async () => {
     withAgents();
     renderWithProviders(<App />);

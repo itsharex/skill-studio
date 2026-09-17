@@ -3,7 +3,13 @@ import userEvent from "@testing-library/user-event";
 import { it, expect } from "vitest";
 import { SettingsPage } from "@/pages/SettingsPage";
 import { renderWithProviders } from "./utils/render";
-import { handlers, calls, defaultSettings } from "./mocks/tauri";
+import {
+  handlers,
+  calls,
+  defaultSettings,
+  claudeAgent,
+  codexAgent,
+} from "./mocks/tauri";
 
 it("only saves backup retention as an integer within 0..100 and never saves an empty input as zero", async () => {
   let settings = defaultSettings();
@@ -57,4 +63,28 @@ it("does not persist partial Hub paths while typing", async () => {
   expect(calls.find((c) => c.command === "update_settings")?.args).toEqual({
     patch: { hubDir: "/tmp/new-hub" },
   });
+});
+
+it("persists application toggles and allows all applications to be hidden and restored", async () => {
+  let settings = defaultSettings();
+  handlers.set("list_agents", () => [claudeAgent, codexAgent]);
+  handlers.set("get_settings", () => settings);
+  handlers.set("update_settings", ({ patch }) => {
+    settings = { ...settings, ...patch };
+    return settings;
+  });
+  const user = userEvent.setup();
+  renderWithProviders(<SettingsPage />);
+  const claude = await screen.findByRole("button", { name: "Claude Code" });
+  const codex = screen.getByRole("button", { name: "Codex" });
+  expect(claude).toHaveAttribute("aria-pressed", "true");
+  await user.click(claude);
+  await waitFor(() => expect(claude).toHaveAttribute("aria-pressed", "false"));
+  await user.click(codex);
+  await waitFor(() =>
+    expect(settings.disabledAgents).toEqual(["claude-code", "codex"]),
+  );
+  await waitFor(() => expect(codex).toBeEnabled());
+  await user.click(codex);
+  await waitFor(() => expect(settings.disabledAgents).toEqual(["claude-code"]));
 });

@@ -34,6 +34,15 @@ impl Studio {
             project.link_mode = s.link_mode;
         }
         let project = project.clone();
+        if project
+            .agent_ids
+            .iter()
+            .any(|id| config.settings.disabled_agents.contains(id))
+        {
+            return Err(Error::invalid(
+                "项目包含已退出管理的 Agent，请取消勾选或先开启该应用",
+            ));
+        }
         if !project.root.is_dir() {
             return Err(Error::invalid("项目目录不存在"));
         }

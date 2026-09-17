@@ -413,6 +413,12 @@ impl Studio {
         mode: Option<LinkMode>,
         force: bool,
     ) -> Result<LinkReport> {
+        if agent_ids
+            .iter()
+            .any(|id| config.settings.disabled_agents.contains(id))
+        {
+            return Err(Error::invalid("请先在设置中开启目标 Agent 的管理"));
+        }
         let skills = self.resolve_skills(config, skill_ids)?;
         let mode = mode.unwrap_or(config.settings.default_link_mode);
         let overrides = config.settings.agent_dir_overrides.clone();
@@ -476,6 +482,12 @@ impl Studio {
         agent_ids: &[String],
         force: bool,
     ) -> Result<LinkReport> {
+        if agent_ids
+            .iter()
+            .any(|id| config.settings.disabled_agents.contains(id))
+        {
+            return Err(Error::invalid("请先在设置中开启目标 Agent 的管理"));
+        }
         let skills = self.resolve_skills(config, skill_ids)?;
         let mut report = LinkReport::default();
 
@@ -557,6 +569,13 @@ impl Studio {
             .project(project_id)
             .ok_or_else(|| Error::NotFound(format!("项目 {project_id}")))?
             .clone();
+        if project
+            .agent_ids
+            .iter()
+            .any(|id| config.settings.disabled_agents.contains(id))
+        {
+            return Err(Error::invalid("项目包含已退出管理的 Agent"));
+        }
         let skills = self.resolve_skills(config, skill_ids)?;
         let mut report = LinkReport::default();
 
@@ -592,6 +611,14 @@ impl Studio {
         agent_id: &str,
         enabled: bool,
     ) -> Result<()> {
+        if config
+            .settings
+            .disabled_agents
+            .iter()
+            .any(|id| id == agent_id)
+        {
+            return Err(Error::invalid("请先在设置中开启此 Agent 的管理"));
+        }
         let skill = self.find_skill(config, skill_id)?;
         let agent = crate::models::agent::require_agent(agent_id)?;
         let state = self
@@ -650,6 +677,30 @@ impl Studio {
             return Err(Error::invalid(
                 "请先停用包含或暂时停用此 skill 的分组，再迁移",
             ));
+        }
+        for id in &config.settings.disabled_agents {
+            let agent = crate::models::agent::require_agent(id)?;
+            let skill = self.find_skill(config, skill_id)?;
+            let roots = agent.resolved_global_roots(&config.settings.agent_dir_overrides);
+            let record = config.skill_provenance.get(skill_id);
+            let touches_disabled = std::iter::once(&skill.source_path)
+                .chain(record.into_iter().flat_map(|p| {
+                    p.entry_paths
+                        .iter()
+                        .chain(std::iter::once(&p.original_path))
+                }))
+                .any(|p| {
+                    p.parent().is_some_and(|parent| {
+                        roots
+                            .iter()
+                            .any(|r| crate::fs::paths::paths_alias(parent, r))
+                    })
+                });
+            if touches_disabled {
+                return Err(Error::invalid(
+                    "此 skill 涉及已退出管理的 Agent，请先开启该应用再收录或移出 Hub",
+                ));
+            }
         }
         let skill = self.find_skill(config, skill_id)?;
         if !restore && matches!(skill.origin, SkillOrigin::Hub) {

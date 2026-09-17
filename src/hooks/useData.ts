@@ -216,6 +216,8 @@ export function useUpdateSettings() {
     mutationFn: (patch: SettingsPatch) => settingsApi.update(patch),
     onSuccess: (settings) => {
       qc.setQueryData(queryKeys.settings, settings);
+      void qc.invalidateQueries({ queryKey: ["config"] });
+      void qc.invalidateQueries({ queryKey: queryKeys.groups });
       // 目录覆盖会改变扫描位置
       void qc.invalidateQueries({ queryKey: queryKeys.skills });
       void qc.invalidateQueries({ queryKey: queryKeys.agents });

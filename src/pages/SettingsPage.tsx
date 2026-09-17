@@ -157,6 +157,37 @@ export function SettingsPage() {
 
         <div className="-mx-1 min-h-0 flex-1 overflow-y-auto px-1 pb-8 pt-1">
           <TabsContent value="general" className="space-y-7">
+            <SettingsSection title="管理的应用" icon={<Settings2 />}>
+              <p className="text-xs text-muted-foreground">
+                选择在顶部显示的应用。关闭仅隐藏管理入口，已安装的
+                skill、启用中的分组和 Hub 来源记录保持不变。
+              </p>
+              <div className="flex flex-wrap gap-2 rounded-xl border border-border-default p-2">
+                {agents.map((agent) => {
+                  const disabled = settings.disabledAgents ?? [];
+                  const enabled = !disabled.includes(agent.id);
+                  return (
+                    <Button
+                      key={agent.id}
+                      variant={enabled ? "default" : "ghost"}
+                      aria-pressed={enabled}
+                      disabled={update.isPending}
+                      onClick={() =>
+                        update.mutate({
+                          disabledAgents: enabled
+                            ? [...disabled, agent.id]
+                            : disabled.filter((id) => id !== agent.id),
+                        })
+                      }
+                      className="gap-2"
+                    >
+                      <AgentIcon agentId={agent.id} className="h-5 w-5" />
+                      {agent.displayName}
+                    </Button>
+                  );
+                })}
+              </div>
+            </SettingsSection>
             <SettingsSection title="外观" icon={<Palette />}>
               <SettingCard
                 title="主题模式"

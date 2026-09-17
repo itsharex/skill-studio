@@ -43,6 +43,9 @@ pub struct SkillMeta {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct Settings {
+    /// 关闭管理入口的应用；不修改已安装内容或来源记录。
+    #[serde(default)]
+    pub disabled_agents: Vec<String>,
     /// 新建注册时的默认链接方式
     #[serde(default)]
     pub default_link_mode: LinkMode,
@@ -85,6 +88,7 @@ fn default_backup_keep() -> usize {
 impl Default for Settings {
     fn default() -> Self {
         Self {
+            disabled_agents: Vec::new(),
             default_link_mode: LinkMode::default(),
             preserve_manual_skills: true,
             language: default_language(),

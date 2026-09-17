@@ -20,7 +20,7 @@ import { Button } from "@/components/ui/button";
 import { TooltipProvider } from "@/components/ui/tooltip";
 import { AgentIcon } from "@/components/common/AgentIcon";
 import { NavSwitcher, type NavSection } from "@/components/common/NavSwitcher";
-import { useAgents, useSkillsAutoRefresh } from "@/hooks/useData";
+import { useAgents, useSettings, useSkillsAutoRefresh } from "@/hooks/useData";
 import { systemApi } from "@/lib/api";
 import { isLinux, isWindows } from "@/lib/platform";
 import { AgentPage } from "@/pages/AgentGroupsPage";
@@ -54,7 +54,12 @@ export default function App() {
 }
 function AppContent() {
   const requestNavigation = useNavigationGuard();
-  const { data: agents = [] } = useAgents();
+  const { data: allAgents = [] } = useAgents();
+  const { data: settings } = useSettings();
+  const agents = useMemo(
+    () => allAgents.filter((a) => !settings?.disabledAgents?.includes(a.id)),
+    [allAgents, settings?.disabledAgents],
+  );
   const queryClient = useQueryClient();
   useSkillsAutoRefresh();
 
@@ -83,6 +88,14 @@ function AppContent() {
       localStorage.setItem(VIEW_STORAGE_KEY, view);
     }
   }, [view]);
+
+  useEffect(() => {
+    const disabledView = (id: ViewId) =>
+      id.startsWith(AGENT_PREFIX) &&
+      settings?.disabledAgents?.includes(id.slice(AGENT_PREFIX.length));
+    if (disabledView(backTarget.current)) backTarget.current = "library";
+    if (disabledView(view)) setView("library");
+  }, [settings?.disabledAgents, view]);
 
   // 启动期错误（例如配置文件坏了）要让用户看见，而不是静默用默认值跑
   useEffect(() => {

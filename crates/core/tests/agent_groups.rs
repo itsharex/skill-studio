@@ -478,3 +478,120 @@ fn reapply_refreshes_stale_owned_copy_without_changing_manual_skills() {
     studio.activate_agent_group(&mut c, "codex", None).unwrap();
     assert!(!env.codex_skills().join("demo").exists());
 }
+
+#[test]
+#[serial]
+fn leaving_management_restores_manual_and_adopted_content_and_keeps_hub() {
+    let env = Env::new();
+    let studio = env.studio();
+    let mut c = studio.load_config().unwrap();
+    let manual = env.write_simple_skill(&env.codex_skills(), "manual");
+    let bytes = fs::read(manual.join("SKILL.md")).unwrap();
+    let source = studio
+        .scan_skills(&c)
+        .unwrap()
+        .into_iter()
+        .find(|v| v.skill.name == "manual")
+        .unwrap()
+        .skill;
+    let hub = studio.adopt_to_hub(&mut c, &source.id).unwrap();
+    c.settings.preserve_manual_skills = false;
+    let group = make(&env, &studio, &mut c, "g", "codex", &["group-only"]);
+    studio
+        .activate_agent_group(&mut c, "codex", Some(&group))
+        .unwrap();
+    studio.set_agent_management(&mut c, "codex", false).unwrap();
+    assert!(!skill_studio_core::services::scanner::is_symlink_or_junction(&manual));
+    assert_eq!(fs::read(manual.join("SKILL.md")).unwrap(), bytes);
+    assert!(hub.source_path.join("SKILL.md").exists());
+    assert!(!env.codex_skills().join("group-only").exists());
+    assert!(!c.active_groups.contains_key("codex"));
+    assert!(studio
+        .load_config()
+        .unwrap()
+        .settings
+        .disabled_agents
+        .contains(&"codex".into()));
+    let views = studio.scan_skills(&c).unwrap();
+    assert!(views
+        .iter()
+        .filter(|v| v.skill.name == "manual")
+        .any(|v| !v.agents["codex"].disabled));
+    assert!(studio
+        .activate_agent_group(&mut c, "codex", Some(&group))
+        .is_err());
+    studio.set_agent_management(&mut c, "codex", true).unwrap();
+    assert!(!c.active_groups.contains_key("codex"));
+}
+
+#[test]
+#[serial]
+fn leaving_management_conflict_keeps_management_and_files_unchanged() {
+    let env = Env::new();
+    let studio = env.studio();
+    let mut c = studio.load_config().unwrap();
+    let group = make(&env, &studio, &mut c, "g", "codex", &["modified"]);
+    studio
+        .activate_agent_group(&mut c, "codex", Some(&group))
+        .unwrap();
+    let dest = env.codex_skills().join("modified/SKILL.md");
+    fs::write(&dest, "local changes").unwrap();
+    let before = fs::read(studio.store().config_path()).unwrap();
+    assert!(studio.set_agent_management(&mut c, "codex", false).is_err());
+    assert!(c.settings.disabled_agents.is_empty());
+    assert!(c.active_groups.contains_key("codex"));
+    assert_eq!(fs::read(studio.store().config_path()).unwrap(), before);
+    assert_eq!(fs::read_to_string(dest).unwrap(), "local changes");
+}
+
+#[test]
+#[serial]
+fn leaving_management_keeps_other_agent_group_and_rejects_missing_backup() {
+    let env = Env::new();
+    let studio = env.studio();
+    let mut c = studio.load_config().unwrap();
+    let manual = env.write_simple_skill(&env.codex_skills(), "adopted");
+    let original = studio
+        .scan_skills(&c)
+        .unwrap()
+        .into_iter()
+        .find(|v| v.skill.name == "adopted")
+        .unwrap()
+        .skill;
+    let hub = studio.adopt_to_hub(&mut c, &original.id).unwrap();
+    let other = make(
+        &env,
+        &studio,
+        &mut c,
+        "other",
+        "claude-code",
+        &["other-only"],
+    );
+    studio
+        .activate_agent_group(&mut c, "claude-code", Some(&other))
+        .unwrap();
+    let backup = c.skill_provenance[&hub.id]
+        .backup_path
+        .join("content/SKILL.md");
+    let bytes = fs::read(&backup).unwrap();
+    fs::write(&backup, "corrupt").unwrap();
+    assert!(studio.set_agent_management(&mut c, "codex", false).is_err());
+    assert!(c.settings.disabled_agents.is_empty());
+    assert!(
+        skill_studio_core::services::linker::link_status(&hub.source_path, &manual).is_registered()
+    );
+    fs::write(&backup, bytes).unwrap();
+    studio.set_agent_management(&mut c, "codex", false).unwrap();
+    assert!(c.active_groups.contains_key("claude-code"));
+    assert!(env.claude_skills().join("other-only/SKILL.md").exists());
+    assert!(hub.source_path.join("SKILL.md").exists());
+    assert!(studio
+        .register(
+            &mut c,
+            std::slice::from_ref(&hub.id),
+            &["codex".into()],
+            None,
+            false
+        )
+        .is_err());
+}

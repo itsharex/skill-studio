@@ -134,6 +134,7 @@ export interface ProjectBinding {
 }
 
 export interface Settings {
+  disabledAgents?: string[];
   defaultLinkMode: LinkMode;
   preserveManualSkills?: boolean;
   language: string;
@@ -190,6 +191,7 @@ export interface LinkReport {
 }
 
 export interface SettingsPatch {
+  disabledAgents?: string[];
   defaultLinkMode?: LinkMode;
   preserveManualSkills?: boolean;
   language?: string;

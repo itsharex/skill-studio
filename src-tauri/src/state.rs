@@ -109,6 +109,25 @@ impl AppState {
         self.studio.release_from_hub(&mut guard, skill_id)
     }
 
+    pub fn set_managed_agents(&self, disabled: &[String]) -> Result<()> {
+        use std::collections::HashSet;
+        let mut guard = self.config_mut();
+        for id in disabled {
+            skill_studio_core::models::agent::require_agent(id)?;
+        }
+        let old: HashSet<_> = guard.settings.disabled_agents.iter().cloned().collect();
+        let new: HashSet<_> = disabled.iter().cloned().collect();
+        let changed: Vec<_> = old.symmetric_difference(&new).cloned().collect();
+        if changed.len() > 1 {
+            return Err(skill_studio_core::Error::invalid("请逐个切换应用管理状态"));
+        }
+        if let Some(id) = changed.first() {
+            self.studio
+                .set_agent_management(&mut guard, id, !new.contains(id))?;
+        }
+        Ok(())
+    }
+
     pub fn activate_agent_group(&self, agent_id: &str, group_id: Option<&str>) -> Result<()> {
         let mut guard = self.config_mut();
         self.studio

@@ -44,6 +44,7 @@ import {
 import { useAdoptToHub, useAgents, useSkills } from "@/hooks/useData";
 import { skillsApi, systemApi } from "@/lib/api";
 import type { SkillView } from "@/types";
+import { formatTokens, sumTokens, tokenIndex, tokenTitle } from "@/lib/tokens";
 
 export function LibraryPage({ onAdd }: { onAdd?: () => void } = {}) {
   const { data: skills = [], isLoading } = useSkills();
@@ -92,6 +93,12 @@ export function LibraryPage({ onAdd }: { onAdd?: () => void } = {}) {
         .includes(query.trim().toLowerCase()),
     );
   const available = catalog.filter((c) => !c.unavailable);
+  const tokens = useMemo(() => tokenIndex(skills), [skills]);
+  // 与已安装数量一致：合并的多来源 skill 只计一次，筛选不改变总量。
+  const totalTokens = sumTokens(
+    tokens,
+    available.map((c) => c.skill.id),
+  );
   /** 真身已经搬进 Hub 目录（收编过），与卡片上那枚「Hub 托管」徽标同一判定 */
   const isHubManaged = (card: HubCard) =>
     card.sources.some((s) => s.origin.kind === "hub");
@@ -205,6 +212,13 @@ export function LibraryPage({ onAdd }: { onAdd?: () => void } = {}) {
         >
           已托管 {hubManaged.length} 个
         </button>
+        <Badge
+          variant="outline"
+          className="px-3 py-1 text-sm font-medium"
+          title={tokenTitle(totalTokens, "全部已安装 skill（多来源去重）")}
+        >
+          合计 ≈ {formatTokens(totalTokens.total)} tokens
+        </Badge>
       </div>
     </div>
   );
@@ -261,6 +275,7 @@ export function LibraryPage({ onAdd }: { onAdd?: () => void } = {}) {
           {filtered.map((card) => {
             const skill = card.skill;
             const origins = hubSourceIds(card);
+            const rowTokens = sumTokens(tokens, [skill.id]);
             return (
               <ListItemRow key={card.key} card>
                 <div className="min-w-0 flex-1">
@@ -293,6 +308,12 @@ export function LibraryPage({ onAdd }: { onAdd?: () => void } = {}) {
                         )}
                       </span>
                     ))}
+                    <Badge
+                      variant="outline"
+                      title={`${tokenTitle(rowTokens, skill.name)} 整个目录文本合计 ≈ ${formatTokens(rowTokens.total)} tokens。`}
+                    >
+                      SKILL.md ≈ {formatTokens(rowTokens.skillMd)} tokens
+                    </Badge>
                     {isHubManaged(card) && (
                       <Badge
                         variant="outline"

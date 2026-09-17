@@ -26,6 +26,53 @@ function setup(skills = [makeSkill()]) {
 }
 
 describe("Skill Hub", () => {
+  it("按卡片汇总 tokens，多来源去重、不同内容分别计数且筛选不改变总量", async () => {
+    setup([
+      makeSkill({
+        id: "a",
+        contentHash: "same",
+        tokens: { skillMd: 1000, extras: 200 },
+        sourceIds: ["claude-code"],
+      }),
+      makeSkill({
+        id: "b",
+        contentHash: "same",
+        tokens: { skillMd: 1000, extras: 200 },
+        sourceIds: ["codex"],
+      }),
+      makeSkill({
+        id: "c",
+        contentHash: "different",
+        tokens: { skillMd: 300, extras: 100 },
+        sourceIds: ["studio"],
+      }),
+      makeSkill({
+        id: "broken",
+        name: "broken",
+        diagnostics: ["链接目标不可用"],
+        tokens: { skillMd: 9000, extras: 0 },
+      }),
+    ]);
+    const user = userEvent.setup({ pointerEventsCheck: 0 });
+    renderWithProviders(<LibraryPage />);
+    expect(await screen.findByText("合计 ≈ 1.6k tokens")).toBeInTheDocument();
+    expect(screen.getAllByText("SKILL.md ≈ 1k tokens")).toHaveLength(1);
+    expect(screen.getByText("SKILL.md ≈ 300 tokens")).toHaveAttribute(
+      "title",
+      expect.stringContaining("SKILL.md ≈ 300"),
+    );
+    expect(
+      screen.getByText("SKILL.md ≈ 300 tokens").getAttribute("title"),
+    ).toContain("附带文件 ≈ 100");
+    expect(
+      screen.getByText("SKILL.md ≈ 300 tokens").getAttribute("title"),
+    ).toContain("整个目录文本合计 ≈ 400 tokens");
+    await user.click(screen.getByRole("button", { name: "Codex: 1" }));
+    expect(screen.queryByText("SKILL.md ≈ 300 tokens")).not.toBeInTheDocument();
+    expect(screen.getByText("SKILL.md ≈ 1k tokens")).toBeInTheDocument();
+    expect(screen.getByText("合计 ≈ 1.6k tokens")).toBeInTheDocument();
+  });
+
   it("空状态给出可操作的引导，而不是一句「暂无数据」", async () => {
     handlers.set("list_agents", () => [claudeAgent]);
     handlers.set("scan_skills", () => []);

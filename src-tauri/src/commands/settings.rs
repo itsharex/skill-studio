@@ -25,6 +25,7 @@ pub fn get_settings(state: State<'_, AppState>) -> Result<Settings, String> {
 #[derive(Debug, Default, serde::Deserialize)]
 #[serde(rename_all = "camelCase", default)]
 pub struct SettingsPatch {
+    pub disabled_agents: Option<Vec<String>>,
     pub default_link_mode: Option<LinkMode>,
     pub preserve_manual_skills: Option<bool>,
     pub language: Option<String>,
@@ -41,6 +42,21 @@ pub fn update_settings(
     state: State<'_, AppState>,
     patch: SettingsPatch,
 ) -> Result<Settings, String> {
+    if let Some(ids) = &patch.disabled_agents {
+        if patch.default_link_mode.is_some()
+            || patch.preserve_manual_skills.is_some()
+            || patch.language.is_some()
+            || patch.theme.is_some()
+            || patch.agent_dir_overrides.is_some()
+            || patch.hub_dir.is_some()
+            || patch.clear_hub_dir.is_some()
+            || patch.backup_keep.is_some()
+        {
+            return Err("应用管理开关需单独保存".into());
+        }
+        state.set_managed_agents(ids).map_err(String::from)?;
+        return Ok(state.config().settings.clone());
+    }
     state
         .mutate(|studio, config| {
             let paths_changed = patch.hub_dir.is_some()

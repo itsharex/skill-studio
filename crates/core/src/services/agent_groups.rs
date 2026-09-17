@@ -60,6 +60,26 @@ impl Studio {
         Ok(group)
     }
 
+    /// Stop deployments and persist the management switch in the same transaction.
+    pub fn set_agent_management(
+        &self,
+        config: &mut AppConfig,
+        agent_id: &str,
+        enabled: bool,
+    ) -> Result<()> {
+        require_agent(agent_id)?;
+        let mut next = config.clone();
+        next.settings.disabled_agents.retain(|id| id != agent_id);
+        if enabled {
+            self.save_config(&next)?;
+        } else {
+            next.settings.disabled_agents.push(agent_id.into());
+            self.activate_agent_group(&mut next, agent_id, None)?;
+        }
+        *config = next;
+        Ok(())
+    }
+
     /// Persist files and active metadata in one undo journal. None stops the current combination.
     pub fn activate_agent_group(
         &self,
@@ -67,6 +87,15 @@ impl Studio {
         agent_id: &str,
         group_id: Option<&str>,
     ) -> Result<()> {
+        if group_id.is_some()
+            && config
+                .settings
+                .disabled_agents
+                .iter()
+                .any(|id| id == agent_id)
+        {
+            return Err(Error::invalid("请先在设置中开启此 Agent 的管理"));
+        }
         let agent = require_agent(agent_id)?;
         let group = group_id
             .map(|id| {
@@ -237,6 +266,121 @@ impl Studio {
             }
             additions.push((view.skill.clone(), dest));
         }
+        let leaving = group.is_none()
+            && config
+                .settings
+                .disabled_agents
+                .iter()
+                .any(|id| id == agent_id);
+        let roots = agent.resolved_global_roots(&config.settings.agent_dir_overrides);
+        let mut restores = Vec::new();
+        let mut removals = Vec::new();
+        let mut restored_paths = HashSet::new();
+        if leaving {
+            for view in &views {
+                if let Some(record) = config.skill_provenance.get(&view.skill.id) {
+                    let backup = record.backup_path.join("content");
+                    let candidates: HashSet<_> = record
+                        .entry_paths
+                        .iter()
+                        .chain(std::iter::once(&record.original_path))
+                        .cloned()
+                        .collect();
+                    for target in candidates {
+                        if !target
+                            .parent()
+                            .is_some_and(|p| roots.iter().any(|r| paths::paths_alias(p, r)))
+                        {
+                            continue;
+                        }
+                        restored_paths.insert(target.clone());
+                        if scanner::dir_content_hash(&backup)? != record.original_hash {
+                            return Err(Error::invalid("收录备份不完整，无法还原 Agent"));
+                        }
+                        use crate::models::skill::LinkStatus::*;
+                        if target.symlink_metadata().is_ok() {
+                            let status = linker::link_status(&view.skill.source_path, &target);
+                            if !matches!(status, Linked | Copied | CopyStale) {
+                                if !scanner::is_symlink_or_junction(&target)
+                                    && scanner::dir_content_hash(&target)
+                                        .is_ok_and(|h| h == record.original_hash)
+                                {
+                                    continue;
+                                }
+                                return Err(Error::invalid(format!(
+                                    "原目录已修改或被占用，无法还原：{}",
+                                    target.display()
+                                )));
+                            }
+                        }
+                        restores.push((target, backup.clone(), record.original_hash.clone()));
+                    }
+                }
+            }
+            // Global registrations outside the active group also belong to Studio.
+            for (skill_id, regs) in &config.registrations {
+                let Some(reg) = regs.get(agent_id) else {
+                    continue;
+                };
+                let target = &reg.target_path;
+                if owned.iter().any(|e| &e.target_path == target) || restored_paths.contains(target)
+                {
+                    continue;
+                }
+                if !target
+                    .parent()
+                    .is_some_and(|p| roots.iter().any(|r| paths::paths_alias(p, r)))
+                {
+                    return Err(Error::invalid("注册目录已变更，无法安全退出管理"));
+                }
+                if target.symlink_metadata().is_err() {
+                    continue;
+                }
+                let view = views
+                    .iter()
+                    .find(|v| &v.skill.id == skill_id)
+                    .ok_or_else(|| Error::invalid("注册来源缺失，无法安全退出管理"))?;
+                use crate::models::skill::LinkStatus::*;
+                if !matches!(
+                    linker::link_status(&view.skill.source_path, target),
+                    Linked | Copied | CopyStale
+                ) {
+                    return Err(Error::invalid(format!(
+                        "注册内容已修改，无法移除：{}",
+                        target.display()
+                    )));
+                }
+                removals.push(target.clone());
+            }
+        }
+        if leaving {
+            for project in &config.projects {
+                let Some(root) = agent.project_root(&project.root) else {
+                    continue;
+                };
+                for entry in &project.managed_entries {
+                    if entry.target_path.parent() != Some(root.as_path()) {
+                        continue;
+                    }
+                    linker::ensure_distinct_roots(&root, &roots)?;
+                    if entry.target_path.symlink_metadata().is_ok() {
+                        use crate::models::skill::LinkStatus::*;
+                        if !matches!(
+                            linker::link_status(&entry.source_path, &entry.target_path),
+                            Linked | Copied | CopyStale
+                        ) {
+                            return Err(Error::invalid(format!(
+                                "项目副本已修改，无法退出管理：{}",
+                                entry.target_path.display()
+                            )));
+                        }
+                        removals.push(entry.target_path.clone());
+                    }
+                }
+            }
+            removals.sort();
+            removals.dedup();
+        }
         let mut next = config.clone();
         let mut entries = Vec::new();
         let mut tx = Transaction::begin(self.store().dir().join("group-switch.json"))?;
@@ -343,6 +487,29 @@ impl Studio {
                 );
             } else {
                 next.active_groups.remove(agent_id);
+            }
+            if leaving {
+                for target in &removals {
+                    tx.reserve(target)?;
+                }
+                for (target, backup, hash) in &restores {
+                    tx.reserve(target)?;
+                    linker::copy_tree(backup, target)?;
+                    if scanner::dir_content_hash(target)? != *hash {
+                        return Err(Error::invalid("Agent 原目录还原校验失败"));
+                    }
+                }
+                for project in &mut next.projects {
+                    if let Some(root) = agent.project_root(&project.root) {
+                        project
+                            .managed_entries
+                            .retain(|e| e.target_path.parent() != Some(root.as_path()));
+                    }
+                }
+                for regs in next.registrations.values_mut() {
+                    regs.remove(agent_id);
+                }
+                next.registrations.retain(|_, regs| !regs.is_empty());
             }
             tx.reserve(&self.store().config_path())?;
             self.save_config(&next)?;
