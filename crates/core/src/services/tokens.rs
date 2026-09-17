@@ -178,8 +178,9 @@ mod tests {
         {
             let status = std::process::Command::new("cmd")
                 .args(["/C", "mklink", "/J"])
-                .arg(link)
-                .arg(target)
+                // mklink 把正斜杠当开关，即使它出现在路径中间。
+                .arg(link.as_os_str().to_string_lossy().replace('/', "\\"))
+                .arg(target.as_os_str().to_string_lossy().replace('/', "\\"))
                 .stdout(std::process::Stdio::null())
                 .status()
                 .unwrap();
