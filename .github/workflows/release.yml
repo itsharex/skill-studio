@@ -90,3 +90,8 @@ jobs:
         with:
           files: artifacts/**/*
           generate_release_notes: true
+
+  update-homebrew:
+    needs: release
+    uses: ./.github/workflows/update-homebrew.yml
+    secrets: inherit
