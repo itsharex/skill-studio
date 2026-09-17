@@ -1,4 +1,4 @@
-import { screen } from "@testing-library/react";
+import { screen, fireEvent, waitFor } from "@testing-library/react";
 import { expect, it } from "vitest";
 import { ProjectsPage } from "@/pages/ProjectsPage";
 import {
@@ -91,4 +91,52 @@ it("还没勾 agent 的项目不显示 token 徽标 —— 此时后端一个文
   renderWithProviders(<ProjectsPage />);
   expect(await screen.findByText("webapp")).toBeInTheDocument();
   expect(screen.queryByText(/tokens$/)).toBeNull();
+});
+
+it("counts deployed projects per agent once, filters cards, and toggles through the card action", async () => {
+  setupSkills();
+  let enabled = true;
+  const entry = {
+    skillId: "a",
+    sourcePath: "/hub/a",
+    targetPath: "/project/.agents/skills/a",
+  };
+  handlers.set("list_projects", () => [
+    makeProject({
+      id: "p",
+      name: "Both",
+      agentIds: ["codex", "claude-code"],
+      skillIds: ["a"],
+      enabledAgentIds: enabled ? ["codex", "claude-code"] : [],
+      managedEntries: enabled ? [entry] : [],
+    }),
+    makeProject({
+      id: "draft",
+      name: "Draft",
+      agentIds: ["codex"],
+      skillIds: ["a"],
+      enabledAgentIds: [],
+    }),
+  ]);
+  handlers.set("set_project_enabled", (args) => {
+    enabled = args.enabled;
+    return { succeeded: [], failed: [] };
+  });
+  renderWithProviders(<ProjectsPage />);
+  expect(await screen.findByText("项目 2 个")).toBeInTheDocument();
+  expect(screen.getByText("已启用 1 个")).toBeInTheDocument();
+  expect(screen.getByRole("button", { name: "Codex: 1" })).toBeInTheDocument();
+  fireEvent.click(screen.getByRole("button", { name: "Claude Code: 1" }));
+  expect(
+    screen.queryByRole("button", { name: "Draft" }),
+  ).not.toBeInTheDocument();
+  fireEvent.click(screen.getByRole("button", { name: "Claude Code: 1" }));
+  fireEvent.click(screen.getByRole("button", { name: "停用" }));
+  await waitFor(() =>
+    expect(screen.getByText("已启用 0 个")).toBeInTheDocument(),
+  );
+  expect(
+    screen.getByRole("button", { name: "拖拽排序 Both" }),
+  ).toBeInTheDocument();
+  expect(screen.getAllByRole("button", { name: "启用" })).toHaveLength(2);
 });

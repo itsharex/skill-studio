@@ -8,9 +8,75 @@ use tauri_plugin_dialog::DialogExt;
 
 use crate::state::AppState;
 
+#[derive(serde::Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ProjectView {
+    #[serde(flatten)]
+    project: ProjectBinding,
+    enabled_agent_ids: Vec<String>,
+    enabled_skill_ids: Vec<String>,
+    enabled_group_ids: Vec<String>,
+}
+
 #[tauri::command]
-pub fn list_projects(state: State<'_, AppState>) -> Result<Vec<ProjectBinding>, String> {
-    Ok(state.config().projects.clone())
+pub fn list_projects(state: State<'_, AppState>) -> Result<Vec<ProjectView>, String> {
+    let config = state.config();
+    Ok(config
+        .projects
+        .iter()
+        .map(|project| {
+            let mut by_agent = std::collections::HashMap::new();
+            for agent in skill_studio_core::models::agent::AGENTS {
+                let Some(root) = agent.project_root(&project.root) else {
+                    continue;
+                };
+                let ids: std::collections::HashSet<_> = project
+                    .managed_entries
+                    .iter()
+                    .filter(|entry| {
+                        entry.target_path.parent() == Some(root.as_path())
+                            && entry.target_path.join("SKILL.md").is_file()
+                            && skill_studio_core::services::linker::link_status(
+                                &entry.source_path,
+                                &entry.target_path,
+                            )
+                            .is_registered()
+                    })
+                    .map(|entry| entry.skill_id.clone())
+                    .collect();
+                if !ids.is_empty() {
+                    by_agent.insert(agent.id.to_string(), ids);
+                }
+            }
+            let mut enabled_agent_ids: Vec<_> = by_agent.keys().cloned().collect();
+            enabled_agent_ids.sort();
+            let mut enabled_skill_ids: Vec<_> = by_agent.values().flatten().cloned().collect();
+            enabled_skill_ids.sort();
+            enabled_skill_ids.dedup();
+            let mut enabled_group_ids: Vec<_> = project
+                .group_ids
+                .iter()
+                .filter(|id| {
+                    config.group(id).is_some_and(|group| {
+                        !group.skill_ids.is_empty()
+                            && by_agent.iter().any(|(agent, skills)| {
+                                group.agent_id.as_ref().is_none_or(|owner| owner == agent)
+                                    && group.skill_ids.iter().all(|id| skills.contains(id))
+                            })
+                    })
+                })
+                .cloned()
+                .collect();
+            enabled_group_ids.sort();
+            enabled_group_ids.dedup();
+            ProjectView {
+                project: project.clone(),
+                enabled_agent_ids,
+                enabled_skill_ids,
+                enabled_group_ids,
+            }
+        })
+        .collect())
 }
 
 #[tauri::command(rename_all = "camelCase")]
@@ -231,4 +297,64 @@ pub async fn pick_directory(
 
 fn uuid_v4() -> String {
     uuid::Uuid::new_v4().to_string()
+}
+
+#[tauri::command(rename_all = "camelCase")]
+pub fn set_project_enabled(
+    state: State<'_, AppState>,
+    project_id: String,
+    enabled: bool,
+) -> Result<LinkReport, String> {
+    state
+        .set_project_enabled(&project_id, enabled)
+        .map_err(Into::into)
+}
+
+#[tauri::command(rename_all = "camelCase")]
+pub fn reorder_projects(
+    state: State<'_, AppState>,
+    project_ids: Vec<String>,
+) -> Result<Vec<ProjectBinding>, String> {
+    state
+        .mutate(|_, config| {
+            reorder_bindings(&mut config.projects, &project_ids)?;
+            Ok(config.projects.clone())
+        })
+        .map_err(Into::into)
+}
+
+fn reorder_bindings(projects: &mut [ProjectBinding], project_ids: &[String]) -> Result<(), Error> {
+    let ids: std::collections::HashSet<_> = project_ids.iter().collect();
+    if ids.len() != projects.len()
+        || ids.len() != project_ids.len()
+        || projects.iter().any(|p| !ids.contains(&p.id))
+    {
+        return Err(Error::invalid("项目列表已变化，请刷新后重试"));
+    }
+    projects.sort_by_key(|p| project_ids.iter().position(|id| id == &p.id).unwrap());
+    Ok(())
+}
+
+#[cfg(test)]
+mod project_order_tests {
+    use super::*;
+    #[test]
+    fn order_roundtrips_and_stale_or_duplicate_lists_do_not_change_it() {
+        let mut projects = vec![
+            ProjectBinding::new("a".into(), "A".into(), "/a".into()),
+            ProjectBinding::new("b".into(), "B".into(), "/b".into()),
+        ];
+        reorder_bindings(&mut projects, &["b".into(), "a".into()]).unwrap();
+        let saved = serde_json::to_string(&projects).unwrap();
+        let loaded: Vec<ProjectBinding> = serde_json::from_str(&saved).unwrap();
+        assert_eq!(loaded[0].id, "b");
+        for ids in [
+            vec!["a".into()],
+            vec!["a".into(), "a".into()],
+            vec!["a".into(), "new".into()],
+        ] {
+            assert!(reorder_bindings(&mut projects, &ids).is_err());
+            assert_eq!(serde_json::to_string(&projects).unwrap(), saved);
+        }
+    }
 }

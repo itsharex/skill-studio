@@ -13,3 +13,5 @@ pub mod agent_groups;
 pub mod marketplace;
 
 pub mod project_write;
+
+pub(crate) mod manual_policy;

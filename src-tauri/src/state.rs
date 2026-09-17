@@ -68,16 +68,25 @@ impl AppState {
         self.studio.write_project(&mut guard, id, selection)
     }
 
+    pub fn set_project_enabled(
+        &self,
+        id: &str,
+        enabled: bool,
+    ) -> Result<skill_studio_core::models::skill::LinkReport> {
+        self.studio
+            .set_project_enabled(&mut self.config_mut(), id, enabled)
+    }
+
     /// Restore under the same write lock as every other configuration mutation.
     pub fn restore_backup(&self, path: &std::path::Path) -> Result<AppConfig> {
         let mut guard = self.config_mut();
-        if !guard.active_groups.is_empty() {
+        if !guard.active_groups.is_empty() || !guard.policy_suspensions.is_empty() {
             return Err(skill_studio_core::Error::invalid(
-                "请先停用所有 Agent 分组，再恢复配置备份",
+                "请先开启保留手动 skill 并停用所有分组，再恢复配置备份",
             ));
         }
         let restored = self.studio.store().read_backup(path)?;
-        if !restored.active_groups.is_empty() {
+        if !restored.active_groups.is_empty() || !restored.policy_suspensions.is_empty() {
             return Err(skill_studio_core::Error::invalid(
                 "此备份包含运行中的分组，不能只恢复配置；请选择停用分组后生成的备份",
             ));
@@ -107,6 +116,21 @@ impl AppState {
     ) -> Result<skill_studio_core::models::skill::Skill> {
         let mut guard = self.config_mut();
         self.studio.release_from_hub(&mut guard, skill_id)
+    }
+
+    pub fn set_manual_skill_policy(&self, preserve: bool) -> Result<()> {
+        let mut guard = self.config_mut();
+        let mut next = guard.clone();
+        next.settings.preserve_manual_skills = preserve;
+        self.studio.reconcile_manual_policy(&mut next, true)?;
+        *guard = next;
+        Ok(())
+    }
+
+    pub fn scan_with_policy(&self) -> Result<Vec<skill_studio_core::services::studio::SkillView>> {
+        let mut guard = self.config_mut();
+        self.studio.reconcile_manual_policy(&mut guard, false)?;
+        self.studio.scan_skills(&guard)
     }
 
     pub fn set_managed_agents(&self, disabled: &[String]) -> Result<()> {

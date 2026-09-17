@@ -56,9 +56,21 @@ export function ListContainer({
 }
 
 /** Hover/focus reveals actions without changing the card's layout. */
-export function RowActions({ children }: { children: React.ReactNode }) {
+export function RowActions({
+  children,
+  busy = false,
+}: {
+  children: React.ReactNode;
+  busy?: boolean;
+}) {
   return (
-    <div className="pointer-events-none flex flex-shrink-0 items-center gap-1 text-muted-foreground opacity-0 transition-opacity duration-150 focus-within:pointer-events-auto focus-within:opacity-100 group-hover:pointer-events-auto group-hover:opacity-100 [&:has([data-state=open])]:pointer-events-auto [&:has([data-state=open])]:opacity-100">
+    <div
+      aria-busy={busy}
+      className={cn(
+        "pointer-events-none flex flex-shrink-0 items-center gap-1 text-muted-foreground opacity-0 transition-opacity duration-150 focus-within:pointer-events-auto focus-within:opacity-100 group-hover:pointer-events-auto group-hover:opacity-100 [&:has([data-state=open])]:pointer-events-auto [&:has([data-state=open])]:opacity-100",
+        busy && "opacity-100 [&_button:disabled]:opacity-100",
+      )}
+    >
       {children}
     </div>
   );

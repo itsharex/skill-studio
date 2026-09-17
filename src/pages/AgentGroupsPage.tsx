@@ -58,13 +58,26 @@ import type { Group } from "@/types";
 
 export function AgentPage({ agentId }: { agentId: string }) {
   const { data: agents = [] } = useAgents();
-  const { data: settings } = useSettings();
-  const { data: groups = [] } = useGroups();
-  const { data: skills = [] } = useSkills();
-  const { data: config } = useQuery({
+  const { data: liveSettings } = useSettings();
+  const { data: liveGroups = [] } = useGroups();
+  const { data: liveSkills = [] } = useSkills();
+  const { data: liveConfig } = useQuery({
     queryKey: ["config"],
     queryFn: settingsApi.getConfig,
   });
+  // Keep one consistent render while config and filesystem queries refresh independently.
+  const [operationView, setOperationView] = useState<{
+    settings: typeof liveSettings;
+    groups: typeof liveGroups;
+    skills: typeof liveSkills;
+    config: typeof liveConfig;
+  } | null>(null);
+  const { settings, groups, skills, config } = operationView ?? {
+    settings: liveSettings,
+    groups: liveGroups,
+    skills: liveSkills,
+    config: liveConfig,
+  };
   const client = useQueryClient();
   const [editing, setEditing] = useState<{
     id: string | null;
@@ -75,7 +88,9 @@ export function AgentPage({ agentId }: { agentId: string }) {
   const [skillSearch, setSkillSearch] = useState("");
   const [deleting, setDeleting] = useState<Group | null>(null);
   const [error, setError] = useState<string | null>(null);
-  const [showInstalled, setShowInstalled] = useState(false);
+  const [tab, setTab] = useState("groups");
+  const showInstalled = tab !== "groups";
+  const [addingSkill, setAddingSkill] = useState(false);
   const current = config?.activeGroups?.[agentId];
   const sortedGroups = [...groups].sort((a, b) => a.sortOrder - b.sortOrder);
   const own = sortedGroups.filter((g) => g.agentId === agentId);
@@ -159,9 +174,16 @@ export function AgentPage({ agentId }: { agentId: string }) {
   });
   const activate = useMutation({
     mutationFn: (id: string | null) => groupsApi.activate(agentId, id),
+    onMutate: () => setOperationView({ settings, groups, skills, config }),
     onSuccess: (_, id) => toast.success(id ? "分组已启用" : "分组已停用"),
     onError: (e) => toast.error(String(e)),
-    onSettled: refresh,
+    onSettled: async () => {
+      try {
+        await refresh();
+      } finally {
+        setOperationView(null);
+      }
+    },
   });
   const remove = useMutation({
     mutationFn: (id: string) => groupsApi.remove(id),
@@ -184,13 +206,13 @@ export function AgentPage({ agentId }: { agentId: string }) {
         query={query}
         onQueryChange={setQuery}
         placeholder={showInstalled ? "搜索已安装 skill…" : "搜索分组…"}
-        createLabel="新建分组"
-        onCreate={() => edit()}
+        createLabel={showInstalled ? "添加 skill" : "新建分组"}
+        onCreate={() => (showInstalled ? setAddingSkill(true) : edit())}
       />
       <Tabs
-        value={showInstalled ? "installed" : "groups"}
+        value={tab}
         onValueChange={(value) => {
-          setShowInstalled(value === "installed");
+          setTab(value);
           setQuery("");
         }}
         className="flex min-h-0 flex-1 flex-col"
@@ -217,6 +239,15 @@ export function AgentPage({ agentId }: { agentId: string }) {
                       s.agents[agentId].status !== "notLinked",
                   ).length
                 }
+              </span>
+            </TabsTrigger>
+            <TabsTrigger
+              value="manual"
+              className="gap-2 data-[state=active]:bg-background data-[state=active]:text-foreground"
+            >
+              手动安装
+              <span className="text-xs opacity-60">
+                {skills.filter((s) => s.agents[agentId]?.manual).length}
               </span>
             </TabsTrigger>
           </TabsList>
@@ -359,9 +390,16 @@ export function AgentPage({ agentId }: { agentId: string }) {
                               .join(" · ") || "尚未选择 skill"}
                           </p>
                         </div>
-                        <RowActions>
+                        <RowActions
+                          busy={
+                            activate.isPending &&
+                            (activate.variables === g.id ||
+                              (activate.variables === null && active))
+                          }
+                        >
                           <Button
                             size="sm"
+                            aria-busy={activate.isPending}
                             variant={active ? "outline" : "default"}
                             disabled={
                               activate.isPending ||
@@ -445,12 +483,21 @@ export function AgentPage({ agentId }: { agentId: string }) {
             </details>
           )}
         </TabsContent>
-        <TabsContent
-          value="installed"
-          className="min-h-0 flex-1 overflow-y-auto"
-        >
-          <AgentSkills agentId={agentId} searchQuery={query} />
-        </TabsContent>
+        {["installed", "manual"].map((value) => (
+          <TabsContent
+            key={value}
+            value={value}
+            className="min-h-0 flex-1 overflow-y-auto"
+          >
+            <AgentSkills
+              agentId={agentId}
+              searchQuery={query}
+              manualOnly={value === "manual"}
+              addOpen={addingSkill}
+              onAddOpenChange={setAddingSkill}
+            />
+          </TabsContent>
+        ))}
       </Tabs>
       <Dialog
         open={editing !== null}

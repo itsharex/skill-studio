@@ -139,3 +139,44 @@ fn interrupted_project_write_restores_configuration_and_deployments() {
     assert_eq!(fs::read(studio.store().config_path()).unwrap(), before);
     assert_eq!(fs::read_to_string(dest.join("SKILL.md")).unwrap(), "old");
 }
+
+#[test]
+#[serial]
+fn project_toggle_preserves_selection_and_manual_files_and_rejects_modified_deployments() {
+    let env = Env::new();
+    let studio = env.studio();
+    let mut c = studio.load_config().unwrap();
+    let root = env.path().join("project");
+    fs::create_dir(&root).unwrap();
+    c.projects
+        .push(ProjectBinding::new("p".into(), "P".into(), root.clone()));
+    env.write_simple_skill(&env.hub(), "demo");
+    let id = studio.scan_skills(&c).unwrap()[0].skill.id.clone();
+    let manual = env.write_simple_skill(&root.join(".agents/skills"), "manual");
+    let mut selected = selection(vec![id.clone()]);
+    selected.agent_ids.push("claude-code".into());
+    studio.write_project(&mut c, "p", Some(selected)).unwrap();
+    let saved_agents = c.projects[0].agent_ids.clone();
+    for _ in 0..2 {
+        studio.set_project_enabled(&mut c, "p", false).unwrap();
+        c = studio.load_config().unwrap();
+        assert!(c.projects[0].managed_entries.is_empty());
+        assert_eq!(c.projects[0].skill_ids, vec![id.clone()]);
+        assert_eq!(c.projects[0].agent_ids, saved_agents);
+        assert!(manual.join("SKILL.md").exists());
+        assert!(!root.join(".agents/skills/demo").exists());
+        assert!(!root.join(".claude/skills/demo").exists());
+        studio.set_project_enabled(&mut c, "p", true).unwrap();
+        assert_eq!(c.projects[0].managed_entries.len(), 2);
+    }
+    let modified = root.join(".claude/skills/demo/SKILL.md");
+    fs::write(&modified, "user changes").unwrap();
+    let config_before = fs::read(studio.store().config_path()).unwrap();
+    assert!(studio.set_project_enabled(&mut c, "p", false).is_err());
+    assert_eq!(
+        fs::read(studio.store().config_path()).unwrap(),
+        config_before
+    );
+    assert_eq!(fs::read_to_string(modified).unwrap(), "user changes");
+    assert!(root.join(".agents/skills/demo/SKILL.md").exists());
+}

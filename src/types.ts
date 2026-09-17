@@ -57,6 +57,8 @@ export interface AgentSkillState {
   entryPaths?: string[];
   /** 通过 agent 原生配置停用（文件仍在） */
   disabled: boolean;
+  manual?: boolean;
+  policyBlocked?: boolean;
   mode: LinkMode | null;
 }
 
@@ -123,6 +125,14 @@ export interface Group {
 export type GroupApplyMode = "add" | "remove";
 
 export interface ProjectBinding {
+  enabledAgentIds?: string[];
+  enabledSkillIds?: string[];
+  enabledGroupIds?: string[];
+  managedEntries?: {
+    skillId: string;
+    sourcePath: string;
+    targetPath: string;
+  }[];
   id: string;
   name: string;
   root: string;

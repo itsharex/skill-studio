@@ -57,6 +57,7 @@ impl Store {
     pub fn load(&self) -> Result<AppConfig> {
         super::transaction::recover(&self.dir.join("migration.json"))?;
         super::transaction::recover(&self.dir.join("group-switch.json"))?;
+        super::transaction::recover(&self.dir.join("manual-policy.json"))?;
         super::transaction::recover(&self.dir.join("project-write.json"))?;
         let path = self.config_path();
         match atomic::read_json_file::<AppConfig>(&path)? {

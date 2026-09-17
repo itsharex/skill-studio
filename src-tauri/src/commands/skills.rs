@@ -7,9 +7,7 @@ use crate::state::AppState;
 /// 扫描全部 skill 真身及其在各 agent 上的状态
 #[tauri::command]
 pub fn scan_skills(state: State<'_, AppState>) -> Result<Vec<SkillView>, String> {
-    state
-        .with_config(|studio, config| studio.scan_skills(config))
-        .map_err(Into::into)
+    state.scan_with_policy().map_err(Into::into)
 }
 
 /// 把若干 skill 注册到若干 agent。单条失败不影响其余，结果在报告里逐条给出。

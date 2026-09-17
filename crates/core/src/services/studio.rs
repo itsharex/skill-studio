@@ -25,6 +25,10 @@ pub struct AgentSkillState {
     pub target_path: PathBuf,
     /// 通过 agent 原生配置停用（文件仍在）
     pub disabled: bool,
+    #[serde(default)]
+    pub manual: bool,
+    #[serde(default)]
+    pub policy_blocked: bool,
     pub mode: Option<LinkMode>,
     /// 同一来源在该 agent 下的全部入口（含别名）。
     pub entry_paths: Vec<PathBuf>,
@@ -209,6 +213,19 @@ impl Studio {
             }
         }
 
+        // Restored originals remain independent files, but keep their adopted identity
+        // while both contents still match the recorded backup.
+        let restored: HashSet<String> = sources
+            .values()
+            .filter(|candidate| {
+                sources.values().any(|hub| {
+                    hub.id != candidate.id && restored_entry(config, hub, &candidate.source_path)
+                })
+            })
+            .map(|s| s.id.clone())
+            .collect();
+        sources.retain(|id, _| !restored.contains(id));
+
         let mut views: Vec<SkillView> = sources
             .into_values()
             .map(|skill| {
@@ -279,6 +296,19 @@ impl Studio {
         }
         for root in agent.resolved_global_roots(&config.settings.agent_dir_overrides) {
             targets.push(root.join(&skill.name));
+            if let Some(record) = config.skill_provenance.get(&skill.id) {
+                targets.extend(
+                    record
+                        .entry_paths
+                        .iter()
+                        .filter(|path| {
+                            path.parent()
+                                .is_some_and(|parent| crate::fs::paths::paths_alias(parent, &root))
+                                && restored_entry(config, skill, path)
+                        })
+                        .cloned(),
+                );
+            }
             if let Ok(entries) = scanner::scan_root(&root, agent) {
                 for entry in entries {
                     let matches = match entry.kind {
@@ -337,7 +367,8 @@ impl Studio {
                 // 真身就在这个 root 里
                 let status = if dest.join(scanner::SKILL_FILE).is_file()
                     && !scanner::is_symlink_or_junction(&dest)
-                    && crate::fs::paths::paths_alias(&dest, &skill.source_path)
+                    && (crate::fs::paths::paths_alias(&dest, &skill.source_path)
+                        || restored_entry(config, skill, &dest))
                 {
                     LinkStatus::Source
                 } else {
@@ -384,6 +415,34 @@ impl Studio {
                 AgentSkillState {
                     status,
                     target_path,
+                    policy_blocked: !config.settings.preserve_manual_skills
+                        && !config
+                            .settings
+                            .disabled_agents
+                            .iter()
+                            .any(|id| id == agent.id)
+                        && !config
+                            .active_groups
+                            .get(agent.id)
+                            .is_some_and(|g| g.skill_ids.contains(&skill.id)),
+                    manual: status.is_registered()
+                        && entry_paths.iter().any(|target| {
+                            if config
+                                .active_groups
+                                .get(agent.id)
+                                .is_some_and(|g| g.entries.iter().any(|e| e.target_path == *target))
+                            {
+                                return false;
+                            }
+                            if config.skill_provenance.get(&skill.id).is_some_and(|p| {
+                                p.original_path == *target || p.entry_paths.contains(target)
+                            }) {
+                                return true;
+                            }
+                            !config
+                                .registration(&skill.id, agent.id)
+                                .is_some_and(|r| r.target_path == *target)
+                        }),
                     disabled,
                     mode,
                     entry_paths,
@@ -497,7 +556,8 @@ impl Studio {
                 // 遍历全部根，把散落在共享根里的注册也清掉
                 for dest in self.agent_targets(config, skill, agent) {
                     if !scanner::is_symlink_or_junction(&dest)
-                        && crate::fs::paths::paths_alias(&dest, &skill.source_path)
+                        && (crate::fs::paths::paths_alias(&dest, &skill.source_path)
+                            || restored_entry(config, skill, &dest))
                     {
                         // 不能把真身当注册删掉
                         continue;
@@ -619,6 +679,17 @@ impl Studio {
         {
             return Err(Error::invalid("请先在设置中开启此 Agent 的管理"));
         }
+        if enabled
+            && !config.settings.preserve_manual_skills
+            && !config
+                .active_groups
+                .get(agent_id)
+                .is_some_and(|g| g.skill_ids.iter().any(|id| id == skill_id))
+        {
+            return Err(Error::invalid(
+                "当前不保留组外 skill，请先开启保留开关或启用包含此 skill 的分组",
+            ));
+        }
         let skill = self.find_skill(config, skill_id)?;
         let agent = crate::models::agent::require_agent(agent_id)?;
         let state = self
@@ -631,6 +702,7 @@ impl Studio {
         for target in state.entry_paths {
             if !linker::link_status(&skill.source_path, &target).is_registered()
                 && !crate::fs::paths::paths_alias(&target, &skill.source_path)
+                && !restored_entry(config, &skill, &target)
             {
                 continue;
             }
@@ -701,6 +773,16 @@ impl Studio {
                     "此 skill 涉及已退出管理的 Agent，请先开启该应用再收录或移出 Hub",
                 ));
             }
+        }
+        if config
+            .policy_suspensions
+            .values()
+            .flatten()
+            .any(|e| e.skill_id == skill_id)
+        {
+            return Err(Error::invalid(
+                "请先开启保留手动 skill，再迁移被策略停用的 skill",
+            ));
         }
         let skill = self.find_skill(config, skill_id)?;
         if !restore && matches!(skill.origin, SkillOrigin::Hub) {
@@ -1160,4 +1242,15 @@ fn original_source_ids(
     let mut ids: Vec<_> = ids.into_iter().collect();
     ids.sort();
     ids
+}
+
+/// Only known, unchanged restored originals may share an adopted Hub identity.
+pub(crate) fn restored_entry(config: &AppConfig, skill: &Skill, target: &std::path::Path) -> bool {
+    matches!(skill.origin, SkillOrigin::Hub)
+        && !scanner::is_symlink_or_junction(target)
+        && config.skill_provenance.get(&skill.id).is_some_and(|p| {
+            (p.original_path == target || p.entry_paths.iter().any(|entry| entry == target))
+                && scanner::dir_content_hash(target).is_ok_and(|h| h == p.original_hash)
+                && scanner::dir_content_hash(&skill.source_path).is_ok_and(|h| h == p.original_hash)
+        })
 }

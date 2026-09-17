@@ -23,6 +23,25 @@ impl Studio {
         id: &str,
         selection: Option<ProjectSelection>,
     ) -> Result<LinkReport> {
+        self.reconcile_project(config, id, selection, true)
+    }
+
+    pub fn set_project_enabled(
+        &self,
+        config: &mut AppConfig,
+        id: &str,
+        enabled: bool,
+    ) -> Result<LinkReport> {
+        self.reconcile_project(config, id, None, enabled)
+    }
+
+    fn reconcile_project(
+        &self,
+        config: &mut AppConfig,
+        id: &str,
+        selection: Option<ProjectSelection>,
+        enabled: bool,
+    ) -> Result<LinkReport> {
         let mut next = config.clone();
         let project = next
             .project_mut(id)
@@ -34,10 +53,11 @@ impl Studio {
             project.link_mode = s.link_mode;
         }
         let project = project.clone();
-        if project
-            .agent_ids
-            .iter()
-            .any(|id| config.settings.disabled_agents.contains(id))
+        if enabled
+            && project
+                .agent_ids
+                .iter()
+                .any(|id| config.settings.disabled_agents.contains(id))
         {
             return Err(Error::invalid(
                 "项目包含已退出管理的 Agent，请取消勾选或先开启该应用",
@@ -54,7 +74,7 @@ impl Studio {
         let views = self.scan_skills(config)?;
         let mut plan = Vec::new();
         let mut targets = HashSet::new();
-        for agent_id in &project.agent_ids {
+        for agent_id in project.agent_ids.iter().filter(|_| enabled) {
             let agent = require_agent(agent_id)?;
             let root = agent
                 .project_root(&project.root)

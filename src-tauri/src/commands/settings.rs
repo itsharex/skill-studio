@@ -57,6 +57,22 @@ pub fn update_settings(
         state.set_managed_agents(ids).map_err(String::from)?;
         return Ok(state.config().settings.clone());
     }
+    if let Some(preserve) = patch.preserve_manual_skills {
+        if patch.default_link_mode.is_some()
+            || patch.language.is_some()
+            || patch.theme.is_some()
+            || patch.agent_dir_overrides.is_some()
+            || patch.hub_dir.is_some()
+            || patch.clear_hub_dir.is_some()
+            || patch.backup_keep.is_some()
+        {
+            return Err("保留手动 skill 策略需单独保存".into());
+        }
+        state
+            .set_manual_skill_policy(preserve)
+            .map_err(String::from)?;
+        return Ok(state.config().settings.clone());
+    }
     state
         .mutate(|studio, config| {
             let paths_changed = patch.hub_dir.is_some()
@@ -64,9 +80,6 @@ pub fn update_settings(
                 || patch.agent_dir_overrides.is_some();
             let old_hub = studio.store().hub_dir(config);
             let s = &mut config.settings;
-            if let Some(preserve) = patch.preserve_manual_skills {
-                s.preserve_manual_skills = preserve;
-            }
             if let Some(m) = patch.default_link_mode {
                 s.default_link_mode = m;
             }
@@ -85,10 +98,11 @@ pub fn update_settings(
                 if config
                     .active_groups
                     .keys()
+                    .chain(config.policy_suspensions.keys())
                     .any(|id| next.get(id) != s.agent_dir_overrides.get(id))
                 {
                     return Err(skill_studio_core::Error::invalid(
-                        "请先停用该 Agent 的分组，再修改目录",
+                        "请先开启保留手动 skill 并停用该 Agent 的分组，再修改目录",
                     ));
                 }
                 s.agent_dir_overrides = next;

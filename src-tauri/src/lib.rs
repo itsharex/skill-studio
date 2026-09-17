@@ -71,6 +71,8 @@ pub fn run() {
             commands::update_project,
             commands::delete_project,
             commands::apply_project,
+            commands::set_project_enabled,
+            commands::reorder_projects,
             commands::unapply_project,
             commands::write_project_gitignore,
             commands::pick_directory,

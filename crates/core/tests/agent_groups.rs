@@ -399,7 +399,7 @@ fn exclusive_groups_suspend_manual_skills_and_restore_after_reload() {
         studio.activate_agent_group(&mut c, agent_id, None).unwrap();
         let views = studio.scan_skills(&c).unwrap();
         assert!(
-            !views
+            views
                 .iter()
                 .find(|v| v.skill.id == manual_id)
                 .unwrap()
@@ -594,4 +594,60 @@ fn leaving_management_keeps_other_agent_group_and_rejects_missing_backup() {
             false
         )
         .is_err());
+}
+
+#[test]
+#[serial]
+#[cfg(unix)]
+fn restored_shared_skill_keeps_one_identity_and_group_policy_after_reenable() {
+    let env = Env::new();
+    let studio = env.studio();
+    let mut c = studio.load_config().unwrap();
+    let original = env.write_simple_skill(&env.agents_skills(), "shared-manual");
+    fs::create_dir_all(env.codex_skills()).unwrap();
+    let alias = env.codex_skills().join("shared-manual");
+    std::os::unix::fs::symlink(&original, &alias).unwrap();
+    let source = studio.scan_skills(&c).unwrap().remove(0).skill;
+    let hub = studio.adopt_to_hub(&mut c, &source.id).unwrap();
+    let group = studio
+        .save_agent_group(
+            &mut c,
+            "restored".into(),
+            "codex",
+            "restored",
+            vec![hub.id.clone()],
+        )
+        .unwrap();
+    c.settings.preserve_manual_skills = false;
+    studio.reconcile_manual_policy(&mut c, true).unwrap();
+    for _ in 0..2 {
+        studio.set_agent_management(&mut c, "codex", false).unwrap();
+        studio.set_agent_management(&mut c, "codex", true).unwrap();
+        c = studio.load_config().unwrap();
+        let views = studio.scan_skills(&c).unwrap();
+        assert_eq!(views.len(), 1);
+        assert_eq!(views[0].skill.id, hub.id);
+        assert!(views[0].agents["codex"].manual);
+        assert!(views[0].agents["codex"].disabled);
+        assert_eq!(views[0].agents["codex"].entry_paths.len(), 2);
+        studio
+            .activate_agent_group(&mut c, "codex", Some(&group.id))
+            .unwrap();
+        assert!(!studio.scan_skills(&c).unwrap()[0].agents["codex"].disabled);
+        studio.activate_agent_group(&mut c, "codex", None).unwrap();
+        assert!(studio.scan_skills(&c).unwrap()[0].agents["codex"].disabled);
+    }
+    c.settings.preserve_manual_skills = true;
+    studio.reconcile_manual_policy(&mut c, true).unwrap();
+    assert!(!studio.scan_skills(&c).unwrap()[0].agents["codex"].disabled);
+    fs::write(
+        alias.join("SKILL.md"),
+        "---\nname: shared-manual\n---\nChanged",
+    )
+    .unwrap();
+    assert_eq!(
+        studio.scan_skills(&c).unwrap().len(),
+        2,
+        "modified originals must stay independent"
+    );
 }

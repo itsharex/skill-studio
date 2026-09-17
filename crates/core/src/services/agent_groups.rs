@@ -71,7 +71,7 @@ impl Studio {
         let mut next = config.clone();
         next.settings.disabled_agents.retain(|id| id != agent_id);
         if enabled {
-            self.save_config(&next)?;
+            self.reconcile_manual_policy(&mut next, true)?;
         } else {
             next.settings.disabled_agents.push(agent_id.into());
             self.activate_agent_group(&mut next, agent_id, None)?;
@@ -123,63 +123,8 @@ impl Studio {
             .as_ref()
             .map(|g| g.entries.clone())
             .unwrap_or_default();
-        let previously_suspended = previous
-            .as_ref()
-            .map(|g| g.suspended_manual.as_slice())
-            .unwrap_or_default();
-        let mut suspended_manual = Vec::new();
-        let mut manual_toggles = Vec::new();
-        for view in &views {
-            let state = &view.agents[agent_id];
-            if !state.status.is_registered() {
-                continue;
-            }
-            for target in &state.entry_paths {
-                if owned.iter().any(|e| e.target_path == *target) {
-                    continue;
-                }
-                if !linker::link_status(&view.skill.source_path, target).is_registered()
-                    && !paths::paths_alias(target, &view.skill.source_path)
-                {
-                    continue;
-                }
-                let was_suspended = previously_suspended.iter().any(|e| {
-                    e.target_path == *target
-                        && paths::paths_alias(&e.source_path, &view.skill.source_path)
-                });
-                let document = target.join(scanner::SKILL_FILE);
-                let name = if agent_id == "codex" {
-                    scanner::parse_frontmatter(&document)
-                        .name
-                        .unwrap_or_else(|| view.skill.name.clone())
-                } else {
-                    target.file_name().unwrap().to_string_lossy().into_owned()
-                };
-                let disabled = native_toggle::is_skill_disabled_at(
-                    agent,
-                    &config.settings.agent_dir_overrides,
-                    &name,
-                    &document,
-                );
-                let keep = group.is_none()
-                    || config.settings.preserve_manual_skills
-                    || ids.contains(&view.skill.id);
-                if keep {
-                    if was_suspended && disabled {
-                        manual_toggles.push((view.skill.id.clone(), name, document, true));
-                    }
-                } else if was_suspended || !disabled {
-                    if !disabled {
-                        manual_toggles.push((view.skill.id.clone(), name, document, false));
-                    }
-                    suspended_manual.push(GroupEntry {
-                        skill_id: view.skill.id.clone(),
-                        source_path: view.skill.source_path.clone(),
-                        target_path: target.clone(),
-                    });
-                }
-            }
-        }
+        let (suspended_manual, manual_toggles) =
+            super::manual_policy::plan(config, agent_id, &ids, &views)?;
         // Validate ownership/content even for retained members. Never silently discard local edits.
         for entry in &owned {
             if entry.target_path.symlink_metadata().is_err() {
@@ -481,12 +426,18 @@ impl Studio {
                         group_id: group.id.clone(),
                         skill_ids: ids.clone(),
                         entries,
-                        suspended_manual,
+                        suspended_manual: suspended_manual.clone(),
                         preserve_manual_skills: config.settings.preserve_manual_skills,
                     },
                 );
             } else {
                 next.active_groups.remove(agent_id);
+            }
+            if suspended_manual.is_empty() {
+                next.policy_suspensions.remove(agent_id);
+            } else {
+                next.policy_suspensions
+                    .insert(agent_id.into(), suspended_manual);
             }
             if leaving {
                 for target in &removals {

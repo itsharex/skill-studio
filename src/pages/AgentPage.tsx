@@ -1,21 +1,15 @@
-import { useMemo, useState } from "react";
-import {
-  FolderOpen,
-  Plus,
-  RefreshCw,
-  TriangleAlert,
-  Trash2,
-} from "lucide-react";
+import { useMemo } from "react";
+import { FolderOpen, RefreshCw, Trash2 } from "lucide-react";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Switch } from "@/components/ui/switch";
 import {
-  DropdownMenu,
-  DropdownMenuContent,
-  DropdownMenuItem,
-  DropdownMenuLabel,
-  DropdownMenuTrigger,
-} from "@/components/ui/dropdown-menu";
+  Dialog,
+  DialogContent,
+  DialogHeader,
+  DialogTitle,
+  DialogDescription,
+} from "@/components/ui/dialog";
 import {
   Tooltip,
   TooltipContent,
@@ -28,7 +22,6 @@ import {
   ListItemRow,
   RowActions,
 } from "@/components/common/ListItemRow";
-import { ListToolbar } from "@/components/common/ListToolbar";
 import { STATUS_HINT, STATUS_LABEL } from "@/lib/linkReport";
 import { systemApi } from "@/lib/api";
 import {
@@ -64,9 +57,15 @@ function statusBadgeVariant(
 export function AgentSkills({
   agentId,
   searchQuery,
+  manualOnly = false,
+  addOpen = false,
+  onAddOpenChange = () => {},
 }: {
   agentId: string;
   searchQuery?: string;
+  manualOnly?: boolean;
+  addOpen?: boolean;
+  onAddOpenChange?: (open: boolean) => void;
 }) {
   const { data: agents = [] } = useAgents();
   const { data: skills = [] } = useSkills();
@@ -74,8 +73,7 @@ export function AgentSkills({
   const unregister = useUnregisterSkills();
   const setEnabled = useSetSkillEnabled();
 
-  const [localQuery, setQuery] = useState("");
-  const query = searchQuery ?? localQuery;
+  const query = searchQuery ?? "";
   const agent = agents.find((a) => a.id === agentId);
 
   /** 这个 agent 上"有东西"的 skill：真身在此、已注册、或占用/异常都要显示 */
@@ -83,9 +81,13 @@ export function AgentSkills({
     () =>
       skills.filter((s) => {
         const st = s.agents[agentId]?.status;
-        return st !== undefined && st !== "notLinked";
+        return (
+          st !== undefined &&
+          st !== "notLinked" &&
+          (!manualOnly || s.agents[agentId]?.manual)
+        );
       }),
-    [skills, agentId],
+    [skills, agentId, manualOnly],
   );
 
   const filtered = useMemo(() => {
@@ -115,99 +117,45 @@ export function AgentSkills({
 
   return (
     <div className="flex min-h-0 flex-1 flex-col">
-      {/* agent 概况 */}
-      <div className="flex flex-wrap items-center gap-2 pt-4">
-        {agent.detected ? (
-          <Badge variant="success">已安装</Badge>
-        ) : (
-          <Badge variant="outline">未检测到</Badge>
-        )}
-        {agent.cliVersion && (
-          <Badge variant="outline" className="font-mono">
-            {agent.cliVersion}
-          </Badge>
-        )}
-        {agent.cliBroken && (
-          <Tooltip>
-            <TooltipTrigger asChild>
-              <Badge variant="warning" className="cursor-default gap-1">
-                <TriangleAlert className="h-3 w-3" />
-                CLI 无法运行
-              </Badge>
-            </TooltipTrigger>
-            <TooltipContent>
-              找到了可执行文件，但 <code>--version</code> 执行失败。 常见原因是
-              Node 版本不达标。
-            </TooltipContent>
-          </Tooltip>
-        )}
-        <button
-          type="button"
-          onClick={() => void systemApi.revealPath(agent.globalSkillDirs[0])}
-          className="inline-flex items-center gap-1 truncate rounded-md px-1.5 py-0.5 font-mono text-[11px] text-muted-foreground transition-colors hover:bg-muted hover:text-foreground"
-          title="打开目录"
-        >
-          <FolderOpen className="h-3 w-3 shrink-0" />
-          {agent.globalSkillDirs[0]}
-        </button>
-        {agent.globalSkillDirs.length > 1 && (
-          <Tooltip>
-            <TooltipTrigger asChild>
-              <Badge variant="outline" className="cursor-default">
-                +{agent.globalSkillDirs.length - 1} 个根目录
-              </Badge>
-            </TooltipTrigger>
-            <TooltipContent>
-              <p className="font-medium">该 agent 有多个全局 skill 根</p>
-              {agent.globalSkillDirs.map((d) => (
-                <p key={d} className="break-all font-mono text-[10px]">
-                  {d}
-                </p>
-              ))}
-              <p className="pt-1 text-muted-foreground">
-                第一个是注册写入目标，其余也会被扫描
+      <Dialog open={addOpen} onOpenChange={onAddOpenChange}>
+        <DialogContent>
+          <DialogHeader>
+            <DialogTitle>添加 skill 到 {agent.displayName}</DialogTitle>
+            <DialogDescription>
+              从 Skill Hub 选择尚未安装到此应用的 skill。
+            </DialogDescription>
+          </DialogHeader>
+          <div className="max-h-80 space-y-2 overflow-y-auto">
+            {notHere.length === 0 ? (
+              <p className="py-4 text-sm text-muted-foreground">
+                暂无可添加的 skill，请先在 Skill Hub 中安装或导入。
               </p>
-            </TooltipContent>
-          </Tooltip>
-        )}
-      </div>
-
-      <ListToolbar
-        hideSearch={searchQuery !== undefined}
-        count={filtered.length}
-        total={present.length}
-        unit="个 skill"
-        query={query}
-        onQueryChange={setQuery}
-        placeholder="搜索本 agent 的 skill…"
-      >
-        {notHere.length > 0 && (
-          <DropdownMenu>
-            <DropdownMenuTrigger asChild>
-              <Button variant="outline" size="sm">
-                <Plus className="h-4 w-4" />
-                添加（{notHere.length}）
-              </Button>
-            </DropdownMenuTrigger>
-            <DropdownMenuContent
-              align="end"
-              className="max-h-80 overflow-y-auto"
-            >
-              <DropdownMenuLabel>尚未注册到此</DropdownMenuLabel>
-              {notHere.map((s) => (
-                <DropdownMenuItem
+            ) : (
+              notHere.map((s) => (
+                <Button
                   key={s.id}
+                  variant="outline"
+                  className="w-full justify-start"
+                  disabled={register.isPending}
                   onClick={() =>
-                    register.mutate({ skillIds: [s.id], agentIds: [agentId] })
+                    register.mutate(
+                      { skillIds: [s.id], agentIds: [agentId] },
+                      {
+                        onSuccess: (report) => {
+                          if (report.failed.length === 0)
+                            onAddOpenChange(false);
+                        },
+                      },
+                    )
                   }
                 >
                   {s.name}
-                </DropdownMenuItem>
-              ))}
-            </DropdownMenuContent>
-          </DropdownMenu>
-        )}
-      </ListToolbar>
+                </Button>
+              ))
+            )}
+          </div>
+        </DialogContent>
+      </Dialog>
 
       <div className="min-h-0 flex-1 overflow-y-auto pb-6">
         {filtered.length === 0 ? (
@@ -220,7 +168,7 @@ export function AgentSkills({
             }
             description={
               present.length === 0
-                ? "用右上角的「添加」把已有 skill 注册进来，或先在分组里编排好再整组应用。"
+                ? "用右上角的「+」把已有 skill 注册进来，或先在分组里编排好再整组应用。"
                 : undefined
             }
           />
@@ -246,6 +194,9 @@ export function AgentSkills({
                       <span className="truncate text-sm font-medium">
                         {skill.name}
                       </span>
+                      {state.manual && (
+                        <Badge variant="outline">手动安装</Badge>
+                      )}
                       <Tooltip>
                         <TooltipTrigger asChild>
                           <Badge
@@ -320,6 +271,10 @@ export function AgentSkills({
                             <div>
                               <Switch
                                 checked={!state.disabled}
+                                disabled={
+                                  setEnabled.isPending ||
+                                  (state.policyBlocked && state.disabled)
+                                }
                                 onCheckedChange={(next) =>
                                   setEnabled.mutate({
                                     skillId: skill.id,
@@ -332,8 +287,9 @@ export function AgentSkills({
                             </div>
                           </TooltipTrigger>
                           <TooltipContent>
-                            用 {agent.displayName} 自己的配置开关启停，
-                            不删文件、随时可恢复
+                            {state.policyBlocked && state.disabled
+                              ? "已按保留策略停用；开启保留开关或启用包含此 skill 的分组后恢复。"
+                              : `用 ${agent.displayName} 自己的配置开关启停，不删除文件。`}
                           </TooltipContent>
                         </Tooltip>
                       )}

@@ -1,4 +1,10 @@
-import { fireEvent, screen, waitFor } from "@testing-library/react";
+import {
+  act,
+  fireEvent,
+  screen,
+  waitFor,
+  within,
+} from "@testing-library/react";
 import { expect, it, vi } from "vitest";
 import { AgentPage } from "@/pages/AgentGroupsPage";
 import {
@@ -380,4 +386,128 @@ it("uses the same button to activate and stop a group after status refresh", asy
     { agentId: "codex", groupId: "c" },
     { agentId: "codex", groupId: null },
   ]);
+});
+
+it("installed tab uses the top add action and omits redundant agent metadata", async () => {
+  setup();
+  handlers.set("scan_skills", () => [
+    makeSkill({
+      id: "available",
+      name: "Available",
+      agents: { codex: agentState("notLinked") },
+    }),
+  ]);
+  handlers.set("register_skills", () => ({ success: [], failed: [] }));
+  renderWithProviders(<AgentPage agentId="codex" />);
+  fireEvent.mouseDown(
+    await screen.findByRole("tab", { name: /已安装 skill/ }),
+    { button: 0, ctrlKey: false },
+  );
+  const add = await screen.findByRole("button", { name: "添加 skill" });
+  expect(
+    screen.queryByText(codexAgent.globalSkillDirs[0]),
+  ).not.toBeInTheDocument();
+  expect(screen.queryByText(/共.*个 skill/)).not.toBeInTheDocument();
+  expect(
+    screen.queryByRole("button", { name: /添加（/ }),
+  ).not.toBeInTheDocument();
+  fireEvent.click(add);
+  expect(await screen.findByRole("dialog")).toHaveTextContent(
+    "添加 skill 到 Codex",
+  );
+  fireEvent.click(screen.getByRole("button", { name: "Available" }));
+  await waitFor(() =>
+    expect(
+      calls.find((c) => c.command === "register_skills")?.args,
+    ).toMatchObject({ skillIds: ["available"], agentIds: ["codex"] }),
+  );
+  await waitFor(() =>
+    expect(screen.queryByRole("dialog")).not.toBeInTheDocument(),
+  );
+});
+
+it("manual installation tab counts and filters manual skills including policy-disabled entries", async () => {
+  setup();
+  handlers.set("scan_skills", () => [
+    makeSkill({
+      id: "manual",
+      name: "Manual",
+      agents: {
+        codex: {
+          ...agentState("source"),
+          manual: true,
+          disabled: true,
+          policyBlocked: true,
+        },
+      },
+    }),
+    makeSkill({
+      id: "studio",
+      name: "Studio",
+      agents: { codex: { ...agentState("copied"), manual: false } },
+    }),
+  ]);
+  renderWithProviders(<AgentPage agentId="codex" />);
+  const manualTab = await screen.findByRole("tab", { name: /手动安装.*1/ });
+  fireEvent.mouseDown(screen.getByRole("tab", { name: /已安装 skill/ }), {
+    button: 0,
+    ctrlKey: false,
+  });
+  expect(await screen.findByText("Manual")).toBeInTheDocument();
+  expect(
+    within(screen.getByText("Manual").parentElement!).getByText("手动安装"),
+  ).toBeInTheDocument();
+  expect(screen.getByText("Studio")).toBeInTheDocument();
+  fireEvent.mouseDown(manualTab, { button: 0, ctrlKey: false });
+  expect(screen.queryByText("Studio")).not.toBeInTheDocument();
+  const toggle = screen.getByRole("switch", { name: "启用 Manual" });
+  expect(toggle).not.toBeChecked();
+  expect(toggle).toBeDisabled();
+});
+
+it("keeps a consistent card until both activation config and skill status finish refreshing", async () => {
+  setup();
+  handlers.set("list_groups", () => [
+    makeGroup({ id: "c", name: "Dev", agentId: "codex", skillIds: ["a"] }),
+  ]);
+  let active = false;
+  let release!: (value: unknown) => void;
+  const pendingSkills = new Promise((resolve) => {
+    release = resolve;
+  });
+  handlers.set("get_config", () => ({
+    activeGroups: active
+      ? { codex: { groupId: "c", skillIds: ["a"], entries: [] } }
+      : {},
+  }));
+  handlers.set("scan_skills", () =>
+    active
+      ? pendingSkills
+      : [makeSkill({ id: "a", agents: { codex: agentState("source", true) } })],
+  );
+  handlers.set("activate_agent_group", () => {
+    active = true;
+  });
+  renderWithProviders(<AgentPage agentId="codex" />);
+  const enable = await screen.findByRole("button", { name: "启用" });
+  fireEvent.click(enable);
+  await waitFor(() =>
+    expect(
+      calls.filter((c) => c.command === "get_config").length,
+    ).toBeGreaterThan(1),
+  );
+  expect(enable).toBeDisabled();
+  expect(screen.queryByText("需要检查")).not.toBeInTheDocument();
+  expect(
+    screen.queryByRole("button", { name: "停用" }),
+  ).not.toBeInTheDocument();
+  await act(async () =>
+    release([makeSkill({ id: "a", agents: { codex: agentState("source") } })]),
+  );
+  expect(
+    await screen.findByRole("button", { name: "停用" }),
+  ).toBeInTheDocument();
+  expect(screen.getByText("使用中")).toBeInTheDocument();
+  expect(screen.queryByText("需要检查")).not.toBeInTheDocument();
+  expect(screen.getByRole("button", { name: "停用" })).toBe(enable);
 });

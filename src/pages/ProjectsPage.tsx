@@ -4,13 +4,17 @@ import {
   useNavigationGuard,
   useUnsavedProject,
 } from "@/components/common/NavigationGuard";
-import { useMemo, useState } from "react";
+import { useMemo, useState, type ReactNode } from "react";
 import {
   ArrowLeft,
   FolderGit2,
   FolderOpen,
   Trash2,
   Upload,
+  Play,
+  Square,
+  Pencil,
+  GripVertical,
 } from "lucide-react";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
@@ -60,6 +64,31 @@ import {
 } from "@/lib/tokens";
 import type { LinkMode, ProjectBinding } from "@/types";
 
+import { useMutation, useQueryClient } from "@tanstack/react-query";
+import { toast } from "sonner";
+import { queryKeys } from "@/lib/queryKeys";
+import {
+  DndContext,
+  PointerSensor,
+  KeyboardSensor,
+  closestCenter,
+  useSensor,
+  useSensors,
+  type DragEndEvent,
+} from "@dnd-kit/core";
+import {
+  SortableContext,
+  useSortable,
+  arrayMove,
+  sortableKeyboardCoordinates,
+  verticalListSortingStrategy,
+} from "@dnd-kit/sortable";
+import { CSS } from "@dnd-kit/utilities";
+
+function projectAgentIds(project: ProjectBinding): string[] {
+  return project.enabledAgentIds ?? [];
+}
+
 export function ProjectsPage() {
   return (
     <NavigationGuard>
@@ -72,6 +101,49 @@ function ProjectsContent() {
   const { data: projects = [] } = useProjects();
   const { data: skills = [] } = useSkills();
   const { data: groups = [] } = useGroups();
+  const { data: agents = [] } = useAgents();
+  const client = useQueryClient();
+  const [sourceFilter, setSourceFilter] = useState<string | null>(null);
+  const toggleProject = useMutation({
+    mutationFn: ({ id, enabled }: { id: string; enabled: boolean }) =>
+      projectsApi.setEnabled(id, enabled),
+    onSuccess: (_, { enabled }) =>
+      toast.success(enabled ? "项目已启用" : "项目已停用"),
+    onError: (e) => toast.error(String(e)),
+    onSettled: () => client.invalidateQueries({ queryKey: queryKeys.projects }),
+  });
+  const reorder = useMutation({
+    mutationFn: (next: ProjectBinding[]) =>
+      projectsApi.reorder(next.map((p) => p.id)),
+    onMutate: async (next) => {
+      await client.cancelQueries({ queryKey: queryKeys.projects });
+      const previous = client.getQueryData<ProjectBinding[]>(
+        queryKeys.projects,
+      );
+      client.setQueryData(queryKeys.projects, next);
+      return { previous };
+    },
+    // The command returns stored bindings; keep computed deployment status until refetch.
+
+    onError: (e, _, context) => {
+      if (context?.previous)
+        client.setQueryData(queryKeys.projects, context.previous);
+      toast.error(String(e));
+    },
+    onSettled: () => client.invalidateQueries({ queryKey: queryKeys.projects }),
+  });
+  const sensors = useSensors(
+    useSensor(PointerSensor, { activationConstraint: { distance: 6 } }),
+    useSensor(KeyboardSensor, {
+      coordinateGetter: sortableKeyboardCoordinates,
+    }),
+  );
+  const onDragEnd = ({ active, over }: DragEndEvent) => {
+    if (!over || active.id === over.id || reorder.isPending) return;
+    const from = projects.findIndex((p) => p.id === active.id);
+    const to = projects.findIndex((p) => p.id === over.id);
+    if (from >= 0 && to >= 0) reorder.mutate(arrayMove(projects, from, to));
+  };
   const createProject = useCreateProject();
   const deleteProject = useDeleteProject();
 
@@ -82,8 +154,12 @@ function ProjectsContent() {
     sumTokens(tokens, projectSkillIds(p, groups));
 
   const [query, setQuery] = useState("");
-  const filtered = projects.filter((p) =>
-    `${p.name} ${p.root}`.toLowerCase().includes(query.trim().toLowerCase()),
+  const filtered = projects.filter(
+    (p) =>
+      `${p.name} ${p.root}`
+        .toLowerCase()
+        .includes(query.trim().toLowerCase()) &&
+      (!sourceFilter || projectAgentIds(p).includes(sourceFilter)),
   );
   const [detail, setDetail] = useState<string | null>(null);
   const [creating, setCreating] = useState(false);
@@ -134,9 +210,43 @@ function ProjectsContent() {
   return (
     <div className="flex min-h-0 flex-1 flex-col">
       {tools}
-      <p className="py-4 text-sm text-muted-foreground">
-        共 {filtered.length} 个项目
-      </p>
+      <div className="my-4 flex flex-wrap items-center justify-between gap-3 rounded-xl border border-border-default px-5 py-4">
+        <div className="flex flex-wrap items-center gap-2">
+          {agents
+            .filter((a) => a.supportsProjectSkills)
+            .map((a) => (
+              <button
+                key={a.id}
+                type="button"
+                title={`筛选 ${a.displayName} 已启用的项目`}
+                className={`inline-flex items-center gap-1.5 rounded-full px-2.5 py-1 text-xs font-medium transition-colors hover:brightness-95 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring ${a.id === "claude-code" ? "bg-orange-500/10 text-orange-600 dark:text-orange-300" : "bg-emerald-500/10 text-emerald-600 dark:text-emerald-300"} ${sourceFilter === a.id ? "ring-2 ring-current" : ""}`}
+                aria-pressed={sourceFilter === a.id}
+                onClick={() =>
+                  setSourceFilter(sourceFilter === a.id ? null : a.id)
+                }
+              >
+                <AgentIcon agentId={a.id} className="h-4 w-4" />
+                {a.displayName}:{" "}
+                {
+                  projects.filter((p) => projectAgentIds(p).includes(a.id))
+                    .length
+                }
+              </button>
+            ))}
+        </div>
+        <div
+          className="ml-auto flex items-center gap-2"
+          title="按 Skill Studio 已写入的项目部署统计，同一项目只计一次"
+        >
+          <Badge variant="outline" className="px-3 py-1 text-sm">
+            项目 {projects.length} 个
+          </Badge>
+          <Badge variant="outline" className="px-3 py-1 text-sm">
+            已启用{" "}
+            {projects.filter((p) => projectAgentIds(p).length > 0).length} 个
+          </Badge>
+        </div>
+      </div>
 
       <div className="min-h-0 flex-1 overflow-y-auto pb-6">
         {projects.length === 0 ? (
@@ -146,83 +256,157 @@ function ProjectsContent() {
             description="绑定一个项目目录，就能让某些 skill 只对这个项目生效。项目级默认用文件复制而不是软链——软链进 git 是一个指向本机绝对路径的死链。"
           />
         ) : (
-          <ListContainer>
-            {filtered.map((p, i) => {
-              // 一行只遍历一次 id 集合：下面的判断、数字、tooltip 共用
-              const rowTokens = projectTokens(p);
-              return (
-                <ListItemRow
-                  key={p.id}
-                  isLast={i === filtered.length - 1}
-                  onClick={() => setDetail(p.id)}
-                >
-                  <div className="flex h-8 w-8 shrink-0 items-center justify-center rounded-lg border border-border bg-muted">
-                    <FolderGit2 className="h-4 w-4 text-muted-foreground" />
-                  </div>
-                  <div className="min-w-0 flex-1">
-                    <div className="flex items-center gap-2">
-                      <span className="truncate text-sm font-medium">
-                        {p.name}
-                      </span>
-                      <Badge
-                        variant="outline"
-                        className="h-4 px-1.5 text-[10px]"
-                      >
-                        {p.skillIds.length + p.groupIds.length} 项绑定
-                      </Badge>
-                      {rowTokens.total > 0 && (
-                        <Badge
-                          variant="outline"
-                          className="h-4 px-1.5 text-[10px]"
-                          title={tokenTitle(
-                            rowTokens,
-                            "这个项目会用到的 skill（勾选的 agent × 直接绑定 + 归属匹配的分组，去重后）",
+          <DndContext
+            sensors={sensors}
+            collisionDetection={closestCenter}
+            onDragEnd={onDragEnd}
+          >
+            <SortableContext
+              items={filtered.map((p) => p.id)}
+              strategy={verticalListSortingStrategy}
+            >
+              <ListContainer cards>
+                {filtered.map((p) => {
+                  // 一行只遍历一次 id 集合：下面的判断、数字、tooltip 共用
+                  const rowTokens = projectTokens(p);
+                  return (
+                    <SortableProjectCard
+                      key={p.id}
+                      project={p}
+                      disabled={reorder.isPending || toggleProject.isPending}
+                    >
+                      <div className="flex h-10 w-10 shrink-0 items-center justify-center rounded-xl bg-muted">
+                        <FolderGit2 className="h-5 w-5" />
+                      </div>
+                      <div className="min-w-0 flex-1">
+                        <div className="flex items-center gap-2">
+                          <button
+                            className="truncate text-sm font-medium text-left"
+                            onClick={() => setDetail(p.id)}
+                          >
+                            {p.name}
+                          </button>
+                          {projectAgentIds(p).length > 0 && (
+                            <Badge variant="success">使用中</Badge>
                           )}
+                          <Badge
+                            variant="outline"
+                            className="h-4 px-1.5 text-[10px]"
+                          >
+                            {p.enabledGroupIds?.length ?? 0} 分组启动
+                          </Badge>
+                          <Badge
+                            variant="outline"
+                            className="h-4 px-1.5 text-[10px]"
+                          >
+                            {p.enabledSkillIds?.length ?? 0} skill启用
+                          </Badge>
+                          {rowTokens.total > 0 && (
+                            <Badge
+                              variant="outline"
+                              className="h-4 px-1.5 text-[10px]"
+                              title={tokenTitle(
+                                rowTokens,
+                                "这个项目会用到的 skill（勾选的 agent × 直接绑定 + 归属匹配的分组，去重后）",
+                              )}
+                            >
+                              ≈ {formatTokens(rowTokens.total)} tokens
+                            </Badge>
+                          )}
+                          <Badge
+                            variant="outline"
+                            className="h-4 px-1.5 text-[10px]"
+                          >
+                            {p.linkMode === "copy"
+                              ? "复制"
+                              : p.linkMode === "symlink"
+                                ? "软链"
+                                : "自动"}
+                          </Badge>
+                        </div>
+                        <p className="truncate pt-0.5 font-mono text-[11px] text-muted-foreground">
+                          {p.root}
+                        </p>
+                      </div>
+                      <div onClick={(e) => e.stopPropagation()}>
+                        <RowActions
+                          busy={
+                            toggleProject.isPending &&
+                            toggleProject.variables?.id === p.id
+                          }
                         >
-                          ≈ {formatTokens(rowTokens.total)} tokens
-                        </Badge>
-                      )}
-                      <Badge
-                        variant="outline"
-                        className="h-4 px-1.5 text-[10px]"
-                      >
-                        {p.linkMode === "copy"
-                          ? "复制"
-                          : p.linkMode === "symlink"
-                            ? "软链"
-                            : "自动"}
-                      </Badge>
-                    </div>
-                    <p className="truncate pt-0.5 font-mono text-[11px] text-muted-foreground">
-                      {p.root}
-                    </p>
-                  </div>
-                  <div onClick={(e) => e.stopPropagation()}>
-                    <RowActions>
-                      <Button
-                        variant="ghost"
-                        size="icon"
-                        className="h-7 w-7"
-                        title="打开项目目录"
-                        onClick={() => void systemApi.revealPath(p.root)}
-                      >
-                        <FolderOpen className="h-4 w-4" />
-                      </Button>
-                      <Button
-                        variant="ghost"
-                        size="icon"
-                        className="h-7 w-7 hover:text-red-500"
-                        title="移除项目"
-                        onClick={() => setDeleting(p)}
-                      >
-                        <Trash2 className="h-4 w-4" />
-                      </Button>
-                    </RowActions>
-                  </div>
-                </ListItemRow>
-              );
-            })}
-          </ListContainer>
+                          <Button
+                            size="sm"
+                            variant={
+                              p.managedEntries?.length ? "outline" : "default"
+                            }
+                            disabled={
+                              toggleProject.isPending ||
+                              (!p.managedEntries?.length &&
+                                projectSkillIds(p, groups).length === 0)
+                            }
+                            onClick={() =>
+                              toggleProject.mutate({
+                                id: p.id,
+                                enabled: !p.managedEntries?.length,
+                              })
+                            }
+                          >
+                            {p.managedEntries?.length ? (
+                              <Square className="h-4 w-4" />
+                            ) : (
+                              <Play className="h-4 w-4" />
+                            )}
+                            {p.managedEntries?.length ? "停用" : "启用"}
+                          </Button>
+                          <Button
+                            variant="ghost"
+                            size="icon"
+                            title="编辑项目"
+                            aria-label={`编辑 ${p.name}`}
+                            onClick={() => setDetail(p.id)}
+                          >
+                            <Pencil className="h-4 w-4" />
+                          </Button>
+                          <Button
+                            variant="ghost"
+                            size="icon"
+                            className="h-8 w-8"
+                            title="打开项目目录"
+                            onClick={() => void systemApi.revealPath(p.root)}
+                          >
+                            <FolderOpen className="h-4 w-4" />
+                          </Button>
+                          <Button
+                            variant="ghost"
+                            size="icon"
+                            className="h-8 w-8 hover:text-red-500"
+                            title={
+                              p.managedEntries?.length
+                                ? "请先停用项目"
+                                : "移除项目"
+                            }
+                            disabled={
+                              !!p.managedEntries?.length ||
+                              toggleProject.isPending
+                            }
+                            onClick={() => setDeleting(p)}
+                          >
+                            <Trash2 className="h-4 w-4" />
+                          </Button>
+                        </RowActions>
+                      </div>
+                    </SortableProjectCard>
+                  );
+                })}
+                {filtered.length === 0 && (
+                  <p className="py-8 text-center text-sm text-muted-foreground">
+                    没有匹配的项目
+                  </p>
+                )}
+              </ListContainer>
+            </SortableContext>
+          </DndContext>
         )}
       </div>
 
@@ -537,6 +721,60 @@ function ProjectDetail({
           )}
         </section>
       </div>
+    </div>
+  );
+}
+
+function SortableProjectCard({
+  project,
+  disabled,
+  children,
+}: {
+  project: ProjectBinding;
+  disabled: boolean;
+  children: ReactNode;
+}) {
+  const {
+    attributes,
+    listeners,
+    setNodeRef,
+    setActivatorNodeRef,
+    transform,
+    transition,
+    isDragging,
+  } = useSortable({ id: project.id, disabled });
+  return (
+    <div
+      ref={setNodeRef}
+      style={{
+        transform: CSS.Transform.toString(transform),
+        transition,
+        position: "relative",
+        zIndex: isDragging ? 1 : undefined,
+      }}
+    >
+      <ListItemRow
+        card
+        className={
+          projectAgentIds(project).length
+            ? "border-emerald-500/40 bg-card bg-gradient-to-r from-emerald-500/10 to-transparent shadow-sm shadow-emerald-500/5 hover:border-emerald-500/60 hover:bg-card dark:from-emerald-500/15"
+            : undefined
+        }
+      >
+        <button
+          ref={setActivatorNodeRef}
+          type="button"
+          {...attributes}
+          {...listeners}
+          aria-label={`拖拽排序 ${project.name}`}
+          title="拖拽排序（也可按空格后用方向键移动）"
+          disabled={disabled}
+          className="touch-none shrink-0 cursor-grab rounded p-1 text-muted-foreground/50 hover:text-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring active:cursor-grabbing disabled:cursor-wait"
+        >
+          <GripVertical className="h-4 w-4" />
+        </button>
+        {children}
+      </ListItemRow>
     </div>
   );
 }

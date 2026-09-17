@@ -142,6 +142,8 @@ pub struct AppConfig {
     #[serde(default)]
     pub active_groups: HashMap<String, super::group::ActiveGroup>,
     #[serde(default)]
+    pub policy_suspensions: HashMap<String, Vec<super::group::GroupEntry>>,
+    #[serde(default)]
     pub projects: Vec<ProjectBinding>,
     #[serde(default)]
     pub registrations: Registrations,
@@ -164,6 +166,7 @@ impl Default for AppConfig {
             settings: Settings::default(),
             groups: Vec::new(),
             active_groups: HashMap::new(),
+            policy_suspensions: HashMap::new(),
             projects: Vec::new(),
             registrations: HashMap::new(),
             skill_meta: HashMap::new(),

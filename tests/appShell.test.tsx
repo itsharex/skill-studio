@@ -252,7 +252,7 @@ it.each([false, true])(
     renderWithProviders(<App />);
     fireEvent.click(screen.getByRole("button", { name: "设置" }));
     const toggle = await screen.findByRole("switch", {
-      name: "切换分组时保留手动安装的 skill",
+      name: "是否保留手动安装的 skill",
     });
     expect(toggle).toBeChecked();
     fireEvent.click(toggle);

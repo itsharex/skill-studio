@@ -2,6 +2,12 @@ import { invoke } from "@tauri-apps/api/core";
 import type { LinkMode, LinkReport, ProjectBinding } from "@/types";
 
 export const projectsApi = {
+  async setEnabled(projectId: string, enabled: boolean): Promise<LinkReport> {
+    return await invoke("set_project_enabled", { projectId, enabled });
+  },
+  async reorder(projectIds: string[]): Promise<ProjectBinding[]> {
+    return await invoke("reorder_projects", { projectIds });
+  },
   async list(): Promise<ProjectBinding[]> {
     return await invoke("list_projects");
   },

@@ -36,8 +36,9 @@ const DialogContent = React.forwardRef<
       ref={ref}
       // 点遮罩不关闭：表单填一半被误关很恼人（cc-switch 的处理）
       onInteractOutside={(e) => e.preventDefault()}
+      // Independent translate keeps centering intact when animate-in/out changes transform.
       className={cn(
-        "fixed left-1/2 top-1/2 z-50 flex max-h-[90vh] w-full max-w-lg -translate-x-1/2 -translate-y-1/2 flex-col",
+        "fixed left-1/2 top-1/2 z-50 flex max-h-[90vh] w-full max-w-lg [translate:-50%_-50%] flex-col",
         "border border-border-default bg-background text-foreground shadow-lg duration-200 sm:rounded-lg",
         "data-[state=open]:animate-in data-[state=closed]:animate-out data-[state=closed]:fade-out-0 data-[state=open]:fade-in-0 data-[state=closed]:zoom-out-95 data-[state=open]:zoom-in-95",
         className,
