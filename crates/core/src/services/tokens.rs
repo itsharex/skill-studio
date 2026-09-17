@@ -103,6 +103,11 @@ fn is_skill_file_name(name: &str) -> bool {
 /// 已知边界：不带 BOM 的 UTF-16 不猜（会把二进制误判成文本），GBK / Big5 要引
 /// encoding_rs 才能解，这里仍按不可读算 0。读不到也算 0。
 fn estimate_file(path: &Path) -> u32 {
+    // metadata 跟随软链：非目录目标也可能是 FIFO / 设备节点，不能直接读取。
+    // 放在共同入口，SKILL.md 本身是软链时也走同样的检查。
+    if !fs::metadata(path).is_ok_and(|meta| meta.is_file()) {
+        return 0;
+    }
     let Ok(bytes) = fs::read(path) else {
         return 0;
     };
@@ -152,8 +157,7 @@ fn walk_extras(dir: &Path, depth: usize) -> u32 {
         if meta.is_dir() {
             total = total.saturating_add(walk_extras(&path, depth + 1));
         } else if (meta.is_file() || is_link) && !(depth == 0 && is_skill_file_name(&name)) {
-            // 剩下的软链只可能指向文件：跟随。放行条件不写成 `!meta.is_dir()`，
-            // 是为了把 FIFO / 设备节点挡在外面 —— `fs::read` 会卡在那里
+            // 普通文件和软链交给 estimate_file；它会检查最终目标，跳过特殊文件。
             total = total.saturating_add(estimate_file(&path));
         }
     }
@@ -363,6 +367,48 @@ mod tests {
         assert_eq!(est.skill_md, 2, "软链的 SKILL.md 必须计入");
         // 内部的文件别名会被数两遍 —— 已知代价，宁可高估不低估
         assert_eq!(est.extras, 2, "文件软链跟随");
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn fifo_links_are_skipped_without_blocking() {
+        let dir = tempfile::tempdir().unwrap();
+        let pipe = dir.path().join("pipe");
+        assert!(std::process::Command::new("mkfifo")
+            .arg(&pipe)
+            .status()
+            .unwrap()
+            .success());
+        fs::write(dir.path().join(SKILL_FILE), "abcd").unwrap();
+        fs::write(dir.path().join("notes.md"), "abcd").unwrap();
+        assert!(link_file(&pipe, &dir.path().join("reference")));
+
+        // 无写入方的 FIFO 一旦被读取就会挂起；超时让回归以失败结束而非卡住测试。
+        let (tx, rx) = std::sync::mpsc::channel();
+        std::thread::spawn(move || {
+            let extras = estimate_skill(dir.path());
+            fs::remove_file(dir.path().join(SKILL_FILE)).unwrap();
+            assert!(link_file(&pipe, &dir.path().join(SKILL_FILE)));
+            let body = estimate_skill(dir.path());
+            tx.send((extras, body)).unwrap();
+        });
+        let (extras, body) = rx
+            .recv_timeout(std::time::Duration::from_secs(2))
+            .expect("估算不能阻塞在 FIFO 软链上");
+        assert_eq!(
+            extras,
+            TokenEstimate {
+                skill_md: 1,
+                extras: 1
+            }
+        );
+        assert_eq!(
+            body,
+            TokenEstimate {
+                skill_md: 0,
+                extras: 1
+            }
+        );
     }
 
     #[test]
