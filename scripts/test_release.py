@@ -69,6 +69,15 @@ class ReleaseTests(unittest.TestCase):
             with self.assertRaises(ValueError):
                 r.successful_run(runs, 'abc', 'main')
 
+    def test_workflow_query_filters_exact_sha_after_listing_branch(self):
+        good = dict(databaseId=1, headSha='abc', headBranch='main', event='push',
+                    status='completed', conclusion='success', url='url')
+        with patch.object(r, 'gh', return_value=[good]) as gh:
+            self.assertEqual(r.workflow_run('ci.yml', 'abc', 'main'), good)
+        args = gh.call_args.args
+        self.assertNotIn('--commit', args)
+        self.assertEqual(args[args.index('--branch') + 1], 'main')
+
     @patch.object(r, 'verify', return_value='0.1.2')
     def test_dirty_tree_blocks_tag_mutation(self, verify):
         with patch.object(r, 'run', side_effect=['main', ' M file']) as run:

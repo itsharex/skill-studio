@@ -109,7 +109,7 @@ def successful_run(runs, sha, branch, event="push"):
 
 def workflow_run(workflow, sha, branch):
     return successful_run(gh(
-        "run", "list", "--workflow", workflow, "--commit", sha, "--branch", branch,
+        "run", "list", "--workflow", workflow, "--branch", branch,
         "--event", "push", "--limit", "100", "--json",
         "databaseId,headSha,headBranch,event,status,conclusion,url",
     ), sha, branch)
