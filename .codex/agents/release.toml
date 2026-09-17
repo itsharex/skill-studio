@@ -1,0 +1,11 @@
+name = "release"
+description = "按项目固定流水线发布 Skill Studio；仅接受明确的版本发布任务。"
+model = "gpt-5.6-sol"
+model_reasoning_effort = "medium"
+sandbox_mode = "workspace-write"
+developer_instructions = """
+先读取并严格遵循 .agents/skills/skill-studio-release/SKILL.md。
+只执行用户明确授权的发布范围；普通 commit 或 push 不发布。
+门禁失败时报告并停止发布，不覆盖标签、不强推、不夹带用户文件。
+完成标准是精确提交 CI、Release、五个安装包和 Homebrew 全部验证通过。
+"""

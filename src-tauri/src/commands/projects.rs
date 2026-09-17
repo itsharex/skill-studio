@@ -16,15 +16,50 @@ pub struct ProjectView {
     enabled_agent_ids: Vec<String>,
     enabled_skill_ids: Vec<String>,
     enabled_group_ids: Vec<String>,
+    uncollected_skill_count: usize,
+}
+
+#[tauri::command(rename_all = "camelCase")]
+pub fn list_project_skills(
+    state: State<'_, AppState>,
+    project_id: String,
+) -> Result<Vec<skill_studio_core::services::project_local::ProjectLocalSkill>, String> {
+    let config = state.config();
+    let project = config
+        .project(&project_id)
+        .ok_or_else(|| format!("项目 {project_id} 不存在"))?;
+    state
+        .studio()
+        .project_local_skills(&config, project)
+        .map_err(Into::into)
+}
+
+#[tauri::command(rename_all = "camelCase")]
+pub fn delete_project_local_skill(
+    state: State<'_, AppState>,
+    project_id: String,
+    path: PathBuf,
+) -> Result<(), String> {
+    state
+        .studio()
+        .delete_project_local_skill(&state.config(), &project_id, &path)
+        .map_err(Into::into)
 }
 
 #[tauri::command]
 pub fn list_projects(state: State<'_, AppState>) -> Result<Vec<ProjectView>, String> {
     let config = state.config();
-    Ok(config
+    config
         .projects
         .iter()
         .map(|project| {
+            let uncollected_skill_count = state
+                .studio()
+                .project_local_skills(&config, project)
+                .map_err(String::from)?
+                .iter()
+                .filter(|s| !s.collected && !s.managed && s.entry.frontmatter.is_some())
+                .count();
             let mut by_agent = std::collections::HashMap::new();
             for agent in skill_studio_core::models::agent::AGENTS {
                 let Some(root) = agent.project_root(&project.root) else {
@@ -69,14 +104,15 @@ pub fn list_projects(state: State<'_, AppState>) -> Result<Vec<ProjectView>, Str
                 .collect();
             enabled_group_ids.sort();
             enabled_group_ids.dedup();
-            ProjectView {
+            Ok(ProjectView {
                 project: project.clone(),
                 enabled_agent_ids,
                 enabled_skill_ids,
                 enabled_group_ids,
-            }
+                uncollected_skill_count,
+            })
         })
-        .collect())
+        .collect()
 }
 
 #[tauri::command(rename_all = "camelCase")]
@@ -357,4 +393,105 @@ mod project_order_tests {
             assert_eq!(serde_json::to_string(&projects).unwrap(), saved);
         }
     }
+}
+
+#[tauri::command(rename_all = "camelCase")]
+pub fn list_skill_backups(
+    state: State<'_, AppState>,
+) -> Result<Vec<skill_studio_core::services::skill_files::SkillBackup>, String> {
+    state
+        .studio()
+        .migrate_project_backups(&state.config())
+        .map_err(String::from)?;
+    state
+        .studio()
+        .skill_backups()
+        .map(|v| v.into_iter().filter(|r| !r.disabled).collect())
+        .map_err(Into::into)
+}
+#[tauri::command(rename_all = "camelCase")]
+pub fn delete_skill_file(
+    state: State<'_, AppState>,
+    scope: String,
+    path: PathBuf,
+) -> Result<(), String> {
+    state
+        .studio()
+        .stash_skill(&state.config(), &scope, &path, false)
+        .map_err(Into::into)
+}
+#[tauri::command(rename_all = "camelCase")]
+pub fn restore_skill_file(state: State<'_, AppState>, id: String) -> Result<(), String> {
+    state
+        .studio()
+        .restore_skill_backup(&state.config(), &id)
+        .map_err(Into::into)
+}
+#[tauri::command(rename_all = "camelCase")]
+pub fn purge_skill_file(state: State<'_, AppState>, id: String) -> Result<(), String> {
+    let record = state
+        .studio()
+        .skill_backups()
+        .map_err(String::from)?
+        .into_iter()
+        .find(|r| r.id == id)
+        .ok_or("备份不存在")?;
+    if record.disabled {
+        return Err("不能直接清除停用文件，请先删除 skill".into());
+    }
+    state.studio().purge_skill_backup(&id).map_err(Into::into)
+}
+#[tauri::command(rename_all = "camelCase")]
+pub fn set_project_skill_enabled(
+    state: State<'_, AppState>,
+    project_id: String,
+    path: PathBuf,
+    enabled: bool,
+) -> Result<(), String> {
+    let scope = format!("project:{project_id}");
+    if enabled {
+        let r = state
+            .studio()
+            .skill_backups()
+            .map_err(String::from)?
+            .into_iter()
+            .find(|r| r.disabled && r.scope == scope && r.original_path == path)
+            .ok_or("停用记录不存在")?;
+        state
+            .studio()
+            .restore_skill_backup(&state.config(), &r.id)
+            .map_err(Into::into)
+    } else {
+        state
+            .studio()
+            .stash_skill(&state.config(), &scope, &path, true)
+            .map_err(Into::into)
+    }
+}
+
+#[tauri::command(rename_all = "camelCase")]
+pub fn collect_project_skill(
+    state: State<'_, AppState>,
+    project_id: String,
+    path: PathBuf,
+) -> Result<skill_studio_core::models::skill::Skill, String> {
+    let entry = {
+        let config = state.config();
+        let project = config.project(&project_id).ok_or("项目不存在")?;
+        state
+            .studio()
+            .project_local_skills(&config, project)
+            .map_err(String::from)?
+            .into_iter()
+            .find(|s| s.entry.path == path)
+            .ok_or("项目 skill 已变化")?
+    };
+    if entry.managed {
+        return Err("此 skill 已托管".into());
+    }
+    let mut prepared = skill_studio_core::services::marketplace::prepare_local(&entry.storage_path)
+        .map_err(String::from)?;
+    prepared.source = format!("local:{}", path.display());
+    prepared.skill_id = entry.entry.name;
+    state.install_catalog_skill(&prepared).map_err(Into::into)
 }

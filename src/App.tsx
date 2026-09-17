@@ -212,7 +212,11 @@ function AppContent() {
                 aria-hidden="true"
                 className={`whitespace-nowrap text-xl font-semibold leading-7 tracking-tight ${isSubpage ? "text-foreground" : "text-blue-500"}`}
               >
-                {isSubpage ? titles[view] : "Skill Studio"}
+                {isSubpage
+                  ? titles[view]
+                  : import.meta.env.DEV
+                    ? "Skill Studio Debug"
+                    : "Skill Studio"}
               </span>
               <h1 className="sr-only">{titles[view] ?? "Skill Studio"}</h1>
               {!isSubpage && (

@@ -1,5 +1,7 @@
+import { useSkillPreview } from "@/components/common/SkillPreview";
+import { DeleteSkillButton } from "@/components/common/SkillBackups";
 import { useMemo } from "react";
-import { FolderOpen, RefreshCw, Trash2 } from "lucide-react";
+import { FolderOpen, RefreshCw } from "lucide-react";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Switch } from "@/components/ui/switch";
@@ -29,7 +31,6 @@ import {
   useRegisterSkills,
   useSetSkillEnabled,
   useSkills,
-  useUnregisterSkills,
 } from "@/hooks/useData";
 import type { LinkStatus, SkillView } from "@/types";
 
@@ -70,7 +71,7 @@ export function AgentSkills({
   const { data: agents = [] } = useAgents();
   const { data: skills = [] } = useSkills();
   const register = useRegisterSkills();
-  const unregister = useUnregisterSkills();
+  const { previewSkill, previewDialog } = useSkillPreview();
   const setEnabled = useSetSkillEnabled();
 
   const query = searchQuery ?? "";
@@ -117,6 +118,7 @@ export function AgentSkills({
 
   return (
     <div className="flex min-h-0 flex-1 flex-col">
+      {previewDialog}
       <Dialog open={addOpen} onOpenChange={onAddOpenChange}>
         <DialogContent>
           <DialogHeader>
@@ -186,6 +188,10 @@ export function AgentSkills({
               return (
                 <ListItemRow
                   key={skill.id}
+                  onPreview={() =>
+                    previewSkill(skill.name, skill.agents[agentId]!.targetPath)
+                  }
+                  previewLabel={`预览 ${skill.name}`}
                   card
                   className={attention ? "bg-red-500/5" : undefined}
                 >
@@ -306,24 +312,17 @@ export function AgentSkills({
                     >
                       <FolderOpen className="h-4 w-4" />
                     </Button>
-                    {state.status !== "source" && (
-                      <Button
-                        variant="ghost"
-                        size="icon"
-                        className="h-8 w-8 hover:text-red-500"
-                        title="从本 agent 移除"
-                        aria-label={`从 ${agent.displayName} 移除 ${skill.name}`}
-                        disabled={unregister.isPending}
-                        onClick={() =>
-                          unregister.mutate({
-                            skillIds: [skill.id],
-                            agentIds: [agentId],
-                          })
-                        }
-                      >
-                        <Trash2 className="h-4 w-4" />
-                      </Button>
-                    )}
+                    {(state.entryPaths?.length
+                      ? state.entryPaths
+                      : [state.targetPath]
+                    ).map((path) => (
+                      <DeleteSkillButton
+                        key={path}
+                        scope={`agent:${agentId}`}
+                        path={path}
+                        name={skill.name}
+                      />
+                    ))}
                   </RowActions>
                 </ListItemRow>
               );

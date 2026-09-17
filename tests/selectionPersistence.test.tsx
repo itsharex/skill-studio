@@ -23,6 +23,90 @@ function deferred<T>() {
 }
 const updates = () => calls.filter((c) => c.command === "apply_project");
 
+it("shows repository skills without adding them to Hub bindings", async () => {
+  handlers.set("list_projects", () => [makeProject()]);
+  handlers.set("list_project_skills", () => [
+    {
+      name: "skill-studio-release",
+      tokens: { skillMd: 208, extras: 100 },
+      path: "/project/.agents/skills/skill-studio-release",
+      agentId: "codex",
+      frontmatter: { description: "发布流程", malformed: false },
+    },
+  ]);
+  renderWithProviders(<ProjectsPage />);
+  fireEvent.click(await screen.findByText("webapp"));
+  expect(await screen.findByText("skill-studio-release")).toBeVisible();
+  expect(screen.getByText("≈ 208 tokens")).toHaveAttribute(
+    "title",
+    expect.stringContaining("SKILL.md ≈ 208"),
+  );
+  expect(
+    screen.getByText("/project/.agents/skills/skill-studio-release"),
+  ).toBeVisible();
+  expect(
+    screen.queryByRole("checkbox", { name: "skill-studio-release" }),
+  ).toBeNull();
+  expect(updates()).toHaveLength(0);
+});
+
+it("counts uncollected project skills and refreshes collection and confirmed deletion", async () => {
+  let collected = false;
+  let deleted = false;
+  const path = "/project/.agents/skills/release";
+  handlers.set("list_projects", () => [
+    makeProject({ uncollectedSkillCount: collected || deleted ? 0 : 1 }),
+  ]);
+  handlers.set("list_project_skills", () =>
+    deleted
+      ? []
+      : [
+          {
+            name: "release",
+            path,
+            agentId: "codex",
+            collected,
+            managed: false,
+            frontmatter: { description: "Release", malformed: false },
+          },
+        ],
+  );
+  handlers.set("collect_project_skill", (args) => {
+    expect(args.path).toBe(path);
+    collected = true;
+    return makeSkill();
+  });
+  handlers.set("delete_project_local_skill", (args) => {
+    expect(args).toEqual({ projectId: "p1", path });
+    deleted = true;
+    return "/backup/release";
+  });
+  renderWithProviders(<ProjectsPage />);
+  expect(await screen.findByText("1 skill未收录")).toBeVisible();
+  expect(screen.getByText("未收录 skill 1 个")).toBeVisible();
+  fireEvent.click(screen.getByText("webapp"));
+  fireEvent.click(
+    await screen.findByRole("button", { name: "收录 release 到 Hub" }),
+  );
+  await waitFor(() =>
+    expect(
+      screen.getByRole("button", { name: "收录 release 到 Hub" }),
+    ).toBeDisabled(),
+  );
+  fireEvent.click(screen.getByRole("button", { name: "删除 release" }));
+  expect(
+    calls.filter((c) => c.command === "delete_project_local_skill"),
+  ).toHaveLength(0);
+  fireEvent.click(screen.getByRole("button", { name: "取消" }));
+  expect(
+    calls.filter((c) => c.command === "delete_project_local_skill"),
+  ).toHaveLength(0);
+  fireEvent.click(screen.getByRole("button", { name: "删除 release" }));
+  fireEvent.click(screen.getByRole("button", { name: "删除" }));
+  expect(await screen.findByText("项目目录中暂无 skill")).toBeVisible();
+  expect(updates()).toHaveLength(0);
+});
+
 it("keeps selections local and saves once before applying on explicit write", async () => {
   let project = makeProject();
   handlers.set("list_projects", () => [project]);

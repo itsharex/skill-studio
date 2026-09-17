@@ -125,6 +125,7 @@ export interface Group {
 export type GroupApplyMode = "add" | "remove";
 
 export interface ProjectBinding {
+  uncollectedSkillCount?: number;
   enabledAgentIds?: string[];
   enabledSkillIds?: string[];
   enabledGroupIds?: string[];

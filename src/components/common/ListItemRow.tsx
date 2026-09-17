@@ -7,22 +7,52 @@ export function ListItemRow({
   card = false,
   className,
   onClick,
+  onPreview,
+  previewLabel,
 }: {
   children: React.ReactNode;
   isLast?: boolean;
   card?: boolean;
   className?: string;
   onClick?: () => void;
+  onPreview?: () => void;
+  previewLabel?: string;
 }) {
   return (
     <div
-      onClick={onClick}
+      role={onPreview ? "button" : undefined}
+      tabIndex={onPreview ? 0 : undefined}
+      aria-label={previewLabel}
+      onKeyDown={(e) => {
+        if (
+          onPreview &&
+          e.target === e.currentTarget &&
+          (e.key === "Enter" || e.key === " ")
+        ) {
+          e.preventDefault();
+          onPreview();
+        }
+      }}
+      onClick={(e) => {
+        if (!onPreview) {
+          onClick?.();
+          return;
+        }
+        if (
+          e.target instanceof Element &&
+          e.currentTarget.contains(e.target) &&
+          !e.target.closest(
+            "button,a,input,select,textarea,[role=switch],[role=checkbox],[role=dialog]",
+          )
+        )
+          onPreview();
+      }}
       className={cn(
         "group flex items-center gap-3 px-4 py-2.5 transition-colors hover:bg-muted/50",
         card
           ? "min-h-20 rounded-xl border border-border-default bg-card px-5 py-4"
           : !isLast && "border-b border-border-default",
-        onClick && "cursor-pointer",
+        (onClick || onPreview) && "cursor-pointer",
         className,
       )}
     >

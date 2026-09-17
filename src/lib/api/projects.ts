@@ -1,7 +1,48 @@
 import { invoke } from "@tauri-apps/api/core";
-import type { LinkMode, LinkReport, ProjectBinding } from "@/types";
+import type {
+  LinkMode,
+  LinkReport,
+  ProjectBinding,
+  TokenEstimate,
+} from "@/types";
+
+export interface ProjectLocalSkill {
+  tokens?: TokenEstimate;
+  disabled: boolean;
+  storagePath: string;
+  collected: boolean;
+  managed: boolean;
+  name: string;
+  path: string;
+  agentId: string;
+  frontmatter?: {
+    description?: string;
+    malformed: boolean;
+    error?: string;
+  };
+}
 
 export const projectsApi = {
+  async collectLocal(projectId: string, path: string): Promise<void> {
+    return await invoke("collect_project_skill", { projectId, path });
+  },
+  async setLocalEnabled(
+    projectId: string,
+    path: string,
+    enabled: boolean,
+  ): Promise<void> {
+    return await invoke("set_project_skill_enabled", {
+      projectId,
+      path,
+      enabled,
+    });
+  },
+  async deleteLocalSkill(projectId: string, path: string): Promise<void> {
+    return await invoke("delete_project_local_skill", { projectId, path });
+  },
+  async localSkills(projectId: string): Promise<ProjectLocalSkill[]> {
+    return await invoke("list_project_skills", { projectId });
+  },
   async setEnabled(projectId: string, enabled: boolean): Promise<LinkReport> {
     return await invoke("set_project_enabled", { projectId, enabled });
   },

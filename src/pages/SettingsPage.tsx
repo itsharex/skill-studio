@@ -12,6 +12,8 @@ import {
   Sparkles,
   Palette,
   Layers,
+  HardDrive,
+  Package,
   Link2,
   FolderCog,
   Settings2,
@@ -197,7 +199,7 @@ export function SettingsPage() {
                 <ThemeToggle />
               </SettingCard>
             </SettingsSection>
-            <SettingsSection title="分组与安装" icon={<Layers />}>
+            <SettingsSection title="分组与安装" icon={<Package />}>
               <SettingCard
                 title={
                   <label htmlFor="preserve-manual">
@@ -248,10 +250,7 @@ export function SettingsPage() {
           </TabsContent>
 
           <TabsContent value="directories" className="space-y-7">
-            <SettingsSection
-              title="Skill Studio 存储"
-              icon={<SkillStudioIcon className="h-5 w-5" />}
-            >
+            <SettingsSection title="Skill Studio 存储" icon={<HardDrive />}>
               <SettingCard
                 title="Hub 目录"
                 icon={<Layers />}

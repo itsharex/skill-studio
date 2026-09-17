@@ -337,6 +337,18 @@ pub fn scan_root(root: &Path, agent: &AgentDescriptor) -> Result<Vec<ScannedEntr
     Ok(out)
 }
 
+/// Read project-local installations without adopting them or changing bindings.
+pub fn scan_project(root: &Path) -> Result<Vec<ScannedEntry>> {
+    let mut entries = Vec::new();
+    for agent in crate::models::agent::AGENTS {
+        if let Some(dir) = agent.project_root(root) {
+            entries.extend(scan_root(&dir, agent)?);
+        }
+    }
+    entries.sort_by(|a, b| a.name.cmp(&b.name).then(a.path.cmp(&b.path)));
+    Ok(entries)
+}
+
 /// 源目录是否可以作为同步源。
 ///
 /// **不变式：源必须含 `SKILL.md`。** 空的源目录绝不能去替换目标 —— 否则会把
@@ -352,6 +364,30 @@ pub fn validate_sync_source(source: &Path) -> Result<()> {
         )));
     }
     Ok(())
+}
+
+/// Bounded, plain-text preview. Never execute or render document HTML.
+pub fn read_skill_document(directory: &Path) -> Result<String> {
+    use std::io::Read;
+    const LIMIT: u64 = 1024 * 1024;
+    let path = directory.join(SKILL_FILE);
+    let metadata = fs::metadata(&path).map_err(|e| Error::io(&path, e))?;
+    if !metadata.is_file() {
+        return Err(Error::invalid("SKILL.md 不是普通文件"));
+    }
+    if metadata.len() > LIMIT {
+        return Err(Error::invalid("SKILL.md 超过 1 MB，请在编辑器中打开"));
+    }
+    let mut bytes = Vec::new();
+    fs::File::open(&path)
+        .map_err(|e| Error::io(&path, e))?
+        .take(LIMIT + 1)
+        .read_to_end(&mut bytes)
+        .map_err(|e| Error::io(&path, e))?;
+    if bytes.len() > LIMIT as usize {
+        return Err(Error::invalid("SKILL.md 超过预览大小限制"));
+    }
+    String::from_utf8(bytes).map_err(|_| Error::invalid("SKILL.md 不是有效的 UTF-8 文本"))
 }
 
 #[cfg(test)]

@@ -56,6 +56,7 @@ impl Store {
     /// 直接报错，由上层提示用户去 `backups/` 找回。
     pub fn load(&self) -> Result<AppConfig> {
         super::transaction::recover(&self.dir.join("migration.json"))?;
+        super::transaction::recover(&self.dir.join("skill-files.json"))?;
         super::transaction::recover(&self.dir.join("group-switch.json"))?;
         super::transaction::recover(&self.dir.join("manual-policy.json"))?;
         super::transaction::recover(&self.dir.join("project-write.json"))?;

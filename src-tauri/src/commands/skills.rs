@@ -130,3 +130,40 @@ pub async fn import_local_skill(app: tauri::AppHandle, path: String) -> Result<S
     .await
     .map_err(|e| e.to_string())?
 }
+
+#[tauri::command]
+pub fn read_skill_document(
+    state: State<'_, AppState>,
+    path: std::path::PathBuf,
+) -> Result<String, String> {
+    let config = state.config();
+    let mut known = state
+        .studio()
+        .scan_skills(&config)
+        .map_err(String::from)?
+        .iter()
+        .any(|s| {
+            s.skill.source_path == path
+                || s.agents
+                    .values()
+                    .any(|a| a.target_path == path || a.entry_paths.contains(&path))
+        });
+    if !known {
+        for p in &config.projects {
+            if state
+                .studio()
+                .project_local_skills(&config, p)
+                .map_err(String::from)?
+                .iter()
+                .any(|s| s.storage_path == path)
+            {
+                known = true;
+                break;
+            }
+        }
+    }
+    if !known {
+        return Err("skill 已变化或不在当前列表中，请刷新后重试".into());
+    }
+    skill_studio_core::services::scanner::read_skill_document(&path).map_err(Into::into)
+}

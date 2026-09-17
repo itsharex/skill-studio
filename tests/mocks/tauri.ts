@@ -37,6 +37,8 @@ function defaultResult(command: string): unknown {
     case "scan_skills":
     case "list_groups":
     case "list_projects":
+    case "list_skill_backups":
+    case "list_project_skills":
     case "list_backups":
       return [];
     case "get_settings":

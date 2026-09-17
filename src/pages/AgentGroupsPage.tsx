@@ -1,3 +1,4 @@
+import { SkillBackups } from "@/components/common/SkillBackups";
 import { Tabs, TabsList, TabsTrigger, TabsContent } from "@/components/ui/tabs";
 import { PageTools } from "@/components/common/PageTools";
 import { useMemo, useState, type ReactNode } from "react";
@@ -257,6 +258,7 @@ export function AgentPage({ agentId }: { agentId: string }) {
             会吃到 preflight 推出的 #e4e4e7，深色下就是近白边框套在已经变暗的卡片里。
           */}
           <div className="ml-auto flex flex-wrap items-center gap-2">
+            <SkillBackups scope={`agent:${agentId}`} />
             <Badge
               variant="outline"
               className="px-3 py-1 text-sm font-medium"

@@ -1,3 +1,8 @@
+import { useSkillPreview } from "@/components/common/SkillPreview";
+import {
+  SkillBackups,
+  DeleteSkillButton,
+} from "@/components/common/SkillBackups";
 import { SkillStudioIcon } from "@/components/common/SkillStudioIcon";
 import { InstallSkillsPage } from "@/pages/InstallSkillsPage";
 import { useMutation, useQueryClient } from "@tanstack/react-query";
@@ -50,6 +55,7 @@ export function LibraryPage({ onAdd }: { onAdd?: () => void } = {}) {
   const { data: skills = [], isLoading } = useSkills();
   const { data: agents = [] } = useAgents();
   const client = useQueryClient();
+  const { previewSkill, previewDialog } = useSkillPreview();
   const [releaseTarget, setReleaseTarget] = useState<SkillView | null>(null);
   const [sourceFilter, setSourceFilter] = useState<string | null>(null);
   const [hubOnly, setHubOnly] = useState(false);
@@ -212,6 +218,7 @@ export function LibraryPage({ onAdd }: { onAdd?: () => void } = {}) {
         >
           已托管 {hubManaged.length} 个
         </button>
+        <SkillBackups scope="hub" />
         <Badge
           variant="outline"
           className="px-3 py-1 text-sm font-medium"
@@ -270,6 +277,7 @@ export function LibraryPage({ onAdd }: { onAdd?: () => void } = {}) {
       {tools}
       {summary}
 
+      {previewDialog}
       <div className="min-h-0 flex-1 overflow-y-auto pb-6">
         <ListContainer cards>
           {filtered.map((card) => {
@@ -277,7 +285,12 @@ export function LibraryPage({ onAdd }: { onAdd?: () => void } = {}) {
             const origins = hubSourceIds(card);
             const rowTokens = sumTokens(tokens, [skill.id]);
             return (
-              <ListItemRow key={card.key} card>
+              <ListItemRow
+                key={card.key}
+                card
+                onPreview={() => previewSkill(skill.name, skill.sourcePath)}
+                previewLabel={`预览 ${skill.name}`}
+              >
                 <div className="min-w-0 flex-1">
                   <div className="flex flex-wrap items-center gap-2">
                     <span className="truncate text-sm font-medium">
@@ -312,7 +325,7 @@ export function LibraryPage({ onAdd }: { onAdd?: () => void } = {}) {
                       variant="outline"
                       title={`${tokenTitle(rowTokens, skill.name)} 整个目录文本合计 ≈ ${formatTokens(rowTokens.total)} tokens。`}
                     >
-                      SKILL.md ≈ {formatTokens(rowTokens.skillMd)} tokens
+                      ≈ {formatTokens(rowTokens.skillMd)} tokens
                     </Badge>
                     {isHubManaged(card) && (
                       <Badge
@@ -439,6 +452,21 @@ export function LibraryPage({ onAdd }: { onAdd?: () => void } = {}) {
                         <PackagePlus className="h-4 w-4" />
                       </Button>
                     )}
+                  {card.sources.map(
+                    (source) =>
+                      source.origin.kind !== "external" && (
+                        <DeleteSkillButton
+                          key={source.id}
+                          scope={
+                            source.origin.kind === "hub"
+                              ? "hub"
+                              : `agent:${source.origin.ownerAgent}`
+                          }
+                          path={source.sourcePath}
+                          name={source.name}
+                        />
+                      ),
+                  )}
                 </RowActions>
               </ListItemRow>
             );

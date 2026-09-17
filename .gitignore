@@ -6,3 +6,4 @@ target/
 .vite/
 coverage/
 src-tauri/gen/
+__pycache__/

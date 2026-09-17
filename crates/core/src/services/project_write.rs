@@ -105,6 +105,15 @@ impl Studio {
                     return Err(Error::invalid("Skill 的 YAML 格式无效"));
                 }
                 let dest = root.join(&skill.name);
+                if self
+                    .skill_backups()?
+                    .iter()
+                    .any(|r| r.disabled && r.original_path == dest)
+                {
+                    return Err(Error::invalid(
+                        "目标存在已停用的项目手动 skill，请先恢复或删除该项",
+                    ));
+                }
                 let key = paths::normalize_path_lexically(&dest);
                 if !targets.insert(key) {
                     return Err(Error::invalid("项目包含同目录名的多个 skill"));

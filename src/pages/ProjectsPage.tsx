@@ -1,3 +1,5 @@
+import { useSkillPreview } from "@/components/common/SkillPreview";
+import { SkillBackups } from "@/components/common/SkillBackups";
 import { PageTools } from "@/components/common/PageTools";
 import {
   NavigationGuard,
@@ -15,6 +17,7 @@ import {
   Square,
   Pencil,
   GripVertical,
+  PackagePlus,
 } from "lucide-react";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
@@ -45,6 +48,7 @@ import {
   RowActions,
 } from "@/components/common/ListItemRow";
 import { projectsApi, systemApi } from "@/lib/api";
+import type { ProjectLocalSkill } from "@/lib/api/projects";
 import {
   useAgents,
   useApplyProject,
@@ -64,7 +68,7 @@ import {
 } from "@/lib/tokens";
 import type { LinkMode, ProjectBinding } from "@/types";
 
-import { useMutation, useQueryClient } from "@tanstack/react-query";
+import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { toast } from "sonner";
 import { queryKeys } from "@/lib/queryKeys";
 import {
@@ -241,6 +245,19 @@ function ProjectsContent() {
           <Badge variant="outline" className="px-3 py-1 text-sm">
             项目 {projects.length} 个
           </Badge>
+          <SkillBackups scope="projects" />
+          <Badge
+            variant="outline"
+            className="px-3 py-1 text-sm"
+            title="各项目目录中未收录、非托管的 skill 数量"
+          >
+            未收录 skill{" "}
+            {projects.reduce(
+              (sum, p) => sum + (p.uncollectedSkillCount ?? 0),
+              0,
+            )}{" "}
+            个
+          </Badge>
           <Badge variant="outline" className="px-3 py-1 text-sm">
             已启用{" "}
             {projects.filter((p) => projectAgentIds(p).length > 0).length} 个
@@ -300,6 +317,12 @@ function ProjectsContent() {
                             className="h-4 px-1.5 text-[10px]"
                           >
                             {p.enabledSkillIds?.length ?? 0} skill启用
+                          </Badge>
+                          <Badge
+                            variant="outline"
+                            className="h-4 px-1.5 text-[10px]"
+                          >
+                            {p.uncollectedSkillCount ?? 0} skill未收录
                           </Badge>
                           {rowTokens.total > 0 && (
                             <Badge
@@ -499,6 +522,46 @@ function ProjectDetail({
   project: ProjectBinding;
   onBack: () => void;
 }) {
+  const qc = useQueryClient();
+  const { previewSkill, previewDialog } = useSkillPreview();
+  const [deletingLocal, setDeletingLocal] = useState<ProjectLocalSkill | null>(
+    null,
+  );
+  const refreshLocal = async () => {
+    await Promise.all([
+      qc.invalidateQueries({ queryKey: queryKeys.projects }),
+      qc.invalidateQueries({ queryKey: queryKeys.skills }),
+      qc.invalidateQueries({ queryKey: ["skill-backups"] }),
+    ]);
+  };
+  const collectLocal = useMutation({
+    mutationFn: (path: string) => projectsApi.collectLocal(project.id, path),
+    onSuccess: async () => {
+      await refreshLocal();
+      toast.success("已收录到 Hub，项目原文件已保留");
+    },
+    onError: (e) => toast.error(String(e)),
+  });
+  const deleteLocal = useMutation({
+    mutationFn: (path: string) =>
+      projectsApi.deleteLocalSkill(project.id, path),
+    onSuccess: async () => {
+      setDeletingLocal(null);
+      await refreshLocal();
+      toast.success("已删除；非软链接文件可从已备份列表恢复");
+    },
+    onError: (e) => toast.error(String(e)),
+  });
+  const toggleLocal = useMutation({
+    mutationFn: ({ path, enabled }: { path: string; enabled: boolean }) =>
+      projectsApi.setLocalEnabled(project.id, path, enabled),
+    onSuccess: refreshLocal,
+    onError: (e) => toast.error(String(e)),
+  });
+  const localSkills = useQuery({
+    queryKey: [...queryKeys.projects, project.id, "localSkills"],
+    queryFn: () => projectsApi.localSkills(project.id),
+  });
   const { data: agents = [] } = useAgents();
   const { data: skills = [] } = useSkills();
   const { data: groups = [] } = useGroups();
@@ -574,7 +637,13 @@ function ProjectDetail({
         </Button>
         <Button
           size="sm"
-          disabled={writing || apply.isPending}
+          disabled={
+            writing ||
+            apply.isPending ||
+            collectLocal.isPending ||
+            toggleLocal.isPending ||
+            deleteLocal.isPending
+          }
           onClick={() => {
             setWriting(true);
             setError(null);
@@ -601,6 +670,182 @@ function ProjectDetail({
       )}
       {/* Leave room for focus rings inside the scroll viewport without shifting the fields. */}
       <div className="-mx-1 min-h-0 flex-1 space-y-6 overflow-y-auto px-1 pb-6 pt-1">
+        <section className="space-y-2">
+          <div className="flex items-center justify-between">
+            <h3 className="text-sm font-semibold">项目已有 skill</h3>
+            <SkillBackups scope={`project:${project.id}`} />
+          </div>
+          <p className="text-xs text-muted-foreground">
+            项目已有 skill 可单独启停；项目卡片的启停仍只作用于绑定项。
+          </p>
+          {localSkills.isPending && (
+            <p className="text-sm text-muted-foreground">扫描中…</p>
+          )}
+          {localSkills.isError && (
+            <p role="alert" className="text-sm text-destructive">
+              扫描失败：{String(localSkills.error)}
+            </p>
+          )}
+          {localSkills.data?.length === 0 && (
+            <p className="text-sm text-muted-foreground">
+              项目目录中暂无 skill
+            </p>
+          )}
+          {localSkills.data?.map((skill) => (
+            <ListItemRow
+              key={skill.path}
+              onPreview={() =>
+                previewSkill(skill.name, skill.storagePath ?? skill.path)
+              }
+              previewLabel={`预览 ${skill.name}`}
+              card
+              className={
+                !skill.disabled &&
+                skill.frontmatter &&
+                !skill.frontmatter.malformed
+                  ? "border-emerald-500/40 bg-card bg-gradient-to-r from-emerald-500/10 to-transparent shadow-sm shadow-emerald-500/5 hover:border-emerald-500/60 hover:bg-card dark:from-emerald-500/15"
+                  : undefined
+              }
+            >
+              <div className="min-w-0 flex-1">
+                <div className="flex items-center gap-2">
+                  <p className="truncate text-sm font-medium">{skill.name}</p>
+                  <span
+                    className="shrink-0"
+                    title={
+                      agents.find((a) => a.id === skill.agentId)?.displayName ??
+                      skill.agentId
+                    }
+                  >
+                    <AgentIcon agentId={skill.agentId} className="h-4 w-4" />
+                  </span>
+                  {skill.tokens && (
+                    <Badge
+                      variant="outline"
+                      className="shrink-0"
+                      title={`${tokenTitle(
+                        {
+                          ...skill.tokens,
+                          total: skill.tokens.skillMd + skill.tokens.extras,
+                        },
+                        skill.name,
+                      )} 整个目录文本合计 ≈ ${formatTokens(skill.tokens.skillMd + skill.tokens.extras)} tokens。`}
+                    >
+                      ≈ {formatTokens(skill.tokens.skillMd)} tokens
+                    </Badge>
+                  )}
+                  {skill.disabled && <Badge variant="outline">已停用</Badge>}
+                  {skill.collected && <Badge variant="outline">已收录</Badge>}
+                  {skill.managed && <Badge variant="outline">项目托管</Badge>}
+                </div>
+                {skill.frontmatter?.description && (
+                  <p className="truncate text-xs text-muted-foreground">
+                    {skill.frontmatter.description}
+                  </p>
+                )}
+                <p
+                  className="truncate font-mono text-[11px] text-muted-foreground"
+                  title={skill.path}
+                >
+                  {skill.path}
+                </p>
+                {!skill.frontmatter && (
+                  <p className="text-xs text-destructive">
+                    链接目标不可用或缺少 SKILL.md
+                  </p>
+                )}
+                {skill.frontmatter?.malformed && (
+                  <p className="text-xs text-destructive">
+                    {skill.frontmatter.error ?? "SKILL.md 格式无效"}
+                  </p>
+                )}
+              </div>
+              <RowActions>
+                <Button
+                  variant="ghost"
+                  size="icon"
+                  title="打开目录"
+                  aria-label={`打开 ${skill.name} 目录`}
+                  onClick={() =>
+                    void systemApi
+                      .revealPath(skill.storagePath ?? skill.path)
+                      .catch((e) => toast.error(String(e)))
+                  }
+                >
+                  <FolderOpen className="h-4 w-4" />
+                </Button>
+
+                {!skill.managed && (
+                  <Button
+                    size="sm"
+                    variant="outline"
+                    disabled={
+                      writing ||
+                      toggleLocal.isPending ||
+                      collectLocal.isPending ||
+                      deleteLocal.isPending
+                    }
+                    onClick={() =>
+                      toggleLocal.mutate({
+                        path: skill.path,
+                        enabled: !!skill.disabled,
+                      })
+                    }
+                  >
+                    {skill.disabled ? (
+                      <Play className="h-4 w-4" />
+                    ) : (
+                      <Square className="h-4 w-4" />
+                    )}
+                    {skill.disabled ? "启用" : "停用"}
+                  </Button>
+                )}
+                {!skill.managed && (
+                  <>
+                    <Button
+                      variant="ghost"
+                      size="icon"
+                      title={
+                        skill.collected
+                          ? "已收录到 Hub"
+                          : "收录到 Hub（保留项目原文件）"
+                      }
+                      aria-label={`收录 ${skill.name} 到 Hub`}
+                      disabled={
+                        skill.collected ||
+                        !skill.frontmatter ||
+                        skill.frontmatter.malformed ||
+                        writing ||
+                        collectLocal.isPending ||
+                        toggleLocal.isPending ||
+                        deleteLocal.isPending
+                      }
+                      onClick={() => collectLocal.mutate(skill.path)}
+                    >
+                      <PackagePlus className="h-4 w-4" />
+                    </Button>
+                    <Button
+                      variant="ghost"
+                      size="icon"
+                      title="删除项目 skill"
+                      aria-label={`删除 ${skill.name}`}
+                      className="hover:text-destructive"
+                      disabled={
+                        writing ||
+                        collectLocal.isPending ||
+                        toggleLocal.isPending ||
+                        deleteLocal.isPending
+                      }
+                      onClick={() => setDeletingLocal(skill)}
+                    >
+                      <Trash2 className="h-4 w-4" />
+                    </Button>
+                  </>
+                )}
+              </RowActions>
+            </ListItemRow>
+          ))}
+        </section>
         <section className="space-y-2">
           <h3 className="text-sm font-semibold">agent</h3>
           <ListContainer>
@@ -721,6 +966,29 @@ function ProjectDetail({
           )}
         </section>
       </div>
+      {previewDialog}
+      <ConfirmDialog
+        open={!!deletingLocal}
+        onOpenChange={(open) => {
+          if (!open && !deleteLocal.isPending) setDeletingLocal(null);
+        }}
+        title={`删除 ${deletingLocal?.name ?? "skill"}？`}
+        description={
+          <>
+            从项目移除此
+            skill，非软链接文件保留备份。软链接只移除链接，不保留备份；Hub
+            副本不受影响。
+            <span className="block break-all pt-2 font-mono text-xs">
+              {deletingLocal?.path}
+            </span>
+          </>
+        }
+        confirmText="删除"
+        pending={deleteLocal.isPending}
+        onConfirm={() => {
+          if (deletingLocal) deleteLocal.mutate(deletingLocal.path);
+        }}
+      />
     </div>
   );
 }

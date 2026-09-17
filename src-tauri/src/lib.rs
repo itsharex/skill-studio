@@ -45,6 +45,7 @@ pub fn run() {
             commands::list_agents,
             // skill
             commands::scan_skills,
+            commands::read_skill_document,
             commands::register_skills,
             commands::unregister_skills,
             commands::set_skill_enabled,
@@ -67,6 +68,14 @@ pub fn run() {
             commands::apply_group,
             // 项目
             commands::list_projects,
+            commands::list_project_skills,
+            commands::list_skill_backups,
+            commands::collect_project_skill,
+            commands::delete_skill_file,
+            commands::restore_skill_file,
+            commands::purge_skill_file,
+            commands::set_project_skill_enabled,
+            commands::delete_project_local_skill,
             commands::create_project,
             commands::update_project,
             commands::delete_project,

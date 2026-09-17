@@ -56,20 +56,20 @@ describe("Skill Hub", () => {
     const user = userEvent.setup({ pointerEventsCheck: 0 });
     renderWithProviders(<LibraryPage />);
     expect(await screen.findByText("合计 ≈ 1.6k tokens")).toBeInTheDocument();
-    expect(screen.getAllByText("SKILL.md ≈ 1k tokens")).toHaveLength(1);
-    expect(screen.getByText("SKILL.md ≈ 300 tokens")).toHaveAttribute(
+    expect(screen.getAllByText("≈ 1k tokens")).toHaveLength(1);
+    expect(screen.getByText("≈ 300 tokens")).toHaveAttribute(
       "title",
       expect.stringContaining("SKILL.md ≈ 300"),
     );
-    expect(
-      screen.getByText("SKILL.md ≈ 300 tokens").getAttribute("title"),
-    ).toContain("附带文件 ≈ 100");
-    expect(
-      screen.getByText("SKILL.md ≈ 300 tokens").getAttribute("title"),
-    ).toContain("整个目录文本合计 ≈ 400 tokens");
+    expect(screen.getByText("≈ 300 tokens").getAttribute("title")).toContain(
+      "附带文件 ≈ 100",
+    );
+    expect(screen.getByText("≈ 300 tokens").getAttribute("title")).toContain(
+      "整个目录文本合计 ≈ 400 tokens",
+    );
     await user.click(screen.getByRole("button", { name: "Codex: 1" }));
-    expect(screen.queryByText("SKILL.md ≈ 300 tokens")).not.toBeInTheDocument();
-    expect(screen.getByText("SKILL.md ≈ 1k tokens")).toBeInTheDocument();
+    expect(screen.queryByText("≈ 300 tokens")).not.toBeInTheDocument();
+    expect(screen.getByText("≈ 1k tokens")).toBeInTheDocument();
     expect(screen.getByText("合计 ≈ 1.6k tokens")).toBeInTheDocument();
   });
 
