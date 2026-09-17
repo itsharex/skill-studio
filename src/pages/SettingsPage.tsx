@@ -260,7 +260,7 @@ export function SettingsPage() {
               <SettingCard
                 title="Hub 目录"
                 icon={<Layers />}
-                description="安装、导入和收编的 skill 存放在这里。留空使用默认目录，不能与 Agent 的 skills 目录重叠。目录变更不会迁移文件，当前 Hub 非空时不能切换。"
+                description="安装、导入和托管的 skill 存放在这里。留空使用默认目录，不能与 Agent 的 skills 目录重叠。目录变更不会迁移文件，当前 Hub 非空时不能切换。"
                 details={
                   <div className="flex items-center gap-2">
                     <Input

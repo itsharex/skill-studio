@@ -82,15 +82,15 @@ it("counts uncollected project skills and refreshes collection and confirmed del
     return "/backup/release";
   });
   renderWithProviders(<ProjectsPage />);
-  expect(await screen.findByText("1 skill未收录")).toBeVisible();
-  expect(screen.getByText("未收录 skill 1 个")).toBeVisible();
+  expect(await screen.findByText("1 skill未托管")).toBeVisible();
+  expect(screen.getByText("未托管 skill 1 个")).toBeVisible();
   fireEvent.click(screen.getByText("webapp"));
   fireEvent.click(
-    await screen.findByRole("button", { name: "收录 release 到 Hub" }),
+    await screen.findByRole("button", { name: "托管 release 到 Hub" }),
   );
   await waitFor(() =>
     expect(
-      screen.getByRole("button", { name: "收录 release 到 Hub" }),
+      screen.getByRole("button", { name: "托管 release 到 Hub" }),
     ).toBeDisabled(),
   );
   fireEvent.click(screen.getByRole("button", { name: "删除 release" }));

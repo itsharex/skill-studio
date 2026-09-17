@@ -240,7 +240,7 @@ impl Studio {
                         }
                         restored_paths.insert(target.clone());
                         if scanner::dir_content_hash(&backup)? != record.original_hash {
-                            return Err(Error::invalid("收录备份不完整，无法还原 Agent"));
+                            return Err(Error::invalid("托管备份不完整，无法还原 Agent"));
                         }
                         use crate::models::skill::LinkStatus::*;
                         if target.symlink_metadata().is_ok() {

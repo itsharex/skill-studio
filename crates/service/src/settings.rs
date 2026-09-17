@@ -164,7 +164,7 @@ fn validate_hub_change(
                     .is_some()))
     {
         return Err(Error::invalid(
-            "当前 Hub 非空或有启用中的分组，请先移出或剔除收录的 skill；修改目录不会自动迁移文件",
+            "当前 Hub 非空或有启用中的分组，请先移出或剔除已托管的 skill；修改目录不会自动迁移文件",
         ));
     }
     Ok(())

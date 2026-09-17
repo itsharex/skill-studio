@@ -231,10 +231,10 @@ describe("Skill Hub", () => {
     expect(screen.queryByText("没有匹配的可用 skill")).toBeNull();
   });
 
-  it("开着来源筛选收编一个 skill 后，卡片同样留在眼前", async () => {
+  it("开着来源筛选托管一个 skill 后，卡片同样留在眼前", async () => {
     let collected = false;
     handlers.set("list_agents", () => [claudeAgent, codexAgent]);
-    // 旧后端认不出已收编内容的原始来源，收编后它会从「Claude Code」这一维掉出去
+    // 旧后端认不出已托管内容的原始来源，托管后它会从「Claude Code」这一维掉出去
     handlers.set("scan_skills", () => [
       makeSkill({
         id: collected ? "hub-id" : "original-id",
@@ -256,9 +256,9 @@ describe("Skill Hub", () => {
     expect(screen.getByText("pdf-tools")).toBeInTheDocument();
 
     await user.click(
-      screen.getByRole("button", { name: "收编 pdf-tools 到 Hub" }),
+      screen.getByRole("button", { name: "托管 pdf-tools 到 Hub" }),
     );
-    await user.click(screen.getByRole("button", { name: "收编" }));
+    await user.click(screen.getByRole("button", { name: "托管" }));
     await waitFor(() => expect(collected).toBe(true));
     expect(await screen.findByText("pdf-tools")).toBeInTheDocument();
     expect(screen.queryByText("没有匹配的可用 skill")).toBeNull();
@@ -294,7 +294,7 @@ describe("Skill Hub", () => {
       screen.getByRole("button", { name: "打开 pdf-tools 所在目录" }),
     ).toBeInTheDocument();
     expect(
-      screen.getByRole("button", { name: "收编 pdf-tools 到 Hub" }),
+      screen.getByRole("button", { name: "托管 pdf-tools 到 Hub" }),
     ).toBeInTheDocument();
     expect(screen.queryByRole("button", { name: /注册|移除/ })).toBeNull();
     expect(screen.queryByRole("checkbox")).toBeNull();
@@ -332,7 +332,7 @@ it("merges identical sources into one card and shows both origin logos", async (
   await user.click(screen.getByRole("button", { name: "2 个来源" }));
   expect(screen.getByText("/codex/pdf")).toBeInTheDocument();
   expect(screen.getByText("/claude/pdf")).toBeInTheDocument();
-  expect(screen.getAllByRole("button", { name: "收编此来源" })).toHaveLength(1);
+  expect(screen.getAllByRole("button", { name: "托管此来源" })).toHaveLength(1);
 });
 
 it("keeps differing contents separate and does not label foreign registrations as origins", async () => {
@@ -388,7 +388,7 @@ it("keeps broken links in a separate folded section with actual entry paths", as
   await user.click(screen.getByRole("button", { name: "查看来源" }));
   expect(screen.getByText("/missing/target")).toBeVisible();
   expect(screen.getByText("Codex 入口：/codex/skills/alias")).toBeVisible();
-  expect(screen.queryByRole("button", { name: /删除|收编此来源/ })).toBeNull();
+  expect(screen.queryByRole("button", { name: /删除|托管此来源/ })).toBeNull();
 });
 
 it("counts unique cards per installation source and combines source filtering with search", async () => {
@@ -603,8 +603,8 @@ it("collects and restores one source of a merged card while retaining unique sou
   const user = userEvent.setup();
   renderWithProviders(<LibraryPage />);
   await user.click(await screen.findByRole("button", { name: "2 个来源" }));
-  await user.click(screen.getByRole("button", { name: "收编此来源" }));
-  await user.click(screen.getByRole("button", { name: "收编" }));
+  await user.click(screen.getByRole("button", { name: "托管此来源" }));
+  await user.click(screen.getByRole("button", { name: "托管" }));
   await waitFor(() => expect(collected).toBe(true));
   await screen.findByText("Hub 托管");
   await user.click(screen.getByRole("button", { name: "2 个来源" }));

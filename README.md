@@ -55,7 +55,7 @@ cc-switch 内部其实已经带了一个 skill 管理器，但它围绕「从 Gi
 - 瞬时、无损、可逆，且你在 agent 里 `/skills` 看到的状态与 Studio 一致
 
 **其他**
-- **Hub 模式**：把原地 skill 收编到 `~/.skill-studio/skills` 集中托管，原位置自动改成链接
+- **Hub 模式**：把原地 skill 托管到 `~/.skill-studio/skills` 集中管理，原位置自动改成链接
 - **跨端 frontmatter 提示**：Claude Code 专有字段（`context` / `agent` / `model` / `effort` / `hooks` / `paths` 等）
   在 Codex 上会被忽略、上传 claude.ai 会直接报错，界面上标出来
 - **文件监听**：你在 Studio 之外改动 skill 目录，界面自动刷新

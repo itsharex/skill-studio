@@ -150,7 +150,7 @@ export function useAdoptToHub() {
   const invalidate = useInvalidateAfterWrite();
   return useMutation({
     mutationFn: (skillId: string) => skillsApi.adoptToHub(skillId),
-    onSuccess: (skill) => toast.success(`已收编到 Hub：${skill.name}`),
+    onSuccess: (skill) => toast.success(`已托管到 Hub：${skill.name}`),
     onError: (e: unknown) => toast.error(String(e)),
     onSettled: invalidate,
   });

@@ -2,7 +2,7 @@
 
 2026-09-17，在本机真实 Claude Code 目录调用应用同一 Rust 核心服务测试；未进行原生窗口点击自动化。
 
-测试前 Claude skill 目录无已安装 skill、无启用分组。创建两个临时分组、两个 Hub 测试 skill 和一个原地手动测试 skill（收录进 Hub 后测试还原）。
+测试前 Claude skill 目录无已安装 skill、无启用分组。创建两个临时分组、两个 Hub 测试 skill 和一个原地手动测试 skill（托管进 Hub 后测试还原）。
 
 全部通过：
 - 启用 A，关闭保留手动 skill 时暂时停用手动项。

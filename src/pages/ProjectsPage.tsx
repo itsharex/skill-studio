@@ -249,9 +249,9 @@ function ProjectsContent() {
           <Badge
             variant="outline"
             className="px-3 py-1 text-sm"
-            title="各项目目录中未收录、非托管的 skill 数量"
+            title="各项目目录中未托管、未部署的 skill 数量"
           >
-            未收录 skill{" "}
+            未托管 skill{" "}
             {projects.reduce(
               (sum, p) => sum + (p.uncollectedSkillCount ?? 0),
               0,
@@ -322,7 +322,7 @@ function ProjectsContent() {
                             variant="outline"
                             className="h-4 px-1.5 text-[10px]"
                           >
-                            {p.uncollectedSkillCount ?? 0} skill未收录
+                            {p.uncollectedSkillCount ?? 0} skill未托管
                           </Badge>
                           {rowTokens.total > 0 && (
                             <Badge
@@ -538,7 +538,7 @@ function ProjectDetail({
     mutationFn: (path: string) => projectsApi.collectLocal(project.id, path),
     onSuccess: async () => {
       await refreshLocal();
-      toast.success("已收录到 Hub，项目原文件已保留");
+      toast.success("已托管到 Hub，项目原文件已保留");
     },
     onError: (e) => toast.error(String(e)),
   });
@@ -735,8 +735,8 @@ function ProjectDetail({
                     </Badge>
                   )}
                   {skill.disabled && <Badge variant="outline">已停用</Badge>}
-                  {skill.collected && <Badge variant="outline">已收录</Badge>}
-                  {skill.managed && <Badge variant="outline">项目托管</Badge>}
+                  {skill.collected && <Badge variant="outline">已托管</Badge>}
+                  {skill.managed && <Badge variant="outline">已部署</Badge>}
                 </div>
                 {skill.frontmatter?.description && (
                   <p className="truncate text-xs text-muted-foreground">
@@ -807,10 +807,10 @@ function ProjectDetail({
                       size="icon"
                       title={
                         skill.collected
-                          ? "已收录到 Hub"
-                          : "收录到 Hub（保留项目原文件）"
+                          ? "已托管到 Hub"
+                          : "托管到 Hub（保留项目原文件）"
                       }
-                      aria-label={`收录 ${skill.name} 到 Hub`}
+                      aria-label={`托管 ${skill.name} 到 Hub`}
                       disabled={
                         skill.collected ||
                         !skill.frontmatter ||

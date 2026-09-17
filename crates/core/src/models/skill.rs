@@ -10,7 +10,7 @@ pub enum SkillOrigin {
     /// 真身在某个 agent 的全局目录里（默认模式，零迁移）
     #[serde(rename_all = "camelCase")]
     InPlace { owner_agent: String },
-    /// 已收编到 `~/.skill-studio/skills/`
+    /// 已托管到 `~/.skill-studio/skills/`
     Hub,
     /// 通过链接发现的外部来源；发现不等于接管，禁止自动迁移真身。
     External,

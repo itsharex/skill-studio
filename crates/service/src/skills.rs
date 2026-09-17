@@ -51,7 +51,7 @@ pub fn set_skill_enabled(
         .map_err(Into::into)
 }
 
-/// 把一个原地 skill 收编到 Hub 集中托管
+/// 把一个原地 skill 托管到 Hub 集中管理
 pub fn adopt_to_hub(state: &AppState, skill_id: String) -> Result<Skill, String> {
     state.adopt_to_hub(&skill_id).map_err(Into::into)
 }

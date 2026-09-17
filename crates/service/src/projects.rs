@@ -218,7 +218,7 @@ pub fn unapply_project(
         .map_err(Into::into)
 }
 
-/// 往项目的 .gitignore 追加托管痕迹文件。
+/// 往项目的 .gitignore 追加部署痕迹文件。
 ///
 /// 项目级默认 Copy，会在每个 skill 目录里留下 `.skill-studio-copy.json`。
 /// 那是本机溯源信息，不该进版本库。
@@ -438,7 +438,7 @@ pub fn collect_project_skill(
             .ok_or("项目 skill 已变化")?
     };
     if entry.managed {
-        return Err("此 skill 已托管".into());
+        return Err("此 skill 已部署".into());
     }
     let mut prepared = skill_studio_core::services::marketplace::prepare_local(&entry.storage_path)
         .map_err(String::from)?;

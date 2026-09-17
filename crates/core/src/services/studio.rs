@@ -725,7 +725,7 @@ impl Studio {
         Ok(())
     }
 
-    /// 把一个原地 skill 收编到 Hub：移动真身，并把原位置改成指向 Hub 的注册。
+    /// 把一个原地 skill 托管到 Hub：移动真身，并把原位置改成指向 Hub 的注册。
     ///
     /// 移动前会校验 Hub 与所有 agent 目录不重叠，且目标不存在。
     pub fn adopt_to_hub(&self, config: &mut AppConfig, skill_id: &str) -> Result<Skill> {
@@ -770,7 +770,7 @@ impl Studio {
                 });
             if touches_disabled {
                 return Err(Error::invalid(
-                    "此 skill 涉及已退出管理的 Agent，请先开启该应用再收录或移出 Hub",
+                    "此 skill 涉及已退出管理的 Agent，请先开启该应用再托管或移出 Hub",
                 ));
             }
         }

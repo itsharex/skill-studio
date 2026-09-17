@@ -364,7 +364,7 @@ fn adopt_to_hub_moves_source_and_relinks_the_original_spot() {
     let mut config = studio.load_config().unwrap();
     let old_id = studio.scan_skills(&config).unwrap()[0].skill.id.clone();
 
-    // 收编前先放进一个分组，验证引用会跟着迁移
+    // 托管前先放进一个分组，验证引用会跟着迁移
     let mut group = Group::new("g1".into(), "通用".into());
     group.add_skill(old_id.clone());
     config.groups.push(group);

@@ -65,7 +65,7 @@ export function LibraryPage({ onAdd }: { onAdd?: () => void } = {}) {
   const [sourceCard, setSourceCard] = useState<HubCard | null>(null);
 
   /*
-   * 收编 / 还原都会改动 skill 的归属，于是它可能从当前筛选里掉出去：文件还在
+   * 托管 / 还原都会改动 skill 的归属，于是它可能从当前筛选里掉出去：文件还在
    * 磁盘上，卡片却整个消失、计数减一，用户没法区分"被筛掉了"和"被删了"。
    * 所以下面两个动作成功后都要把会藏住它的筛选清掉，把结果留在眼前。
    */
@@ -84,8 +84,8 @@ export function LibraryPage({ onAdd }: { onAdd?: () => void } = {}) {
   });
   const adopt = useAdoptToHub();
   const adoptAndKeepVisible = (skillId: string) =>
-    // 收编后它必定是 Hub 托管，「已托管」不会藏它；但来源归属可能变（旧后端
-    // 认不出已收编内容的原始来源），所以只清来源筛选。失败了就别动用户的筛选
+    // 托管后它的真身必定在 Hub，「已托管」不会藏它；但来源归属可能变（旧后端
+    // 认不出已托管内容的原始来源），所以只清来源筛选。失败了就别动用户的筛选
     adopt.mutate(skillId, { onSuccess: () => setSourceFilter(null) });
 
   const catalog = useMemo(() => hubCatalog(skills), [skills]);
@@ -105,7 +105,7 @@ export function LibraryPage({ onAdd }: { onAdd?: () => void } = {}) {
     tokens,
     available.map((c) => c.skill.id),
   );
-  /** 真身已经搬进 Hub 目录（收编过），与卡片上那枚「Hub 托管」徽标同一判定 */
+  /** 真身已经搬进 Hub 目录（已托管），与卡片上那枚「Hub 托管」徽标同一判定 */
   const isHubManaged = (card: HubCard) =>
     card.sources.some((s) => s.origin.kind === "hub");
   const hubManaged = available.filter(isHubManaged);
@@ -403,7 +403,7 @@ export function LibraryPage({ onAdd }: { onAdd?: () => void } = {}) {
                       card.sources.length > 1 ||
                       skill.origin.kind === "hub" ||
                       !!skill.provenance
-                        ? "查看来源与收录记录"
+                        ? "查看来源与托管记录"
                         : "打开所在目录"
                     }
                     aria-label={
@@ -444,8 +444,8 @@ export function LibraryPage({ onAdd }: { onAdd?: () => void } = {}) {
                         variant="ghost"
                         size="icon"
                         className="h-8 w-8"
-                        title="收编到 Hub"
-                        aria-label={`收编 ${skill.name} 到 Hub`}
+                        title="托管到 Hub"
+                        aria-label={`托管 ${skill.name} 到 Hub`}
                         disabled={adopt.isPending}
                         onClick={() => setAdoptTarget(skill)}
                       >
@@ -588,7 +588,7 @@ export function LibraryPage({ onAdd }: { onAdd?: () => void } = {}) {
                 {source.provenance && (
                   <div className="mt-3 space-y-2 text-xs text-muted-foreground">
                     <p className="break-all">
-                      收录前位置：{source.provenance.originalPath}
+                      托管前位置：{source.provenance.originalPath}
                     </p>
                     <p className="break-all">
                       原始备份：{source.provenance.backupPath}
@@ -608,7 +608,7 @@ export function LibraryPage({ onAdd }: { onAdd?: () => void } = {}) {
                   !source.provenance &&
                   !source.installation && (
                     <p className="mt-2 text-xs text-amber-700">
-                      缺少历史收录记录，无法确认原始来源和还原路径。不会自动迁移或删除。
+                      缺少历史托管记录，无法确认原始来源和还原路径。不会自动迁移或删除。
                     </p>
                   )}
                 {source.diagnostics?.map((message) => (
@@ -671,7 +671,7 @@ export function LibraryPage({ onAdd }: { onAdd?: () => void } = {}) {
                         }}
                       >
                         <PackagePlus className="h-4 w-4" />
-                        收编此来源
+                        托管此来源
                       </Button>
                     )}
                 </div>
@@ -694,7 +694,7 @@ export function LibraryPage({ onAdd }: { onAdd?: () => void } = {}) {
           <>
             <span>
               将当前 Hub
-              内容还原到收录前的位置，保留收录前和本次还原前的完整备份，并更新分组、项目与链接引用。原位置有冲突或副本被修改时会停止，不覆盖文件。
+              内容还原到托管前的位置，保留托管前和本次还原前的完整备份，并更新分组、项目与链接引用。原位置有冲突或副本被修改时会停止，不覆盖文件。
             </span>
             <span className="mt-2 block break-all font-mono text-xs">
               {releaseTarget?.provenance?.originalPath}
@@ -709,8 +709,8 @@ export function LibraryPage({ onAdd }: { onAdd?: () => void } = {}) {
         open={adoptTarget !== null}
         onOpenChange={(o) => !o && setAdoptTarget(null)}
         variant="info"
-        title="收编到 Hub"
-        confirmText="收编"
+        title="托管到 Hub"
+        confirmText="托管"
         pending={adopt.isPending}
         description={
           <>
