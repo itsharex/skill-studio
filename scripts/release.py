@@ -10,7 +10,12 @@ from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[1]
 REPO = "tarnish233/skill-studio"
-PACKAGES = {"skill-studio", "skill-studio-core"}
+PACKAGES = {
+    "skill-studio",
+    "skill-studio-core",
+    "skill-studio-remote",
+    "skill-studio-service",
+}
 
 
 def run(*args):

@@ -1,0 +1,131 @@
+use skill_studio_core::models::skill::{LinkMode, LinkReport, Skill};
+use skill_studio_core::services::studio::SkillView;
+
+use crate::state::AppState;
+
+/// 扫描全部 skill 真身及其在各 agent 上的状态
+pub fn scan_skills(state: &AppState) -> Result<Vec<SkillView>, String> {
+    state.scan_with_policy().map_err(Into::into)
+}
+
+/// 把若干 skill 注册到若干 agent。单条失败不影响其余，结果在报告里逐条给出。
+pub fn register_skills(
+    state: &AppState,
+    skill_ids: Vec<String>,
+    agent_ids: Vec<String>,
+    mode: Option<LinkMode>,
+    force: Option<bool>,
+) -> Result<LinkReport, String> {
+    state
+        .mutate(|studio, config| {
+            studio.register(config, &skill_ids, &agent_ids, mode, force.unwrap_or(false))
+        })
+        .map_err(Into::into)
+}
+
+/// 取消注册。只移除本工具管理的内容，用户手工放的会作为失败条目返回。
+pub fn unregister_skills(
+    state: &AppState,
+    skill_ids: Vec<String>,
+    agent_ids: Vec<String>,
+    force: Option<bool>,
+) -> Result<LinkReport, String> {
+    state
+        .mutate(|studio, config| {
+            studio.unregister(config, &skill_ids, &agent_ids, force.unwrap_or(false))
+        })
+        .map_err(Into::into)
+}
+
+/// 通过 agent 原生配置启停某个 skill（不动文件）
+pub fn set_skill_enabled(
+    state: &AppState,
+    skill_id: String,
+    agent_id: String,
+    enabled: bool,
+) -> Result<(), String> {
+    state
+        .with_exclusive(|studio, config| {
+            studio.set_skill_enabled(config, &skill_id, &agent_id, enabled)
+        })
+        .map_err(Into::into)
+}
+
+/// 把一个原地 skill 收编到 Hub 集中托管
+pub fn adopt_to_hub(state: &AppState, skill_id: String) -> Result<Skill, String> {
+    state.adopt_to_hub(&skill_id).map_err(Into::into)
+}
+
+/// 清理引用了已消失 skill 的分组成员与注册记录，返回清理条数
+pub fn prune_missing(state: &AppState) -> Result<usize, String> {
+    state
+        .mutate(|studio, config| studio.prune(config))
+        .map_err(Into::into)
+}
+
+pub fn release_from_hub(state: &AppState, skill_id: String) -> Result<Skill, String> {
+    state.release_from_hub(&skill_id).map_err(Into::into)
+}
+
+pub fn search_catalog_skills(
+    query: String,
+) -> Result<Vec<skill_studio_core::services::marketplace::CatalogSkill>, String> {
+    skill_studio_core::services::marketplace::search(&query).map_err(String::from)
+}
+
+pub fn install_catalog_skill(
+    state: &AppState,
+    source: String,
+    skill_id: String,
+) -> Result<Skill, String> {
+    let prepared = skill_studio_core::services::marketplace::prepare(&source, &skill_id)
+        .map_err(String::from)?;
+    state.install_catalog_skill(&prepared).map_err(String::from)
+}
+
+pub fn discover_local_skills(
+    path: String,
+) -> Result<Vec<skill_studio_core::services::marketplace::LocalSkill>, String> {
+    skill_studio_core::services::marketplace::discover_local(std::path::Path::new(&path))
+        .map_err(String::from)
+}
+
+pub fn import_local_skill(state: &AppState, path: String) -> Result<Skill, String> {
+    let prepared =
+        skill_studio_core::services::marketplace::prepare_local(std::path::Path::new(&path))
+            .map_err(String::from)?;
+    state.install_catalog_skill(&prepared).map_err(String::from)
+}
+
+pub fn read_skill_document(state: &AppState, path: std::path::PathBuf) -> Result<String, String> {
+    let config = state.config();
+    let mut known = state
+        .studio()
+        .scan_skills(&config)
+        .map_err(String::from)?
+        .iter()
+        .any(|s| {
+            s.skill.source_path == path
+                || s.agents
+                    .values()
+                    .any(|a| a.target_path == path || a.entry_paths.contains(&path))
+        });
+    if !known {
+        for p in &config.projects {
+            if state
+                .studio()
+                .project_local_skills(&config, p)
+                .map_err(String::from)?
+                .iter()
+                .any(|s| s.storage_path == path)
+            {
+                known = true;
+                break;
+            }
+        }
+    }
+    if !known {
+        return Err("skill 已变化或不在当前列表中，请刷新后重试".into());
+    }
+    skill_studio_core::services::scanner::read_skill_document(&path).map_err(Into::into)
+}

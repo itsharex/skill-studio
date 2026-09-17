@@ -1,3 +1,5 @@
+import { useEffect } from "react";
+import { useTarget } from "@/components/targets/TargetProvider";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { toast } from "sonner";
 import {
@@ -77,10 +79,17 @@ export function useAppVersion() {
  * 后端 watcher 已做 400ms 去抖，这里直接失效即可。
  */
 export function useSkillsAutoRefresh() {
+  const target = useTarget();
   const qc = useQueryClient();
   useTauriEvent("skills-changed", () => {
+    if (target.id !== "local") return;
     void qc.invalidateQueries({ queryKey: queryKeys.skills });
   });
+  useEffect(() => {
+    if (target.id === "local" || !target.connected) return;
+    const timer = setInterval(() => void qc.invalidateQueries(), 30000);
+    return () => clearInterval(timer);
+  }, [target.id, target.connected, qc]);
 }
 
 /* ─────────────────── 变更 ─────────────────── */

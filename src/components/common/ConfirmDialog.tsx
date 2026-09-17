@@ -1,4 +1,6 @@
 import { AlertTriangle, Info } from "lucide-react";
+import { useSyncExternalStore } from "react";
+import { getTarget, subscribeTransport } from "@/lib/api/transport";
 import { Button } from "@/components/ui/button";
 import {
   Dialog,
@@ -33,6 +35,7 @@ export function ConfirmDialog({
   pending,
   onConfirm,
 }: ConfirmDialogProps) {
+  const target = useSyncExternalStore(subscribeTransport, getTarget, getTarget);
   const Icon = variant === "destructive" ? AlertTriangle : Info;
   return (
     <Dialog open={open} onOpenChange={onOpenChange}>
@@ -48,6 +51,11 @@ export function ConfirmDialog({
             />
             {title}
           </DialogTitle>
+          {target.id !== "local" && (
+            <p className="text-xs text-muted-foreground">
+              操作目标：{target.name}
+            </p>
+          )}
           {description && (
             <DialogDescription className="pt-1 leading-relaxed">
               {description}

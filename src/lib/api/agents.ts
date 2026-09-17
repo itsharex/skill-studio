@@ -1,4 +1,4 @@
-import { invoke } from "@tauri-apps/api/core";
+import { invoke } from "@/lib/api/transport";
 import type { AgentInfo } from "@/types";
 
 export const agentsApi = {

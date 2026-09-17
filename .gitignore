@@ -7,3 +7,4 @@ target/
 coverage/
 src-tauri/gen/
 __pycache__/
+src-tauri/resources/remote/skill-studio-remote-linux-*

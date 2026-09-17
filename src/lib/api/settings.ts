@@ -1,4 +1,4 @@
-import { invoke } from "@tauri-apps/api/core";
+import { invoke } from "@/lib/api/transport";
 import type { AppConfig, Settings, SettingsPatch } from "@/types";
 
 export const settingsApi = {

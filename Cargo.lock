@@ -3797,10 +3797,11 @@ checksum = "8ee5873ec9cce0195efcb7a4e9507a04cd49aec9c83d0389df45b1ef7ba2e649"
 
 [[package]]
 name = "skill-studio"
-version = "0.2.0"
+version = "0.3.0"
 dependencies = [
  "anyhow",
  "dirs 5.0.1",
+ "glob",
  "log",
  "notify",
  "objc2 0.5.2",
@@ -3808,7 +3809,9 @@ dependencies = [
  "serde",
  "serde_json",
  "serial_test",
+ "sha2",
  "skill-studio-core",
+ "skill-studio-service",
  "tauri",
  "tauri-build",
  "tauri-plugin-dialog",
@@ -3824,7 +3827,7 @@ dependencies = [
 
 [[package]]
 name = "skill-studio-core"
-version = "0.2.0"
+version = "0.3.0"
 dependencies = [
  "anyhow",
  "chrono",
@@ -3844,6 +3847,31 @@ dependencies = [
  "toml_edit 0.22.27",
  "windows-sys 0.61.2",
  "zip",
+]
+
+[[package]]
+name = "skill-studio-remote"
+version = "0.3.0"
+dependencies = [
+ "fs2",
+ "serde",
+ "serde_json",
+ "skill-studio-core",
+ "skill-studio-service",
+ "tempfile",
+]
+
+[[package]]
+name = "skill-studio-service"
+version = "0.3.0"
+dependencies = [
+ "log",
+ "serde",
+ "serde_json",
+ "serial_test",
+ "skill-studio-core",
+ "tempfile",
+ "uuid",
 ]
 
 [[package]]

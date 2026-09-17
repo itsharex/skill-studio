@@ -1,9 +1,11 @@
 pub mod agents;
 pub mod groups;
 pub mod projects;
+pub mod remote;
 pub mod settings;
 pub mod skills;
 pub mod window;
+pub use remote::*;
 
 pub use agents::*;
 pub use groups::*;

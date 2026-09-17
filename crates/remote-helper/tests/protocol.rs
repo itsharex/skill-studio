@@ -1,0 +1,245 @@
+use std::io::{BufRead, BufReader, Write};
+use std::process::{Child, Command, Stdio};
+
+use serde_json::{json, Value};
+
+struct Session {
+    child: Child,
+    output: BufReader<std::process::ChildStdout>,
+}
+
+impl Session {
+    fn start(home: &std::path::Path, writable: bool) -> Self {
+        let mut cmd = Command::new(env!("CARGO_BIN_EXE_skill-studio-remote"));
+        cmd.arg("--sandbox-home").arg(home);
+        if writable {
+            cmd.arg("--allow-writes");
+        }
+        let mut child = cmd
+            .stdin(Stdio::piped())
+            .stdout(Stdio::piped())
+            .stderr(Stdio::piped())
+            .spawn()
+            .unwrap();
+        let output = BufReader::new(child.stdout.take().unwrap());
+        Self { child, output }
+    }
+
+    fn raw(&mut self, line: &str) -> Value {
+        writeln!(self.child.stdin.as_mut().unwrap(), "{line}").unwrap();
+        let mut response = String::new();
+        assert!(self.output.read_line(&mut response).unwrap() > 0);
+        serde_json::from_str(&response).unwrap()
+    }
+
+    fn call(&mut self, method: &str, params: Value) -> Value {
+        self.raw(&json!({"id":"test", "version":1, "method":method,"params":params}).to_string())
+    }
+}
+
+impl Drop for Session {
+    fn drop(&mut self) {
+        self.child.stdin.take();
+        let _ = self.child.wait();
+    }
+}
+
+fn fixture() -> tempfile::TempDir {
+    let home = tempfile::tempdir().unwrap();
+    for dir in [".claude/skills/probe", ".codex/skills/probe"] {
+        let path = home.path().join(dir);
+        std::fs::create_dir_all(&path).unwrap();
+        std::fs::write(
+            path.join("SKILL.md"),
+            "---\nname: probe\ndescription: fixture\n---\nTest\n",
+        )
+        .unwrap();
+    }
+    std::fs::write(
+        home.path().join(".claude/settings.json"),
+        "{\"unrelated\":true}",
+    )
+    .unwrap();
+    std::fs::write(
+        home.path().join(".codex/config.toml"),
+        "# preserved\nmodel = \"fixture\"\n",
+    )
+    .unwrap();
+    home
+}
+
+#[test]
+fn readonly_session_rejects_mutation_and_keeps_protocol_usable() {
+    let home = fixture();
+    let mut session = Session::start(home.path(), false);
+    assert!(session.raw("not json")["error"].is_object());
+    assert!(
+        session.raw(r#"{"id":"bad-version","version":99,"method":"hello"}"#)["error"].is_object()
+    );
+    assert_eq!(
+        session.call("hello", Value::Null)["result"]["writable"],
+        false
+    );
+    let skills = session.call("scan_skills", Value::Null);
+    assert_eq!(skills["result"].as_array().unwrap().len(), 2);
+    assert!(session.call("set_skill_enabled", json!({}))["error"].is_object());
+    assert!(!home.path().join(".skill-studio").exists());
+    assert_eq!(
+        std::fs::read_to_string(home.path().join(".claude/settings.json")).unwrap(),
+        "{\"unrelated\":true}"
+    );
+}
+
+#[test]
+fn toggles_both_agents_and_persists_across_connections() {
+    let home = fixture();
+    let mut session = Session::start(home.path(), true);
+    let scan = session.call("scan_skills", Value::Null);
+    let skills = scan["result"].as_array().unwrap();
+    for agent in ["claude-code", "codex"] {
+        let skill = skills
+            .iter()
+            .find(|s| s["agents"][agent]["status"] == "source")
+            .unwrap();
+        let params = json!({"skillId":skill["id"],"agentId":agent,"enabled":false});
+        assert!(session
+            .call("set_skill_enabled", params.clone())
+            .get("error")
+            .is_none());
+        assert!(session
+            .call("set_skill_enabled", params)
+            .get("error")
+            .is_none());
+    }
+    drop(session);
+    let mut session = Session::start(home.path(), true);
+    let scan = session.call("scan_skills", Value::Null);
+    for agent in ["claude-code", "codex"] {
+        let skill = scan["result"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .find(|s| s["agents"][agent]["status"] == "source")
+            .unwrap();
+        assert_eq!(skill["agents"][agent]["disabled"], true);
+        assert!(session
+            .call(
+                "set_skill_enabled",
+                json!({"skillId":skill["id"],"agentId":agent,"enabled":true})
+            )
+            .get("error")
+            .is_none());
+    }
+    let scan = session.call("scan_skills", Value::Null);
+    for skill in scan["result"].as_array().unwrap() {
+        for state in skill["agents"].as_object().unwrap().values() {
+            if state["status"] == "source" {
+                assert_eq!(state["disabled"], false);
+            }
+        }
+    }
+    let claude: Value = serde_json::from_str(
+        &std::fs::read_to_string(home.path().join(".claude/settings.json")).unwrap(),
+    )
+    .unwrap();
+    assert_eq!(claude["unrelated"], true);
+    assert!(
+        std::fs::read_to_string(home.path().join(".codex/config.toml"))
+            .unwrap()
+            .starts_with("# preserved\nmodel = \"fixture\"")
+    );
+}
+
+#[test]
+fn desktop_project_group_and_hub_workflow_uses_the_remote_home() {
+    let home = fixture();
+    let project_root = home.path().join("project");
+    std::fs::create_dir(&project_root).unwrap();
+    let mut session = Session::start(home.path(), true);
+    let scan = session.call("scan_skills", Value::Null);
+    let skill = scan["result"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|s| s["agents"]["claude-code"]["status"] == "source")
+        .unwrap();
+    let adopted = session.call("adopt_to_hub", json!({"skillId":skill["id"]}));
+    assert!(adopted.get("error").is_none(), "{adopted}");
+    let id = &adopted["result"]["id"];
+    let group = session.call(
+        "save_agent_group",
+        json!({"groupId":null,"agentId":"claude-code","name":"Remote group","skillIds":[id]}),
+    );
+    assert!(group.get("error").is_none(), "{group}");
+    let activate = session.call(
+        "activate_agent_group",
+        json!({"agentId":"claude-code","groupId":group["result"]["id"]}),
+    );
+    assert!(activate.get("error").is_none(), "{activate}");
+    let deactivate = session.call(
+        "activate_agent_group",
+        json!({"agentId":"claude-code","groupId":null}),
+    );
+    assert!(deactivate.get("error").is_none(), "{deactivate}");
+    let project = session.call(
+        "create_project",
+        json!({"name":"Remote project","root":project_root}),
+    );
+    assert!(project.get("error").is_none(), "{project}");
+    let project_id = &project["result"]["id"];
+    let apply = session.call("apply_project", json!({"projectId":project_id,"selection":{"agentIds":["claude-code"],"skillIds":[id],"groupIds":[],"linkMode":"copy"}}));
+    assert!(apply.get("error").is_none(), "{apply}");
+    assert!(project_root.join(".claude/skills/probe/SKILL.md").is_file());
+    assert_eq!(
+        session.call("list_projects", Value::Null)["result"]
+            .as_array()
+            .unwrap()
+            .len(),
+        1
+    );
+    assert!(!session.call("list_backups", Value::Null)["result"]
+        .as_array()
+        .unwrap()
+        .is_empty());
+    let directory = session.call("list_directory", json!({"path":project_root}));
+    assert!(directory.get("error").is_none());
+    let document = session.call(
+        "read_skill_document",
+        json!({"path":adopted["result"]["sourcePath"]}),
+    );
+    assert!(document["result"].as_str().unwrap().contains("name: probe"));
+    drop(session);
+    let mut session = Session::start(home.path(), true);
+    assert_eq!(
+        session.call("list_projects", Value::Null)["result"][0]["id"],
+        *project_id
+    );
+}
+
+#[test]
+fn uploaded_skill_is_installed_and_paths_cannot_escape_staging() {
+    let home = fixture();
+    let mut session = Session::start(home.path(), true);
+    assert!(session
+        .call("upload_begin", Value::Null)
+        .get("error")
+        .is_none());
+    assert!(session
+        .call("upload_file", json!({"path":"../escape","data":[1,2]}))
+        .get("error")
+        .is_some());
+    let bytes = b"---\nname: upload-check\ndescription: test\n---\nTest\n".to_vec();
+    assert!(session
+        .call("upload_file", json!({"path":"SKILL.md","data":bytes}))
+        .get("error")
+        .is_none());
+    let result = session.call(
+        "upload_finish",
+        json!({"source":"local:/fixture/source","skillId":"upload-check"}),
+    );
+    assert!(result.get("error").is_none(), "{result}");
+    assert!(home
+        .path()
+        .join(".skill-studio/skills/upload-check/SKILL.md")
+        .is_file());
+}

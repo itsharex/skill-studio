@@ -37,6 +37,29 @@ jobs:
       - run: pnpm run test:unit
       - run: pnpm run build:renderer
 
+  remote-helper:
+    runs-on: ubuntu-22.04
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: aarch64-unknown-linux-gnu
+      - uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: . -> target
+      - name: Install ARM64 cross compiler
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y gcc-aarch64-linux-gnu
+      - name: Build Linux remote helpers
+        env:
+          CARGO_TARGET_AARCH64_UNKNOWN_LINUX_GNU_LINKER: aarch64-linux-gnu-gcc
+        run: |
+          cargo build --release --locked -p skill-studio-remote
+          cargo build --release --locked -p skill-studio-remote --target aarch64-unknown-linux-gnu
+          target/release/skill-studio-remote --version
+          file target/aarch64-unknown-linux-gnu/release/skill-studio-remote
+
   backend:
     strategy:
       fail-fast: false

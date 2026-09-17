@@ -1,4 +1,5 @@
 import { LocalSkillsPanel } from "./LocalSkillsPanel";
+import { useTarget } from "@/components/targets/TargetProvider";
 import { useState } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { openUrl } from "@tauri-apps/plugin-opener";
@@ -19,6 +20,7 @@ import { skillsApi } from "@/lib/api";
 import type { CatalogSkill } from "@/types";
 
 export function InstallSkillsPage({ onBack }: { onBack?: () => void }) {
+  const target = useTarget();
   const [mode, setMode] = useState<"local" | "online">("online");
   const [query, setQuery] = useState("");
   const [submitted, setSubmitted] = useState("");
@@ -53,6 +55,11 @@ export function InstallSkillsPage({ onBack }: { onBack?: () => void }) {
   };
   return (
     <div className="flex min-h-0 flex-1 flex-col">
+      {target.id !== "local" && (
+        <p className="pt-3 text-sm text-muted-foreground">
+          安装到 {target.name} 的 Skill Hub
+        </p>
+      )}
       {onBack && (
         <div className="pt-3">
           <Button variant="outline" size="sm" onClick={onBack}>
@@ -69,7 +76,7 @@ export function InstallSkillsPage({ onBack }: { onBack?: () => void }) {
         >
           {(
             [
-              ["local", "本地"],
+              ["local", target.id === "local" ? "本地" : "目录 / 上传"],
               ["online", "skills.sh"],
             ] as const
           ).map(([value, label]) => (

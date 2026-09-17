@@ -1,4 +1,4 @@
-import { invoke } from "@tauri-apps/api/core";
+import { invoke } from "@/lib/api/transport";
 
 export const systemApi = {
   /** 启动期错误；非空时前端渲染恢复提示而不是主界面 */

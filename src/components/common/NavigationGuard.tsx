@@ -11,6 +11,7 @@ import {
 import { getCurrentWindow } from "@tauri-apps/api/window";
 import { toast } from "sonner";
 import { ConfirmDialog } from "./ConfirmDialog";
+import { getPending } from "@/lib/api/transport";
 
 type Blocker = () => { dirty: boolean; busy: boolean };
 const Context = createContext<{
@@ -28,7 +29,7 @@ function GuardProvider({ children }: { children: React.ReactNode }) {
   const request = useCallback((action: () => void) => {
     const state = blocker.current?.();
     if (state?.busy) {
-      toast.info("正在写入项目，请稍候");
+      toast.info("正在处理当前目标的操作，请稍候");
       return;
     }
     if (state?.dirty) setPending(() => action);
@@ -37,7 +38,7 @@ function GuardProvider({ children }: { children: React.ReactNode }) {
   useEffect(() => {
     const beforeUnload = (e: BeforeUnloadEvent) => {
       const state = blocker.current?.();
-      if (state?.dirty || state?.busy) {
+      if (state?.dirty || state?.busy || getPending()) {
         e.preventDefault();
         e.returnValue = "";
       }
@@ -50,7 +51,7 @@ function GuardProvider({ children }: { children: React.ReactNode }) {
       void win
         .onCloseRequested((event) => {
           const state = blocker.current?.();
-          if (state?.dirty || state?.busy) {
+          if (state?.dirty || state?.busy || getPending()) {
             event.preventDefault();
             request(() => {
               void win.destroy().catch((e) => toast.error(String(e)));

@@ -18,7 +18,9 @@ class ReleaseTests(unittest.TestCase):
         (self.root / 'Cargo.toml').write_text('[workspace.package]\nversion = "0.1.2"\n')
         (self.root / 'Cargo.lock').write_text(''.join(
             f'[[package]]\nname = "{name}"\nversion = "0.1.2"\n'
-            for name in ('skill-studio', 'skill-studio-core', 'dependency')))
+            for name in (
+                'skill-studio', 'skill-studio-core', 'skill-studio-remote',
+                'skill-studio-service', 'dependency')))
         (self.root / 'CHANGELOG.md').write_text('## v0.1.2\nFixed bugs.\n## v0.1.1\nOlder.\n')
 
     def assets(self):

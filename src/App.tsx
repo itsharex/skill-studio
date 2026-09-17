@@ -1,3 +1,8 @@
+import {
+  TargetPicker,
+  useTarget,
+  useTargetConnecting,
+} from "@/components/targets/TargetProvider";
 import { SkillStudioIcon } from "@/components/common/SkillStudioIcon";
 import {
   NavigationGuard,
@@ -53,6 +58,8 @@ export default function App() {
   );
 }
 function AppContent() {
+  const target = useTarget();
+  const connecting = useTargetConnecting();
   const requestNavigation = useNavigationGuard();
   const { data: allAgents = [] } = useAgents();
   const { data: settings } = useSettings();
@@ -175,6 +182,8 @@ function AppContent() {
     <PageToolsContext.Provider value={{ search: searchHost, add: addHost }}>
       <TooltipProvider delayDuration={300}>
         <div
+          {...(connecting ? { inert: "" } : {})}
+          aria-busy={connecting}
           className="flex h-screen flex-col overflow-hidden bg-background text-foreground selection:bg-primary/30"
           style={{ overflowX: "hidden", paddingTop: DRAG_BAR_HEIGHT }}
         >
@@ -190,7 +199,7 @@ function AppContent() {
             className="z-50 flex shrink-0 flex-wrap items-start justify-between gap-x-6 gap-y-3 bg-background px-6 pb-4 pt-5"
           >
             <div
-              className="flex h-11 shrink-0 items-center gap-3"
+              className={`flex min-h-11 items-center gap-3 ${isSettings ? "min-w-0 flex-1" : "shrink-0"}`}
               data-tauri-no-drag
             >
               {isSubpage && (
@@ -243,6 +252,13 @@ function AppContent() {
                   <RefreshCw className="h-4 w-4" />
                 </Button>
               )}
+              <TargetPicker />
+              {isSettings && (
+                <p className="min-w-0 flex-1 text-xs leading-relaxed text-muted-foreground">
+                  当前管理目标：{target.name} ·
+                  目录、管理策略与备份属于此目标；外观与服务器连接属于桌面应用。
+                </p>
+              )}
             </div>
             {!isSubpage && (
               <div
@@ -286,15 +302,20 @@ function AppContent() {
                   </Button>
                 </div>
               )}
-              <motion.div
-                key={view}
-                className="flex min-h-0 flex-1 flex-col overflow-hidden px-6"
-                initial={{ opacity: 0 }}
-                animate={{ opacity: 1 }}
-                transition={{ duration: 0.2 }}
+              <fieldset
+                disabled={!target.connected && !isSettings}
+                className={`flex min-h-0 min-w-0 flex-1 flex-col ${!target.connected && !isSettings ? "pointer-events-none opacity-60" : ""}`}
               >
-                {content()}
-              </motion.div>
+                <motion.div
+                  key={view}
+                  className="flex min-h-0 flex-1 flex-col overflow-hidden px-6"
+                  initial={{ opacity: 0 }}
+                  animate={{ opacity: 1 }}
+                  transition={{ duration: 0.2 }}
+                >
+                  {content()}
+                </motion.div>
+              </fieldset>
             </main>
           </div>
         </div>

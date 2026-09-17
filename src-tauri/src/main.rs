@@ -2,6 +2,9 @@
 #![cfg_attr(not(debug_assertions), windows_subsystem = "windows")]
 
 fn main() {
+    if skill_studio_lib::remote::run_askpass() {
+        return;
+    }
     // Linux 上 WebKitGTK 的 DMABUF 渲染器在多数发行版里会导致白屏，
     // 必须在 GTK 初始化之前设好这两个变量。
     #[cfg(target_os = "linux")]

@@ -32,8 +32,39 @@ jobs:
           git merge-base --is-ancestor "$RELEASE_SHA" origin/main
           python scripts/release.py ci-gate --sha "$RELEASE_SHA"
 
-  build:
+  remote-helper:
     needs: gate
+    runs-on: ubuntu-22.04
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: aarch64-unknown-linux-gnu
+      - uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: . -> target
+      - name: Install ARM64 cross compiler
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y gcc-aarch64-linux-gnu
+      - name: Build Linux remote helpers
+        env:
+          CARGO_TARGET_AARCH64_UNKNOWN_LINUX_GNU_LINKER: aarch64-linux-gnu-gcc
+        run: |
+          cargo build --release --locked -p skill-studio-remote
+          cargo build --release --locked -p skill-studio-remote --target aarch64-unknown-linux-gnu
+          mkdir -p remote-helpers
+          cp target/release/skill-studio-remote remote-helpers/skill-studio-remote-linux-x86_64
+          cp target/aarch64-unknown-linux-gnu/release/skill-studio-remote remote-helpers/skill-studio-remote-linux-aarch64
+          file remote-helpers/*
+      - uses: actions/upload-artifact@v4
+        with:
+          name: remote-helper-binaries
+          path: remote-helpers/*
+          if-no-files-found: error
+
+  build:
+    needs: [gate, remote-helper]
     strategy:
       fail-fast: false
       matrix:
@@ -81,6 +112,11 @@ jobs:
 
       - run: pnpm install --frozen-lockfile
 
+      - uses: actions/download-artifact@v4
+        with:
+          name: remote-helper-binaries
+          path: src-tauri/resources/remote
+
       - name: Build
         run: pnpm exec tauri build ${{ matrix.args }}
 
@@ -112,6 +148,7 @@ jobs:
           python-version: "3.12"
       - uses: actions/download-artifact@v4
         with:
+          pattern: skill-studio-*
           path: artifacts
       - name: Verify packages, upload draft and publish
         env:

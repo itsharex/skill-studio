@@ -1,3 +1,5 @@
+import { useTarget } from "@/components/targets/TargetProvider";
+import { invoke } from "@/lib/api/transport";
 import { useState } from "react";
 import { open } from "@tauri-apps/plugin-dialog";
 import { useMutation, useQueryClient } from "@tanstack/react-query";
@@ -5,10 +7,11 @@ import { FolderOpen, Download, Check, Loader2 } from "lucide-react";
 import { toast } from "sonner";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
-import { skillsApi } from "@/lib/api";
+import { projectsApi, skillsApi } from "@/lib/api";
 import { useSkills } from "@/hooks/useData";
 
 export function LocalSkillsPanel() {
+  const target = useTarget();
   const [path, setPath] = useState("");
   const [error, setError] = useState<string | null>(null);
   const client = useQueryClient();
@@ -29,11 +32,7 @@ export function LocalSkillsPanel() {
   });
   const choose = async () => {
     try {
-      const selected = await open({
-        directory: true,
-        multiple: false,
-        title: "选择 skill 或 skill 集合目录",
-      });
+      const selected = await projectsApi.pickDirectory();
       if (typeof selected === "string") {
         setPath(selected);
         discover.mutate(selected);
@@ -52,8 +51,12 @@ export function LocalSkillsPanel() {
         }}
       >
         <Input
-          aria-label="本地目录"
-          placeholder="选择或输入本地 skill 目录…"
+          aria-label={target.id === "local" ? "本地目录" : "服务器目录"}
+          placeholder={
+            target.id === "local"
+              ? "选择或输入本地 skill 目录…"
+              : "选择或输入服务器上的 skill 目录…"
+          }
           value={path}
           onChange={(e) => setPath(e.target.value)}
         />
@@ -73,9 +76,33 @@ export function LocalSkillsPanel() {
           扫描
         </Button>
       </form>
+      {target.id !== "local" && (
+        <Button
+          className="mb-3 self-start"
+          variant="outline"
+          onClick={async () => {
+            try {
+              const path = await open({
+                directory: true,
+                multiple: false,
+                title: "选择本机上的单个 Skill",
+              });
+              if (typeof path === "string") {
+                await invoke("upload_local_skill", { path });
+                await client.invalidateQueries({ queryKey: ["skills"] });
+                toast.success(`已上传到 ${target.name}`);
+              }
+            } catch (e) {
+              setError(String(e));
+            }
+          }}
+        >
+          从本机上传一个 Skill
+        </Button>
+      )}
       <p className="mb-4 text-sm text-muted-foreground">
         支持单个 skill 或包含多个 skill 的目录。导入后由 Skill Studio
-        管理，保留本地原文件，不自动注册到 Agent。
+        管理，保留原文件，不自动注册到 Agent。
       </p>
       {error && (
         <p role="alert" className="mb-4 text-sm text-destructive">
@@ -149,7 +176,10 @@ export function LocalSkillsPanel() {
         ) : (
           <div className="flex flex-col items-center gap-4 py-20 text-muted-foreground">
             <FolderOpen className="h-12 w-12 opacity-30" />
-            <p>选择本地目录，导入你的 skill</p>
+            <p>
+              选择{target.id === "local" ? "本机" : "服务器"}目录，导入你的
+              skill
+            </p>
           </div>
         )}
       </div>

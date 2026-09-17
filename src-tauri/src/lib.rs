@@ -1,6 +1,8 @@
 mod commands;
 mod error;
 mod init_status;
+pub mod remote;
+mod ssh_config;
 mod state;
 mod watcher;
 
@@ -16,6 +18,7 @@ pub fn run() {
     let config_dir = paths::config_dir();
 
     tauri::Builder::default()
+        .manage(remote::RemoteState::default())
         .plugin(tauri_plugin_opener::init())
         .plugin(tauri_plugin_dialog::init())
         .plugin(tauri_plugin_process::init())
@@ -37,6 +40,13 @@ pub fn run() {
                 .build(),
         )
         .invoke_handler(tauri::generate_handler![
+            commands::list_servers,
+            commands::list_ssh_hosts,
+            commands::save_servers,
+            commands::connect_server,
+            commands::disconnect_server,
+            commands::remote_request,
+            commands::answer_ssh_prompt,
             // 窗口 / 元信息
             commands::set_window_theme,
             commands::get_init_error,
