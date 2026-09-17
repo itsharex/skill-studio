@@ -652,6 +652,7 @@ mod tests {
     }
 
     /// Explicit opt-in live test. Only the generated /tmp fixture is managed.
+    #[cfg(unix)]
     #[test]
     #[ignore = "requires SKILL_STUDIO_LIVE_HOST and SKILL_STUDIO_LIVE_BINARY"]
     fn live_desktop_ssh_deploy_and_project_roundtrip() {

@@ -44,6 +44,8 @@ objc2         = "0.5"
 objc2-app-kit = { version = "0.2", features = ["NSColor"] }
 
 [dev-dependencies]
-tauri = { version = "2.8.2", features = ["test"] }
 tempfile    = { workspace = true }
 serial_test = "3"
+
+[target.'cfg(unix)'.dev-dependencies]
+tauri = { version = "2.8.2", features = ["test"] }
