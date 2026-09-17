@@ -235,7 +235,10 @@ fn uploaded_skill_is_installed_and_paths_cannot_escape_staging() {
         .is_none());
     let result = session.call(
         "upload_finish",
-        json!({"source":"local:/fixture/source","skillId":"upload-check"}),
+        json!({
+            "source": format!("local:{}", home.path().join("fixture-source").display()),
+            "skillId":"upload-check"
+        }),
     );
     assert!(result.get("error").is_none(), "{result}");
     assert!(home
