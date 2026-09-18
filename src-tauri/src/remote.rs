@@ -752,8 +752,22 @@ mod tests {
             "---\nname: uploaded\ndescription: fixture\n---\nUpload\n",
         )
         .unwrap();
+        // Exercise multiple chunks and a non-aligned final chunk over real SSH.
+        let payload: Vec<u8> = (0..150_123).map(|i| (i % 251) as u8).collect();
+        std::fs::write(upload.path().join("payload.bin"), &payload).unwrap();
         let uploaded = call("upload_local_skill", json!({"path":upload.path()}));
         assert_eq!(uploaded["displayName"], "uploaded");
+        let remote_payload = format!("{}/payload.bin", uploaded["sourcePath"].as_str().unwrap());
+        assert!(remote_payload.starts_with(&format!("{fixture}/")));
+        let mut verify = ssh(&profile, &ask).unwrap();
+        verify.arg(format!("sha256sum -- {}", shell_quote(&remote_payload)));
+        let digest =
+            String::from_utf8(captured(verify, None, Duration::from_secs(60)).unwrap()).unwrap();
+        assert_eq!(
+            digest.split_whitespace().next().unwrap(),
+            format!("{:x}", Sha256::digest(&payload))
+        );
+
         disconnect(&state, &profile.id).unwrap();
         assert!(request(&state, &profile.id, "list_projects", json!({}))
             .unwrap_err()

@@ -97,7 +97,7 @@ describe("Skill Hub", () => {
   it("Hub 托管的 skill 用不同徽标区分", async () => {
     setup([makeSkill({ origin: { kind: "hub" } })]);
     renderWithProviders(<LibraryPage />);
-    expect(await screen.findByText("Hub 托管")).toBeInTheDocument();
+    expect(await screen.findByText("托管中")).toBeInTheDocument();
   });
 
   it("「已托管」只数真身在 Hub 的 skill，点一下就只看这些", async () => {
@@ -606,7 +606,7 @@ it("collects and restores one source of a merged card while retaining unique sou
   await user.click(screen.getByRole("button", { name: "托管此来源" }));
   await user.click(screen.getByRole("button", { name: "托管" }));
   await waitFor(() => expect(collected).toBe(true));
-  await screen.findByText("Hub 托管");
+  await screen.findByText("托管中");
   await user.click(screen.getByRole("button", { name: "2 个来源" }));
   await user.click(screen.getByRole("button", { name: "移出 Hub 并还原" }));
   await user.click(screen.getByRole("button", { name: "还原到原位置" }));

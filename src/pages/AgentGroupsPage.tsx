@@ -246,7 +246,7 @@ export function AgentPage({ agentId }: { agentId: string }) {
               value="manual"
               className="gap-2 data-[state=active]:bg-background data-[state=active]:text-foreground"
             >
-              手动安装
+              未托管 skill
               <span className="text-xs opacity-60">
                 {skills.filter((s) => s.agents[agentId]?.manual).length}
               </span>

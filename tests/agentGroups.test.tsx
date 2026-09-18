@@ -448,14 +448,14 @@ it("manual installation tab counts and filters manual skills including policy-di
     }),
   ]);
   renderWithProviders(<AgentPage agentId="codex" />);
-  const manualTab = await screen.findByRole("tab", { name: /手动安装.*1/ });
+  const manualTab = await screen.findByRole("tab", { name: /未托管 skill.*1/ });
   fireEvent.mouseDown(screen.getByRole("tab", { name: /已安装 skill/ }), {
     button: 0,
     ctrlKey: false,
   });
   expect(await screen.findByText("Manual")).toBeInTheDocument();
   expect(
-    within(screen.getByText("Manual").parentElement!).getByText("手动安装"),
+    within(screen.getByText("Manual").parentElement!).getByText("未托管"),
   ).toBeInTheDocument();
   expect(screen.getByText("Studio")).toBeInTheDocument();
   fireEvent.mouseDown(manualTab, { button: 0, ctrlKey: false });

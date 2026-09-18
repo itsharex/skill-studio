@@ -105,7 +105,7 @@ export function LibraryPage({ onAdd }: { onAdd?: () => void } = {}) {
     tokens,
     available.map((c) => c.skill.id),
   );
-  /** 真身已经搬进 Hub 目录（已托管），与卡片上那枚「Hub 托管」徽标同一判定 */
+  /** 真身已经搬进 Hub 目录（已托管），与卡片上那枚「托管中」徽标同一判定 */
   const isHubManaged = (card: HubCard) =>
     card.sources.some((s) => s.origin.kind === "hub");
   const hubManaged = available.filter(isHubManaged);
@@ -330,9 +330,9 @@ export function LibraryPage({ onAdd }: { onAdd?: () => void } = {}) {
                     {isHubManaged(card) && (
                       <Badge
                         variant="outline"
-                        className="h-4 px-1.5 text-[10px]"
+                        className="h-4 border-blue-200 bg-blue-50 px-1.5 text-[10px] text-blue-600 dark:border-blue-800 dark:bg-blue-950/50 dark:text-blue-400"
                       >
-                        Hub 托管
+                        托管中
                       </Badge>
                     )}
                     {!origins.length && !isHubManaged(card) && (
@@ -557,7 +557,12 @@ export function LibraryPage({ onAdd }: { onAdd?: () => void } = {}) {
                     </span>
                   ))}
                   {source.origin.kind === "hub" && (
-                    <Badge variant="outline">Hub 托管</Badge>
+                    <Badge
+                      variant="outline"
+                      className="border-blue-200 bg-blue-50 text-blue-600 dark:border-blue-800 dark:bg-blue-950/50 dark:text-blue-400"
+                    >
+                      托管中
+                    </Badge>
                   )}
                 </div>
                 <p className="break-all font-mono text-xs">

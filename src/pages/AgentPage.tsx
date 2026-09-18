@@ -200,9 +200,7 @@ export function AgentSkills({
                       <span className="truncate text-sm font-medium">
                         {skill.name}
                       </span>
-                      {state.manual && (
-                        <Badge variant="outline">手动安装</Badge>
-                      )}
+                      {state.manual && <Badge variant="outline">未托管</Badge>}
                       <Tooltip>
                         <TooltipTrigger asChild>
                           <Badge
