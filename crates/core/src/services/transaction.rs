@@ -3,7 +3,7 @@
 use super::scanner::is_symlink_or_junction;
 use crate::{
     error::{Error, Result},
-    fs::{atomic, paths},
+    fs::atomic,
 };
 use serde::{Deserialize, Serialize};
 use std::{
@@ -54,15 +54,20 @@ pub fn sibling(path: &Path, label: &str) -> PathBuf {
 
 /// Whether `path` sits directly inside `dir`.
 ///
-/// `..` is refused outright rather than normalized: `normalize_path_lexically`
-/// resolves it without consulting the filesystem, so a symlinked component makes the
-/// lexical answer disagree with the real one.
+/// Resolve parents through the filesystem so legitimate `..` components and
+/// directory aliases work without allowing symlink-assisted escapes. Do not resolve
+/// the final component: recovery operates on the entry, including dangling links.
 fn is_direct_child(path: &Path, dir: &Path) -> bool {
-    if path.components().any(|c| matches!(c, Component::ParentDir)) {
+    if !matches!(path.components().next_back(), Some(Component::Normal(_))) {
         return false;
     }
-    path.parent()
-        .is_some_and(|parent| paths::is_same_path(parent, dir))
+    match (
+        path.parent().and_then(|p| p.canonicalize().ok()),
+        dir.canonicalize(),
+    ) {
+        (Some(parent), Ok(dir)) => parent == dir,
+        _ => false,
+    }
 }
 
 // The lock file is intentionally retained: unlinking it would allow two
@@ -315,6 +320,43 @@ mod tests {
             "original"
         );
         assert!(!journal.exists());
+    }
+
+    #[test]
+    fn confined_recovery_restores_a_journal_written_with_parent_components() {
+        let tmp = tempfile::tempdir().unwrap();
+        fs::create_dir(tmp.path().join("existing")).unwrap();
+        let scanned = tmp.path().join("existing/../skills");
+        fs::create_dir_all(&scanned).unwrap();
+        let dest = scanned.join("demo");
+        fs::write(&dest, "original").unwrap();
+        let journal = scanned.join(".skill-studio-replace-demo.json");
+        let mut tx = Transaction::begin(journal.clone()).unwrap();
+        tx.reserve(&dest).unwrap();
+        drop(tx); // Interrupted after moving the original into its backup.
+        recover_confined(&journal).unwrap();
+        assert_eq!(fs::read_to_string(&dest).unwrap(), "original");
+        assert!(!journal.exists());
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn confinement_resolves_symlinks_before_parent_components() {
+        let tmp = tempfile::tempdir().unwrap();
+        let scanned = tmp.path().join("skills");
+        let outside = tmp.path().join("outside/child");
+        fs::create_dir_all(&scanned).unwrap();
+        fs::create_dir_all(&outside).unwrap();
+        std::os::unix::fs::symlink(&outside, scanned.join("alias")).unwrap();
+        // Lexically inside skills, but actually inside outside after following alias.
+        assert!(!is_direct_child(
+            &scanned.join("alias/../precious"),
+            &scanned
+        ));
+        assert!(!is_direct_child(&scanned.join(".."), &scanned));
+        let alias = tmp.path().join("skills-alias");
+        std::os::unix::fs::symlink(&scanned, &alias).unwrap();
+        assert!(is_direct_child(&alias.join("missing-backup"), &scanned));
     }
 
     #[test]
