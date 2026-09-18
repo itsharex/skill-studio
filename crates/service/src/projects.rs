@@ -36,6 +36,7 @@ pub fn delete_project_local_skill(
     project_id: String,
     path: PathBuf,
 ) -> Result<(), String> {
+    state.ensure_writable().map_err(String::from)?;
     state
         .studio()
         .delete_project_local_skill(&state.config(), &project_id, &path)
@@ -223,6 +224,7 @@ pub fn unapply_project(
 /// 项目级默认 Copy，会在每个 skill 目录里留下 `.skill-studio-copy.json`。
 /// 那是本机溯源信息，不该进版本库。
 pub fn write_project_gitignore(state: &AppState, project_id: String) -> Result<bool, String> {
+    state.ensure_writable().map_err(String::from)?;
     let root = state
         .config()
         .project(&project_id)
@@ -359,6 +361,7 @@ mod project_order_tests {
 pub fn list_skill_backups(
     state: &AppState,
 ) -> Result<Vec<skill_studio_core::services::skill_files::SkillBackup>, String> {
+    state.ensure_writable().map_err(String::from)?;
     state
         .studio()
         .migrate_project_backups(&state.config())
@@ -370,18 +373,21 @@ pub fn list_skill_backups(
         .map_err(Into::into)
 }
 pub fn delete_skill_file(state: &AppState, scope: String, path: PathBuf) -> Result<(), String> {
+    state.ensure_writable().map_err(String::from)?;
     state
         .studio()
         .stash_skill(&state.config(), &scope, &path, false)
         .map_err(Into::into)
 }
 pub fn restore_skill_file(state: &AppState, id: String) -> Result<(), String> {
+    state.ensure_writable().map_err(String::from)?;
     state
         .studio()
         .restore_skill_backup(&state.config(), &id)
         .map_err(Into::into)
 }
 pub fn purge_skill_file(state: &AppState, id: String) -> Result<(), String> {
+    state.ensure_writable().map_err(String::from)?;
     let record = state
         .studio()
         .skill_backups()
@@ -400,6 +406,7 @@ pub fn set_project_skill_enabled(
     path: PathBuf,
     enabled: bool,
 ) -> Result<(), String> {
+    state.ensure_writable().map_err(String::from)?;
     let scope = format!("project:{project_id}");
     if enabled {
         let r = state

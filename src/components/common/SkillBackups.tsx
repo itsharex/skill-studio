@@ -1,3 +1,4 @@
+import { queryKeys } from "@/lib/queryKeys";
 import { useState } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { invoke } from "@/lib/api/transport";
@@ -25,7 +26,7 @@ export function SkillBackups({ scope }: { scope: string }) {
   const [purging, setPurging] = useState<Backup | null>(null);
   const qc = useQueryClient();
   const { data = [], error } = useQuery({
-    queryKey: ["skill-backups"],
+    queryKey: queryKeys.skillBackups,
     queryFn: () => invoke<Backup[]>("list_skill_backups"),
   });
   const backups = data.filter((r) =>

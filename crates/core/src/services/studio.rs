@@ -478,6 +478,9 @@ impl Studio {
         {
             return Err(Error::invalid("请先在设置中开启目标 Agent 的管理"));
         }
+        for id in agent_ids {
+            crate::models::agent::require_agent(id)?;
+        }
         let skills = self.resolve_skills(config, skill_ids)?;
         let mode = mode.unwrap_or(config.settings.default_link_mode);
         let overrides = config.settings.agent_dir_overrides.clone();
@@ -507,18 +510,42 @@ impl Studio {
                     report.push_ok(result(skill, agent_id, LinkStatus::Source, None));
                     continue;
                 }
-                match linker::register(&skill.source_path, &dest, mode, &skill.id, force) {
+                let registration = (|| {
+                    let (done, mut tx) = linker::prepare_registration(
+                        &skill.source_path,
+                        &dest,
+                        mode,
+                        &skill.id,
+                        force,
+                        self.store().dir().join("registration.json"),
+                    )?;
+                    let mut next = config.clone();
+                    next.set_registration(
+                        &skill.id,
+                        agent_id,
+                        Registration {
+                            mode: done.mode,
+                            target_path: dest.clone(),
+                            registered_at: linker::now_secs(),
+                            source_hash_at_copy: done.source_hash.clone(),
+                        },
+                    );
+                    if let Err(error) = self
+                        .store()
+                        .reserve_config(&mut tx, &next)
+                        .and_then(|_| self.save_config(&next))
+                    {
+                        if let Err(rollback) = tx.rollback() {
+                            return Err(Error::Other(format!("{error}; 回滚失败: {rollback}")));
+                        }
+                        return Err(error);
+                    }
+                    tx.commit()?;
+                    *config = next;
+                    Ok(done)
+                })();
+                match registration {
                     Ok(done) => {
-                        config.set_registration(
-                            &skill.id,
-                            agent_id,
-                            Registration {
-                                mode: done.mode,
-                                target_path: dest.clone(),
-                                registered_at: linker::now_secs(),
-                                source_hash_at_copy: done.source_hash,
-                            },
-                        );
                         report.push_ok(result(skill, agent_id, done.status, None));
                     }
                     Err(err) => report.push_err(result(
@@ -1118,6 +1145,15 @@ impl Studio {
 
     /// 清理引用了已消失 skill 的分组成员与注册记录
     pub fn prune(&self, config: &mut AppConfig) -> Result<usize> {
+        // An explicitly configured root disappearing is not evidence of deletion.
+        for root in config
+            .settings
+            .hub_dir
+            .iter()
+            .chain(config.settings.agent_dir_overrides.values())
+        {
+            std::fs::read_dir(root).map_err(|e| Error::io(root, e))?;
+        }
         let existing: HashSet<String> = self
             .scan_skills(config)?
             .into_iter()

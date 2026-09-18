@@ -153,3 +153,23 @@ fn changing_policy_immediately_respects_active_group_and_stop_does_not_restore_o
         .iter()
         .all(|v| !v.agents["claude-code"].disabled));
 }
+
+#[test]
+#[cfg(unix)]
+#[serial]
+fn native_config_permissions_survive_policy_reconcile() {
+    use std::os::unix::fs::PermissionsExt;
+    let env = Env::new();
+    let studio = env.studio();
+    let mut c = studio.load_config().unwrap();
+    env.write_simple_skill(&env.claude_skills(), "manual");
+    let native = env.path().join(".claude/settings.json");
+    fs::write(&native, "{\"env\":{\"SECRET\":\"test\"}}").unwrap();
+    fs::set_permissions(&native, fs::Permissions::from_mode(0o600)).unwrap();
+    c.settings.preserve_manual_skills = false;
+    studio.reconcile_manual_policy(&mut c, true).unwrap();
+    assert_eq!(
+        fs::metadata(&native).unwrap().permissions().mode() & 0o777,
+        0o600
+    );
+}

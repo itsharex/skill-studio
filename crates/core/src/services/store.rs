@@ -56,6 +56,7 @@ impl Store {
     /// 解析失败**不**静默回落到默认值 —— 那会让用户的分组凭空消失。
     /// 直接报错，由上层提示用户去 `backups/` 找回。
     pub fn load(&self) -> Result<AppConfig> {
+        super::transaction::recover(&self.dir.join("registration.json"))?;
         super::transaction::recover(&self.dir.join("migration.json"))?;
         super::transaction::recover(&self.dir.join("skill-files.json"))?;
         super::transaction::recover(&self.dir.join("group-switch.json"))?;
@@ -104,6 +105,9 @@ impl Store {
     /// `rotate_backup` 会 stat 不到文件、直接静默跳过 —— 分组切换、Hub 托管/还原、项目
     /// 写入这些最该能回退的操作，恰好一份备份都不留。顺序必须是先备份、再 reserve。
     pub fn reserve_config(&self, tx: &mut Transaction, config: &AppConfig) -> Result<()> {
+        if self.config_path().exists() && !self.config_path().is_file() {
+            return Err(Error::config("配置路径不是普通文件，拒绝替换"));
+        }
         self.rotate_backup(config.settings.backup_keep)?;
         tx.reserve(&self.config_path())
     }

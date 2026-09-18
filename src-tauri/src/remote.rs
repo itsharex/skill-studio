@@ -128,7 +128,9 @@ impl AskPass {
                         continue;
                     }
                 };
-                let _ = stream.set_read_timeout(Some(Duration::from_secs(5)));
+                if prepare_askpass_stream(&stream).is_err() {
+                    continue;
+                }
                 let mut line = String::new();
                 if BufReader::new(&mut stream)
                     .take(16384)
@@ -603,24 +605,43 @@ fn upload_skill(
                 };
                 #[cfg(not(unix))]
                 let executable = false;
-                loop {
-                    let mut bytes = vec![0; 64 * 1024];
-                    let len = file.read(&mut bytes).map_err(|e| e.to_string())?;
-                    bytes.truncate(len);
+                upload_chunks(&mut file, |bytes| {
                     session.call(
                         "upload_file",
                         json!({"path":relative,"data":bytes,"executable":executable}),
                     )?;
-                    if len < 64 * 1024 {
-                        break;
-                    }
-                }
+                    Ok(())
+                })?;
             }
         }
         Ok(())
     }
     walk(session, &prepared.directory, &prepared.directory)?;
     session.call("upload_finish",json!({"source":prepared.source,"skillId":prepared.skill_id,"repositoryPath":prepared.repository_path}))
+}
+
+fn prepare_askpass_stream(stream: &TcpStream) -> std::io::Result<()> {
+    stream.set_nonblocking(false)?;
+    stream.set_read_timeout(Some(Duration::from_secs(5)))
+}
+
+fn upload_chunks(
+    reader: &mut impl Read,
+    mut send: impl FnMut(&[u8]) -> Result<(), String>,
+) -> Result<(), String> {
+    loop {
+        let mut bytes = vec![0; 64 * 1024];
+        let len = match reader.read(&mut bytes) {
+            Ok(len) => len,
+            Err(e) if e.kind() == std::io::ErrorKind::Interrupted => continue,
+            Err(e) => return Err(e.to_string()),
+        };
+        send(&bytes[..len])?;
+        if len == 0 {
+            break;
+        }
+    }
+    Ok(())
 }
 
 #[cfg(test)]
@@ -741,5 +762,57 @@ mod tests {
         assert_eq!(call("list_projects", json!({}))[0]["id"], project["id"]);
         disconnect(&state, &profile.id).unwrap();
         println!("Desktop SSH integration passed. Isolated remote fixture: {fixture}");
+    }
+}
+
+#[cfg(test)]
+mod audit_regressions {
+    use super::*;
+    #[test]
+    fn upload_short_reads_keep_all_bytes() {
+        struct Short(std::io::Cursor<Vec<u8>>);
+        impl Read for Short {
+            fn read(&mut self, out: &mut [u8]) -> std::io::Result<usize> {
+                self.0.read(&mut out[..7])
+            }
+        }
+        let expected = vec![42; 150_000];
+        let mut reader = Short(std::io::Cursor::new(expected.clone()));
+        let mut actual = Vec::new();
+        upload_chunks(&mut reader, |bytes| {
+            actual.extend_from_slice(bytes);
+            Ok(())
+        })
+        .unwrap();
+        assert_eq!(actual.len(), expected.len());
+        assert_eq!(actual, expected);
+    }
+    #[test]
+    fn accepted_askpass_socket_waits_for_client_message() {
+        let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+        listener.set_nonblocking(true).unwrap();
+        let mut client = TcpStream::connect(listener.local_addr().unwrap()).unwrap();
+        let deadline = Instant::now() + Duration::from_secs(2);
+        let (mut stream, _) = loop {
+            match listener.accept() {
+                Ok(value) => break value,
+                Err(e)
+                    if e.kind() == std::io::ErrorKind::WouldBlock && Instant::now() < deadline =>
+                {
+                    std::thread::sleep(Duration::from_millis(5))
+                }
+                Err(e) => panic!("accept failed: {e}"),
+            }
+        };
+        prepare_askpass_stream(&stream).unwrap();
+        let writer = std::thread::spawn(move || {
+            std::thread::sleep(Duration::from_millis(100));
+            client.write_all(b"hello\n").unwrap();
+        });
+        let mut line = String::new();
+        let result = BufReader::new(&mut stream).read_line(&mut line);
+        writer.join().unwrap();
+        assert!(result.is_ok(), "{result:?}");
+        assert_eq!(line, "hello\n");
     }
 }

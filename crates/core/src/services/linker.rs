@@ -259,6 +259,22 @@ pub(crate) fn copy_tree(src: &Path, dst: &Path) -> Result<()> {
 /// 先复制到同目录下的临时名，成功后再替换，任何失败都清理临时目录 ——
 /// 避免中途失败留下半个 skill。
 pub fn replace_dest_with_copy(source: &Path, dest: &Path, skill_id: &str) -> Result<String> {
+    let journal = replacement_journal(dest);
+    super::transaction::recover_confined(&journal)?;
+    if journal.exists() {
+        return Err(Error::invalid("存在无法安全恢复的副本事务"));
+    }
+    let (hash, tx) = prepare_copy(source, dest, skill_id, journal)?;
+    tx.commit()?;
+    Ok(hash)
+}
+
+fn prepare_copy(
+    source: &Path,
+    dest: &Path,
+    skill_id: &str,
+    journal: PathBuf,
+) -> Result<(String, super::transaction::Transaction)> {
     validate_sync_source(source)?;
     // Compare the entry itself, not a final symlink pointing back to source.
     let entry = dest
@@ -274,11 +290,7 @@ pub fn replace_dest_with_copy(source: &Path, dest: &Path, skill_id: &str) -> Res
         .parent()
         .ok_or_else(|| Error::config("目标没有父目录"))?;
     fs::create_dir_all(parent).map_err(|e| Error::io(parent, e))?;
-    let journal = replacement_journal(dest);
-    // Recovery must precede ownership checks (startup handles this normally).
-    if journal.exists() {
-        return Err(Error::invalid("存在未完成的副本事务，请重启恢复后重试"));
-    }
+
     let dest_before = destination_fingerprint(dest)?;
     let mut tx = super::transaction::Transaction::begin(journal)?;
     let tmp = super::transaction::sibling(dest, "staging");
@@ -310,10 +322,7 @@ pub fn replace_dest_with_copy(source: &Path, dest: &Path, skill_id: &str) -> Res
         Ok(after)
     })();
     match operation {
-        Ok(hash) => {
-            tx.commit()?;
-            Ok(hash)
-        }
+        Ok(hash) => Ok((hash, tx)),
         Err(err) => {
             tx.rollback()?;
             Err(err)
@@ -321,8 +330,12 @@ pub fn replace_dest_with_copy(source: &Path, dest: &Path, skill_id: &str) -> Res
     }
 }
 
-fn replace_dest_with_symlink(source: &Path, dest: &Path) -> Result<()> {
-    let mut tx = super::transaction::Transaction::begin(replacement_journal(dest))?;
+fn prepare_symlink(
+    source: &Path,
+    dest: &Path,
+    journal: PathBuf,
+) -> Result<super::transaction::Transaction> {
+    let mut tx = super::transaction::Transaction::begin(journal)?;
     let tmp = super::transaction::sibling(dest, "staging");
     let operation = (|| -> Result<()> {
         tx.reserve(&tmp)?;
@@ -332,7 +345,7 @@ fn replace_dest_with_symlink(source: &Path, dest: &Path) -> Result<()> {
         Ok(())
     })();
     match operation {
-        Ok(()) => tx.commit(),
+        Ok(()) => Ok(tx),
         Err(err) => {
             tx.rollback()?;
             Err(err)
@@ -417,6 +430,35 @@ pub fn register(
     skill_id: &str,
     force: bool,
 ) -> Result<Registered> {
+    let (registered, tx) = prepare_registration(
+        source,
+        dest,
+        mode,
+        skill_id,
+        force,
+        replacement_journal(dest),
+    )?;
+    tx.commit()?;
+    Ok(registered)
+}
+
+pub(crate) fn prepare_registration(
+    source: &Path,
+    dest: &Path,
+    mode: LinkMode,
+    skill_id: &str,
+    force: bool,
+    journal: PathBuf,
+) -> Result<(Registered, super::transaction::Transaction)> {
+    // Recover before inspecting ownership or source/destination state.
+    if journal == replacement_journal(dest) {
+        super::transaction::recover_confined(&journal)?;
+        if journal.exists() {
+            return Err(Error::invalid("存在无法安全恢复的副本事务"));
+        }
+    } else {
+        super::transaction::recover(&journal)?;
+    }
     validate_sync_source(source)?;
     if paths::is_same_path(source, dest) {
         return Err(Error::invalid(format!(
@@ -459,49 +501,46 @@ pub fn register(
         fs::create_dir_all(parent).map_err(|e| Error::io(parent, e))?;
     }
 
-    match mode {
-        LinkMode::Symlink => {
-            replace_dest_with_symlink(source, dest)?;
-            Ok(Registered {
-                mode: LinkMode::Symlink,
-                status: LinkStatus::Linked,
-                source_hash: None,
-            })
-        }
-        LinkMode::Copy => {
-            let hash = replace_dest_with_copy(source, dest, skill_id)?;
-            Ok(Registered {
+    let copy = || -> Result<(Registered, super::transaction::Transaction)> {
+        let (hash, tx) = prepare_copy(source, dest, skill_id, journal.clone())?;
+        Ok((
+            Registered {
                 mode: LinkMode::Copy,
                 status: LinkStatus::Copied,
                 source_hash: Some(hash),
-            })
-        }
-        LinkMode::Auto => {
-            // 目标是用户自己的真目录时（force 下才会走到这里），尊重现状用 copy，
-            // 不把它改成 symlink —— 这是 cc-switch 的处理方式，有道理。
-            let dest_is_real_dir = dest.is_dir() && !is_symlink_or_junction(dest);
-            if dest_is_real_dir {
-                let hash = replace_dest_with_copy(source, dest, skill_id)?;
-                return Ok(Registered {
-                    mode: LinkMode::Copy,
-                    status: LinkStatus::Copied,
-                    source_hash: Some(hash),
-                });
-            }
-            match replace_dest_with_symlink(source, dest) {
-                Ok(()) => Ok(Registered {
+            },
+            tx,
+        ))
+    };
+    match mode {
+        LinkMode::Copy => copy(),
+        LinkMode::Symlink => {
+            let tx = prepare_symlink(source, dest, journal)?;
+            Ok((
+                Registered {
                     mode: LinkMode::Symlink,
                     status: LinkStatus::Linked,
                     source_hash: None,
-                }),
+                },
+                tx,
+            ))
+        }
+        LinkMode::Auto => {
+            if dest.is_dir() && !is_symlink_or_junction(dest) {
+                return copy();
+            }
+            match prepare_symlink(source, dest, journal.clone()) {
+                Ok(tx) => Ok((
+                    Registered {
+                        mode: LinkMode::Symlink,
+                        status: LinkStatus::Linked,
+                        source_hash: None,
+                    },
+                    tx,
+                )),
                 Err(err) => {
                     log::warn!("symlink 创建失败，回退为文件复制: {err}");
-                    let hash = replace_dest_with_copy(source, dest, skill_id)?;
-                    Ok(Registered {
-                        mode: LinkMode::Copy,
-                        status: LinkStatus::Copied,
-                        source_hash: Some(hash),
-                    })
+                    copy()
                 }
             }
         }

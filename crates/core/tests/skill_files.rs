@@ -159,3 +159,43 @@ fn links_are_not_deleted_with_targets_and_real_backups_preserve_nested_links() {
         .stash_skill(&config, "hub", &env.hub().join(".."), false)
         .is_err());
 }
+
+#[test]
+#[cfg(unix)]
+#[serial]
+fn relative_external_symlink_survives_backup_roundtrip() {
+    let env = Env::new();
+    let studio = env.studio();
+    let config = studio.load_config().unwrap();
+    let path = env.write_simple_skill(&env.hub(), "demo");
+    fs::write(env.hub().join("shared"), "shared data").unwrap();
+    std::os::unix::fs::symlink("../shared", path.join("link")).unwrap();
+    studio.stash_skill(&config, "hub", &path, false).unwrap();
+    let r = studio.skill_backups().unwrap().remove(0);
+    studio.restore_skill_backup(&config, &r.id).unwrap();
+    assert_eq!(
+        fs::read_link(path.join("link")).unwrap(),
+        std::path::PathBuf::from("../shared")
+    );
+    assert_eq!(
+        fs::read_to_string(path.join("link")).unwrap(),
+        "shared data"
+    );
+}
+
+#[test]
+#[serial]
+fn reserved_backup_sibling_does_not_break_listing() {
+    let env = Env::new();
+    let studio = env.studio();
+    let config = studio.load_config().unwrap();
+    let path = env.write_simple_skill(&env.hub(), "demo");
+    studio.stash_skill(&config, "hub", &path, false).unwrap();
+    let record = studio.skill_backups().unwrap().remove(0);
+    let dir = studio.backup_payload(&record).parent().unwrap().to_owned();
+    let reserved = dir.with_file_name(format!(".{}.backup-123-456", record.id));
+    fs::rename(&dir, &reserved).unwrap();
+    assert!(studio.skill_backups().unwrap().is_empty());
+    fs::rename(reserved, dir).unwrap();
+    assert_eq!(studio.skill_backups().unwrap().len(), 1);
+}

@@ -344,15 +344,7 @@ impl Studio {
             // Keep the native config bytes in the outer journal before adding path enable rules.
             if !additions.is_empty() || !manual_toggles.is_empty() {
                 if let Some(path) = agent.toggle_config_path(&config.settings.agent_dir_overrides) {
-                    let bytes = match std::fs::read(&path) {
-                        Ok(b) => Some(b),
-                        Err(e) if e.kind() == std::io::ErrorKind::NotFound => None,
-                        Err(e) => return Err(Error::io(&path, e)),
-                    };
-                    tx.reserve(&path)?;
-                    if let Some(bytes) = bytes {
-                        atomic::atomic_write(&path, &bytes)?;
-                    }
+                    tx.reserve_file_for_update(&path)?;
                 }
             }
             for (_, name, document, enabled) in &manual_toggles {

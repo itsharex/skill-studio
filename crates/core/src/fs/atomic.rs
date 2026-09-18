@@ -125,6 +125,17 @@ fn create_temp_file(
 }
 
 fn atomic_write_with_unix_mode(path: &Path, data: &[u8], unix_mode: Option<u32>) -> Result<()> {
+    // Native agent config may be a dotfiles symlink. Update its target, not the link.
+    let resolved;
+    let path = if path
+        .symlink_metadata()
+        .is_ok_and(|m| m.file_type().is_symlink())
+    {
+        resolved = path.canonicalize().map_err(|e| Error::io(path, e))?;
+        resolved.as_path()
+    } else {
+        path
+    };
     if let Some(parent) = path.parent() {
         fs::create_dir_all(parent).map_err(|e| Error::io(parent, e))?;
     }
@@ -369,5 +380,21 @@ mod tests {
 
         let mode = fs::metadata(&path).unwrap().permissions().mode() & 0o777;
         assert_eq!(mode, 0o640, "实际权限 {mode:o}");
+    }
+}
+
+#[cfg(all(test, unix))]
+mod audit_regressions {
+    use super::*;
+    #[test]
+    fn native_config_symlink_remains_a_link() {
+        let tmp = tempfile::tempdir().unwrap();
+        let target = tmp.path().join("dotfile");
+        let link = tmp.path().join("config");
+        fs::write(&target, "old").unwrap();
+        std::os::unix::fs::symlink(&target, &link).unwrap();
+        atomic_write(&link, b"new").unwrap();
+        assert!(link.symlink_metadata().unwrap().file_type().is_symlink());
+        assert_eq!(fs::read_to_string(target).unwrap(), "new");
     }
 }

@@ -93,7 +93,7 @@ impl Transaction {
     pub fn begin(journal: PathBuf) -> Result<Self> {
         let lock = lock_journal(&journal)?;
         if journal.try_exists().map_err(|e| Error::io(&journal, e))? {
-            return Err(Error::invalid("存在待恢复的文件事务，请重启应用后重试"));
+            recover_locked(&journal)?;
         }
         let tx = Self {
             journal,
@@ -125,6 +125,21 @@ impl Transaction {
             fs::rename(target, &backup).map_err(|e| Error::io(target, e))?;
         }
         Ok(())
+    }
+    /// Keep a writable copy at the original path while journaling the original,
+    /// including its permissions. Callers must use the returned physical path.
+    pub fn reserve_file_for_update(&mut self, path: &Path) -> Result<PathBuf> {
+        let path = if is_symlink_or_junction(path) {
+            path.canonicalize().map_err(|e| Error::io(path, e))?
+        } else {
+            path.to_owned()
+        };
+        self.reserve(&path)?;
+        let entry = self.entries.last().expect("reserved entry");
+        if entry.existed {
+            fs::copy(&entry.backup, &path).map_err(|e| Error::io(&path, e))?;
+        }
+        Ok(path)
     }
     pub fn commit(mut self) -> Result<()> {
         self.committed = true;
@@ -176,7 +191,12 @@ pub fn recover(journal: &Path) -> Result<()> {
         return Ok(());
     }
     let _lock = lock_journal(journal)?;
-    if let Some(tx) = atomic::read_json_file::<Transaction>(journal)? {
+    recover_locked(journal)
+}
+
+fn recover_locked(journal: &Path) -> Result<()> {
+    if let Some(mut tx) = atomic::read_json_file::<Transaction>(journal)? {
+        tx.journal = journal.to_path_buf();
         tx.finish()?;
     }
     Ok(())
@@ -204,7 +224,7 @@ pub fn recover_confined(journal: &Path) -> Result<()> {
         return Ok(());
     };
     let _lock = lock_journal(journal)?;
-    let Some(tx) = atomic::read_json_file::<Transaction>(journal)? else {
+    let Some(mut tx) = atomic::read_json_file::<Transaction>(journal)? else {
         return Ok(());
     };
     if let Some(escaping) = tx.escaping_entry(dir) {
@@ -215,6 +235,7 @@ pub fn recover_confined(journal: &Path) -> Result<()> {
         );
         return Ok(());
     }
+    tx.journal = journal.to_path_buf();
     tx.finish()
 }
 
@@ -384,5 +405,42 @@ mod locking_tests {
         assert!(Transaction::begin(journal.clone()).is_err());
         drop(tx);
         recover(&journal).unwrap();
+    }
+}
+
+#[cfg(test)]
+mod audit_regressions {
+    use super::*;
+    #[test]
+    fn recovery_uses_opened_journal_not_serialized_path() {
+        let tmp = tempfile::tempdir().unwrap();
+        let victim = tmp.path().join("keep");
+        fs::write(&victim, "precious").unwrap();
+        let journal = tmp.path().join(".skill-studio-replace-demo.json");
+        fs::write(
+            &journal,
+            serde_json::to_vec(&serde_json::json!({
+                "journal": victim, "entries": [], "committed": false
+            }))
+            .unwrap(),
+        )
+        .unwrap();
+        recover_confined(&journal).unwrap();
+        assert!(victim.exists());
+        assert!(!journal.exists());
+    }
+    #[test]
+    fn begin_recovers_interrupted_transaction_without_restart() {
+        let tmp = tempfile::tempdir().unwrap();
+        let path = tmp.path().join("file");
+        fs::write(&path, "old").unwrap();
+        let journal = tmp.path().join("tx.json");
+        let mut tx = Transaction::begin(journal.clone()).unwrap();
+        tx.reserve(&path).unwrap();
+        fs::write(&path, "new").unwrap();
+        drop(tx);
+        let tx = Transaction::begin(journal).unwrap();
+        assert_eq!(fs::read_to_string(path).unwrap(), "old");
+        tx.rollback().unwrap();
     }
 }

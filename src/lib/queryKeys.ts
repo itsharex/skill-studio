@@ -5,6 +5,8 @@ export const queryKeys = {
   groups: ["groups"] as const,
   projects: ["projects"] as const,
   settings: ["settings"] as const,
+  config: ["config"] as const,
+  skillBackups: ["skill-backups"] as const,
   backups: ["backups"] as const,
   version: ["version"] as const,
 };

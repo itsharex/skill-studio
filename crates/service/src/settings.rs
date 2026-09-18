@@ -160,8 +160,7 @@ fn validate_hub_change(
             || (old_hub.exists()
                 && std::fs::read_dir(old_hub)
                     .map_err(|e| Error::io(old_hub, e))?
-                    .next()
-                    .is_some()))
+                    .any(|entry| entry.map_or(true, |e| e.file_name() != ".DS_Store"))))
     {
         return Err(Error::invalid(
             "当前 Hub 非空或有启用中的分组，请先移出或剔除已托管的 skill；修改目录不会自动迁移文件",
@@ -191,5 +190,20 @@ mod tests {
         std::fs::write(old.join("SKILL.md"), "keep").unwrap();
         assert!(validate_hub_change(&old, &new, &config).is_err());
         assert!(validate_hub_change(&old, &old, &config).is_ok());
+    }
+}
+
+#[cfg(test)]
+mod audit_regressions {
+    use super::*;
+    #[test]
+    fn finder_metadata_does_not_block_hub_change() {
+        let tmp = tempfile::tempdir().unwrap();
+        let old = tmp.path().join("old");
+        std::fs::create_dir(&old).unwrap();
+        std::fs::write(old.join(".DS_Store"), "finder metadata").unwrap();
+        assert!(validate_hub_change(&old, &tmp.path().join("new"), &AppConfig::default()).is_ok());
+        std::fs::write(old.join("important.txt"), "keep").unwrap();
+        assert!(validate_hub_change(&old, &tmp.path().join("new"), &AppConfig::default()).is_err());
     }
 }

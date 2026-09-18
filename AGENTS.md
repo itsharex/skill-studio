@@ -8,4 +8,8 @@
 
 ## 发布
 
-- 用户明确要求发布时，委派 `gpt-5.6-sol` 子代理按 [.agents/skills/skill-studio-release/SKILL.md](.agents/skills/skill-studio-release/SKILL.md) 执行；普通提交或 push 不触发发布，模型不可用时说明原因，不自动替换。
+- 用户明确要求发布时，使用 `release` 角色（`gpt-5.6-sol`）独立执行 [.agents/skills/skill-studio-release/SKILL.md](.agents/skills/skill-studio-release/SKILL.md)；普通提交、push、发布讨论或修改发布规则均不触发发布。模型不可用时说明原因，不自动替换。
+- 主代理只交接已知的版本、仓库路径、发布范围和必须保留的文件；使用 `fork_turns="none"`，让发布代理自行读取 Skill 和仓库，不传完整对话，也不为准备交接再跑一遍检查。
+- 从差异审查到版本更新、修复、验证、提交推送、CI、标签、Release 和 Homebrew，均由发布代理负责。主代理不并行检查、构建、修复或轮询 CI，不重复执行发布代理已完成的验证。
+- 交接后使用完成通知或事件等待，不反复催问进度；仅在发布代理遇到无法自行解决的阻碍、用户要求介入或最终结果相互矛盾时介入。需要向用户提供进度时使用已有信息，不为汇报额外发起查询。
+- 最终直接依据发布代理提供的版本、提交、Release 链接及门禁结果简短汇报。具体流程和失败处理只维护在发布 Skill 中。

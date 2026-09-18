@@ -1,5 +1,5 @@
 import { useTarget } from "@/components/targets/TargetProvider";
-import { invoke } from "@/lib/api/transport";
+import { uploadLocalSkill } from "@/lib/api/transport";
 import { useState } from "react";
 import { open } from "@tauri-apps/plugin-dialog";
 import { useMutation, useQueryClient } from "@tanstack/react-query";
@@ -82,13 +82,14 @@ export function LocalSkillsPanel() {
           variant="outline"
           onClick={async () => {
             try {
-              const path = await open({
-                directory: true,
-                multiple: false,
-                title: "选择本机上的单个 Skill",
-              });
-              if (typeof path === "string") {
-                await invoke("upload_local_skill", { path });
+              const uploaded = await uploadLocalSkill(() =>
+                open({
+                  directory: true,
+                  multiple: false,
+                  title: "选择本机上的单个 Skill",
+                }),
+              );
+              if (uploaded) {
                 await client.invalidateQueries({ queryKey: ["skills"] });
                 toast.success(`已上传到 ${target.name}`);
               }

@@ -541,3 +541,76 @@ fn config_survives_a_save_load_roundtrip() {
     assert!(reloaded.groups[0].contains(&id));
     assert!(reloaded.registration(&id, "codex").is_some());
 }
+
+#[test]
+#[serial]
+fn prune_refuses_missing_custom_hub() {
+    let env = Env::new();
+    let studio = env.studio();
+    let mut c = studio.load_config().unwrap();
+    c.settings.hub_dir = Some(env.path().join("unmounted/skills"));
+    let before = serde_json::to_value(&c).unwrap();
+    assert!(studio.prune(&mut c).is_err());
+    assert_eq!(serde_json::to_value(&c).unwrap(), before);
+}
+
+#[test]
+#[serial]
+fn registration_rolls_back_when_config_cannot_be_saved() {
+    let env = Env::new();
+    let studio = env.studio();
+    let mut c = studio.load_config().unwrap();
+    env.write_simple_skill(&env.hub(), "demo");
+    let id = studio.scan_skills(&c).unwrap()[0].skill.id.clone();
+    // A directory at the config-file path is a deterministic write failure.
+    std::fs::create_dir_all(studio.store().config_path()).unwrap();
+    let before = serde_json::to_value(&c).unwrap();
+    let result = studio.register(
+        &mut c,
+        &[id],
+        &["codex".into()],
+        Some(LinkMode::Copy),
+        false,
+    );
+    assert!(result.is_err() || !result.unwrap().is_all_ok());
+    assert!(!env.codex_skills().join("demo").exists());
+    assert_eq!(serde_json::to_value(&c).unwrap(), before);
+}
+
+#[test]
+#[serial]
+fn failed_registration_repair_keeps_existing_copy() {
+    let env = Env::new();
+    let studio = env.studio();
+    let mut c = studio.load_config().unwrap();
+    let source = env.write_simple_skill(&env.hub(), "demo");
+    let id = studio.scan_skills(&c).unwrap()[0].skill.id.clone();
+    assert!(studio
+        .register(
+            &mut c,
+            std::slice::from_ref(&id),
+            &["codex".into()],
+            Some(LinkMode::Copy),
+            false
+        )
+        .unwrap()
+        .is_all_ok());
+    let dest = env.codex_skills().join("demo");
+    let old = std::fs::read(dest.join("SKILL.md")).unwrap();
+    std::fs::write(source.join("SKILL.md"), "updated source").unwrap();
+    std::fs::remove_file(studio.store().config_path()).unwrap();
+    std::fs::create_dir(studio.store().config_path()).unwrap();
+    let before = serde_json::to_value(&c).unwrap();
+    assert!(!studio
+        .register(
+            &mut c,
+            &[id],
+            &["codex".into()],
+            Some(LinkMode::Copy),
+            false
+        )
+        .unwrap()
+        .is_all_ok());
+    assert_eq!(std::fs::read(dest.join("SKILL.md")).unwrap(), old);
+    assert_eq!(serde_json::to_value(&c).unwrap(), before);
+}

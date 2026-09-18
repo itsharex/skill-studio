@@ -102,6 +102,8 @@ function useInvalidateAfterWrite() {
     void qc.invalidateQueries({ queryKey: queryKeys.groups });
     void qc.invalidateQueries({ queryKey: queryKeys.projects });
     void qc.invalidateQueries({ queryKey: queryKeys.backups });
+    void qc.invalidateQueries({ queryKey: queryKeys.config });
+    void qc.invalidateQueries({ queryKey: queryKeys.skillBackups });
   };
 }
 
@@ -115,20 +117,6 @@ export function useRegisterSkills() {
       force?: boolean;
     }) => skillsApi.register(v.skillIds, v.agentIds, v.mode, v.force ?? false),
     onSuccess: (report) => toastLinkReport(report, "注册"),
-    onError: (e: unknown) => toast.error(String(e)),
-    onSettled: invalidate,
-  });
-}
-
-export function useUnregisterSkills() {
-  const invalidate = useInvalidateAfterWrite();
-  return useMutation({
-    mutationFn: (v: {
-      skillIds: string[];
-      agentIds: string[];
-      force?: boolean;
-    }) => skillsApi.unregister(v.skillIds, v.agentIds, v.force ?? false),
-    onSuccess: (report) => toastLinkReport(report, "移除"),
     onError: (e: unknown) => toast.error(String(e)),
     onSettled: invalidate,
   });
@@ -225,7 +213,7 @@ export function useUpdateSettings() {
     mutationFn: (patch: SettingsPatch) => settingsApi.update(patch),
     onSuccess: (settings) => {
       qc.setQueryData(queryKeys.settings, settings);
-      void qc.invalidateQueries({ queryKey: ["config"] });
+      void qc.invalidateQueries({ queryKey: queryKeys.config });
       void qc.invalidateQueries({ queryKey: queryKeys.groups });
       // 目录覆盖会改变扫描位置
       void qc.invalidateQueries({ queryKey: queryKeys.skills });
@@ -242,6 +230,7 @@ export function useRestoreBackup() {
     mutationFn: (path: string) => settingsApi.restoreBackup(path),
     onSuccess: () => {
       toast.success("已从备份恢复");
+      void qc.invalidateQueries({ queryKey: queryKeys.agents });
       void qc.invalidateQueries({ queryKey: queryKeys.settings });
     },
     onError: (e: unknown) => toast.error(String(e)),

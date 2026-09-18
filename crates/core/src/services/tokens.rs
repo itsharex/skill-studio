@@ -7,6 +7,7 @@
 //! 误差更大，但不会像按 4 字符算那样成倍低估。
 
 use std::fs;
+use std::io::Read;
 use std::path::{Path, PathBuf};
 
 use crate::models::skill::TokenEstimate;
@@ -108,9 +109,15 @@ fn estimate_file(path: &Path) -> u32 {
     if !fs::metadata(path).is_ok_and(|meta| meta.is_file()) {
         return 0;
     }
-    let Ok(bytes) = fs::read(path) else {
+    // Estimates are bounded per file; attachments can include multi-GB datasets.
+    let Ok(file) = fs::File::open(path) else {
         return 0;
     };
+    let mut bytes = Vec::new();
+    if file.take(1024 * 1024).read_to_end(&mut bytes).is_err() {
+        return 0;
+    }
+
     match bytes.as_slice() {
         [0xFF, 0xFE, rest @ ..] => estimate_text(&decode_utf16(rest, u16::from_le_bytes)),
         [0xFE, 0xFF, rest @ ..] => estimate_text(&decode_utf16(rest, u16::from_be_bytes)),
@@ -433,5 +440,17 @@ mod tests {
     fn missing_skill_md_is_zero_not_an_error() {
         let dir = tempfile::tempdir().unwrap();
         assert_eq!(estimate_skill(dir.path()), TokenEstimate::default());
+    }
+}
+
+#[cfg(test)]
+mod audit_regressions {
+    use super::*;
+    #[test]
+    fn oversized_attachment_estimation_is_bounded() {
+        let tmp = tempfile::tempdir().unwrap();
+        let path = tmp.path().join("large.txt");
+        fs::write(&path, vec![b'a'; 2 * 1024 * 1024]).unwrap();
+        assert!(estimate_file(&path) <= 1024 * 1024 / 4);
     }
 }

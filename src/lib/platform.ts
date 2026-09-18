@@ -2,6 +2,5 @@
 // 不依赖 @tauri-apps/plugin-os，避免为两个布尔值多引一个插件。
 const ua = typeof navigator === "undefined" ? "" : navigator.userAgent;
 
-export const isMacOS = () => /Mac OS X|Macintosh/.test(ua);
 export const isWindows = () => /Windows/.test(ua);
 export const isLinux = () => /Linux/.test(ua) && !/Android/.test(ua);

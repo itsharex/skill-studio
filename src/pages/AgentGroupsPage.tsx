@@ -63,7 +63,7 @@ export function AgentPage({ agentId }: { agentId: string }) {
   const { data: liveGroups = [] } = useGroups();
   const { data: liveSkills = [] } = useSkills();
   const { data: liveConfig } = useQuery({
-    queryKey: ["config"],
+    queryKey: queryKeys.config,
     queryFn: settingsApi.getConfig,
   });
   // Keep one consistent render while config and filesystem queries refresh independently.

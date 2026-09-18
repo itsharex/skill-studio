@@ -2,6 +2,7 @@
 
 use std::collections::BTreeMap;
 use std::fs;
+use std::io::Read;
 use std::path::{Path, PathBuf};
 
 use serde::{Deserialize, Serialize};
@@ -164,6 +165,14 @@ fn find_closing_fence(rest: &str) -> Option<usize> {
 /// - 跳过复制边车自身（它含哈希，会自我循环）
 /// - 符号链接只记录目标，不遍历；内部目标使用相对路径，迁移不改变哈希
 pub fn dir_content_hash(dir: &Path) -> Result<String> {
+    content_hash(dir, false)
+}
+
+pub(crate) fn backup_content_hash(dir: &Path) -> Result<String> {
+    content_hash(dir, true)
+}
+
+fn content_hash(dir: &Path, literal_links: bool) -> Result<String> {
     let mut files = Vec::new();
     collect_files(dir, dir, &mut files, 0)?;
     files.sort();
@@ -171,24 +180,55 @@ pub fn dir_content_hash(dir: &Path) -> Result<String> {
     let mut hasher = Sha256::new();
     for rel in &files {
         let full = dir.join(rel);
-        let bytes = if is_symlink_or_junction(&full) {
+        let link_bytes = if is_symlink_or_junction(&full) {
             // Domain separation prevents a regular file containing the link's
             // textual representation from being mistaken for the same entry.
             hasher.update(b"symlink\0");
-            let target = link_destination(&full)?;
-            let key = match target.strip_prefix(crate::fs::paths::normalize_path_lexically(dir)) {
-                Ok(rel) => format!("internal:{}", rel.display()),
-                Err(_) => format!("external:{}", target.display()),
+            let target = if literal_links {
+                fs::read_link(&full).map_err(|e| Error::io(&full, e))?
+            } else {
+                link_destination(&full)?
             };
-            format!("symlink:{key}").into_bytes()
+            let key = if literal_links {
+                format!("literal:{}", target.display())
+            } else {
+                match target.strip_prefix(crate::fs::paths::normalize_path_lexically(dir)) {
+                    Ok(rel) => format!("internal:{}", rel.display()),
+                    Err(_) => format!("external:{}", target.display()),
+                }
+            };
+            Some(format!("symlink:{key}").into_bytes())
         } else {
-            fs::read(&full).map_err(|e| Error::io(&full, e))?
+            None
         };
         let rel_key = rel.to_string_lossy().replace('\\', "/");
         hasher.update((rel_key.len() as u64).to_le_bytes());
         hasher.update(rel_key.as_bytes());
-        hasher.update((bytes.len() as u64).to_le_bytes());
-        hasher.update(&bytes);
+        if let Some(bytes) = link_bytes {
+            hasher.update((bytes.len() as u64).to_le_bytes());
+            hasher.update(&bytes);
+        } else {
+            let mut file = fs::File::open(&full).map_err(|e| Error::io(&full, e))?;
+            let len = file.metadata().map_err(|e| Error::io(&full, e))?.len();
+            hasher.update(len.to_le_bytes());
+            let mut buffer = [0u8; 64 * 1024];
+            let mut read = 0u64;
+            loop {
+                let n = match file.read(&mut buffer) {
+                    Ok(n) => n,
+                    Err(e) if e.kind() == std::io::ErrorKind::Interrupted => continue,
+                    Err(e) => return Err(Error::io(&full, e)),
+                };
+                if n == 0 {
+                    break;
+                }
+                read += n as u64;
+                hasher.update(&buffer[..n]);
+            }
+            if read != len {
+                return Err(Error::invalid("计算哈希期间文件大小发生变化"));
+            }
+        }
     }
     let digest = hasher.finalize();
     Ok(digest.iter().take(16).map(|b| format!("{b:02x}")).collect())

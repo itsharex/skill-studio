@@ -2,7 +2,7 @@
 //!
 //! 停用**不删文件**，而是写各 agent 自己的原生配置开关：
 //! - Claude Code → `settings.json` 的 `skillOverrides: { "<name>": "off" }`
-//! - Codex → `config.toml` 的 `[[skills.config]] name / enabled`
+//! - Codex → `config.toml` 的 `[[skills.config]] path / enabled`（读取兼容名称规则）
 //!
 //! 这样瞬时、无损、可逆，而且用户在 agent 里 `/skills` 看到的状态与 Studio 一致。
 //!
@@ -121,31 +121,6 @@ pub fn is_claude_skill_disabled(settings_path: &Path, skill_name: &str) -> bool 
         .unwrap_or(false)
 }
 
-/// 设置 Codex 里某个 skill 的启用状态。
-///
-/// schema 见 `codex-rs/config/src/skills_config.rs`：`[[skills.config]]` 是
-/// array of tables，每项用 `name` 或 `path` 选中，`enabled` 是必填布尔。
-/// 启用时移除对应条目（缺省即启用）。
-pub fn set_codex_skill_enabled(config_path: &Path, skill_name: &str, enabled: bool) -> Result<()> {
-    let existing = match std::fs::read_to_string(config_path) {
-        Ok(s) => s,
-        Err(e) if e.kind() == std::io::ErrorKind::NotFound => String::new(),
-        Err(e) => return Err(Error::io(config_path, e)),
-    };
-    let mut doc: DocumentMut = existing.parse().map_err(|e| Error::Toml {
-        path: config_path.display().to_string(),
-        source: e,
-    })?;
-
-    if enabled {
-        remove_codex_entry(&mut doc, skill_name);
-    } else {
-        upsert_codex_entry(&mut doc, skill_name)?;
-    }
-
-    atomic::write_text_file(config_path, &doc.to_string())
-}
-
 fn codex_config_array(doc: &mut DocumentMut) -> Result<&mut ArrayOfTables> {
     if !doc.contains_key("skills") {
         let mut table = Table::new();
@@ -165,72 +140,6 @@ fn codex_config_array(doc: &mut DocumentMut) -> Result<&mut ArrayOfTables> {
         .get_mut("config")
         .and_then(|i| i.as_array_of_tables_mut())
         .ok_or_else(|| Error::config("config.toml 里的 skills.config 不是表数组"))
-}
-
-fn entry_name(table: &Table) -> Option<String> {
-    table.get("name")?.as_str().map(|s| s.to_string())
-}
-
-fn upsert_codex_entry(doc: &mut DocumentMut, skill_name: &str) -> Result<()> {
-    let arr = codex_config_array(doc)?;
-    // 已有同名条目就改它，避免重复写产生重复条目
-    for table in arr.iter_mut() {
-        if entry_name(table).as_deref() == Some(skill_name) {
-            table["enabled"] = toml_edit::value(false);
-            return Ok(());
-        }
-    }
-    let mut table = Table::new();
-    table["name"] = toml_edit::value(skill_name);
-    table["enabled"] = toml_edit::value(false);
-    arr.push(table);
-    Ok(())
-}
-
-fn remove_codex_entry(doc: &mut DocumentMut, skill_name: &str) {
-    let Some(arr) = doc
-        .get_mut("skills")
-        .and_then(|i| i.as_table_mut())
-        .and_then(|t| t.get_mut("config"))
-        .and_then(|i| i.as_array_of_tables_mut())
-    else {
-        return;
-    };
-    arr.retain(|t| entry_name(t).as_deref() != Some(skill_name));
-    if arr.is_empty() {
-        if let Some(skills) = doc.get_mut("skills").and_then(|i| i.as_table_mut()) {
-            skills.remove("config");
-            // [skills] 空了也一并清掉，不在用户配置里留空壳
-            if skills.is_empty() {
-                doc.remove("skills");
-            }
-        }
-    }
-}
-
-/// 读 Codex 里某个 skill 是否被停用
-pub fn is_codex_skill_disabled(config_path: &Path, skill_name: &str) -> bool {
-    let Ok(text) = std::fs::read_to_string(config_path) else {
-        return false;
-    };
-    let Ok(doc) = text.parse::<DocumentMut>() else {
-        return false;
-    };
-    let Some(arr) = doc
-        .get("skills")
-        .and_then(|i| i.as_table())
-        .and_then(|t| t.get("config"))
-        .and_then(|i| i.as_array_of_tables())
-    else {
-        return false;
-    };
-    // 必须先落成局部变量：尾表达式里的迭代器是借用 doc 的临时对象，
-    // 函数返回时 doc 先析构，会触发 E0597。
-    let disabled = arr.iter().any(|t| {
-        entry_name(t).as_deref() == Some(skill_name)
-            && t.get("enabled").and_then(|v| v.as_bool()) == Some(false)
-    });
-    disabled
 }
 
 /// Read ordered user-level Codex rules. Session flags belong to the running
@@ -373,42 +282,6 @@ pub fn set_skill_enabled_at(
     }
 }
 
-/// 按 agent 分派
-pub fn set_skill_enabled(
-    agent: &AgentDescriptor,
-    overrides: &HashMap<String, PathBuf>,
-    skill_name: &str,
-    enabled: bool,
-) -> Result<()> {
-    let Some(path) = agent.toggle_config_path(overrides) else {
-        return Err(Error::invalid(format!(
-            "{} 没有原生的 skill 启停机制",
-            agent.display_name
-        )));
-    };
-    match agent.toggle {
-        ToggleMechanism::ClaudeSettingsJson => set_claude_skill_enabled(&path, skill_name, enabled),
-        ToggleMechanism::CodexConfigToml => set_codex_skill_enabled(&path, skill_name, enabled),
-        ToggleMechanism::None => unreachable!("toggle_config_path 已过滤 None"),
-    }
-}
-
-/// 按 agent 分派的读取
-pub fn is_skill_disabled(
-    agent: &AgentDescriptor,
-    overrides: &HashMap<String, PathBuf>,
-    skill_name: &str,
-) -> bool {
-    let Some(path) = agent.toggle_config_path(overrides) else {
-        return false;
-    };
-    match agent.toggle {
-        ToggleMechanism::ClaudeSettingsJson => is_claude_skill_disabled(&path, skill_name),
-        ToggleMechanism::CodexConfigToml => is_codex_skill_disabled(&path, skill_name),
-        ToggleMechanism::None => false,
-    }
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -487,101 +360,92 @@ mod tests {
         assert!(err.to_string().contains("不是 JSON 对象"), "{err}");
     }
 
+    fn document(root: &Path, name: &str) -> PathBuf {
+        let path = root.join(name).join("SKILL.md");
+        std::fs::create_dir_all(path.parent().unwrap()).unwrap();
+        std::fs::write(&path, "test skill").unwrap();
+        path
+    }
+
     #[test]
     fn codex_disable_preserves_comments_and_other_tables() {
         let d = tempfile::tempdir().unwrap();
         let p = d.path().join("config.toml");
-        std::fs::write(
-            &p,
-            r#"# 我的 Codex 配置
-model = "gpt-5"
-
-[tui]
-theme = "dark"   # 行内注释
-"#,
-        )
-        .unwrap();
-
-        set_codex_skill_enabled(&p, "deploy", false).unwrap();
+        let skill = document(d.path(), "deploy");
+        std::fs::write(&p, "# user config\nmodel = \"gpt-5\"\n[tui]\ntheme = \"dark\" # inline comment\n[skills]\ninclude_instructions = true\n").unwrap();
+        set_codex_skill_enabled_at(&p, &skill, false).unwrap();
         let text = std::fs::read_to_string(&p).unwrap();
-        // 注释与既有表必须原样保留
-        assert!(text.contains("# 我的 Codex 配置"), "{text}");
-        assert!(text.contains("# 行内注释"), "{text}");
-        assert!(text.contains("model = \"gpt-5\""), "{text}");
-        assert!(text.contains("[tui]"), "{text}");
-        assert!(text.contains("[[skills.config]]"), "{text}");
-        assert!(is_codex_skill_disabled(&p, "deploy"));
+        for kept in [
+            "# user config",
+            "# inline comment",
+            "model = \"gpt-5\"",
+            "[tui]",
+            "include_instructions = true",
+        ] {
+            assert!(text.contains(kept), "{text}");
+        }
+        assert!(is_codex_skill_disabled_at(&p, "deploy", &skill));
     }
 
     #[test]
     fn codex_repeated_disable_does_not_duplicate_entries() {
         let d = tempfile::tempdir().unwrap();
         let p = d.path().join("config.toml");
-        set_codex_skill_enabled(&p, "deploy", false).unwrap();
-        set_codex_skill_enabled(&p, "deploy", false).unwrap();
-        set_codex_skill_enabled(&p, "deploy", false).unwrap();
+        let skill = document(d.path(), "deploy");
+        for _ in 0..3 {
+            set_codex_skill_enabled_at(&p, &skill, false).unwrap();
+        }
         let text = std::fs::read_to_string(&p).unwrap();
-        assert_eq!(
-            text.matches("[[skills.config]]").count(),
-            1,
-            "重复写产生了重复条目:\n{text}"
-        );
+        assert_eq!(text.matches("[[skills.config]]").count(), 1, "{text}");
+        assert!(is_codex_skill_disabled_at(&p, "deploy", &skill));
     }
 
     #[test]
-    fn codex_enable_removes_entry_and_cleans_empty_tables() {
+    fn codex_enable_overrides_name_rule_only_for_selected_document() {
         let d = tempfile::tempdir().unwrap();
         let p = d.path().join("config.toml");
-        std::fs::write(&p, "model = \"gpt-5\"\n").unwrap();
-
-        set_codex_skill_enabled(&p, "deploy", false).unwrap();
-        set_codex_skill_enabled(&p, "deploy", true).unwrap();
-
-        let text = std::fs::read_to_string(&p).unwrap();
-        assert!(!text.contains("skills"), "空的 skills 表应被清掉:\n{text}");
-        assert!(text.contains("model = \"gpt-5\""), "{text}");
-        assert!(!is_codex_skill_disabled(&p, "deploy"));
+        let first = document(d.path(), "first");
+        let second = document(d.path(), "second");
+        std::fs::write(
+            &p,
+            "[[skills.config]]\nname = \"deploy\"\nenabled = false\n",
+        )
+        .unwrap();
+        set_codex_skill_enabled_at(&p, &first, true).unwrap();
+        assert!(!is_codex_skill_disabled_at(&p, "deploy", &first));
+        assert!(is_codex_skill_disabled_at(&p, "deploy", &second));
+        assert!(std::fs::read_to_string(&p)
+            .unwrap()
+            .contains("name = \"deploy\""));
     }
 
     #[test]
     fn codex_handles_multiple_skills_independently() {
         let d = tempfile::tempdir().unwrap();
         let p = d.path().join("config.toml");
-        set_codex_skill_enabled(&p, "a", false).unwrap();
-        set_codex_skill_enabled(&p, "b", false).unwrap();
-        assert!(is_codex_skill_disabled(&p, "a"));
-        assert!(is_codex_skill_disabled(&p, "b"));
-
-        set_codex_skill_enabled(&p, "a", true).unwrap();
-        assert!(!is_codex_skill_disabled(&p, "a"));
-        assert!(is_codex_skill_disabled(&p, "b"), "不该影响别的 skill");
-    }
-
-    #[test]
-    fn codex_keeps_existing_skills_settings() {
-        let d = tempfile::tempdir().unwrap();
-        let p = d.path().join("config.toml");
-        std::fs::write(
-            &p,
-            "[skills]\ninclude_instructions = true\nmax_context_tokens = 10000\n",
-        )
-        .unwrap();
-        set_codex_skill_enabled(&p, "deploy", false).unwrap();
-        let text = std::fs::read_to_string(&p).unwrap();
-        assert!(text.contains("include_instructions = true"), "{text}");
-        assert!(text.contains("max_context_tokens = 10000"), "{text}");
-        assert!(is_codex_skill_disabled(&p, "deploy"));
+        let a = document(d.path(), "a");
+        let b = document(d.path(), "b");
+        set_codex_skill_enabled_at(&p, &a, false).unwrap();
+        set_codex_skill_enabled_at(&p, &b, false).unwrap();
+        assert!(is_codex_skill_disabled_at(&p, "a", &a));
+        assert!(is_codex_skill_disabled_at(&p, "b", &b));
+        set_codex_skill_enabled_at(&p, &a, true).unwrap();
+        assert!(!is_codex_skill_disabled_at(&p, "a", &a));
+        assert!(is_codex_skill_disabled_at(&p, "b", &b));
     }
 
     #[test]
     fn codex_reports_not_disabled_for_unknown_skill() {
         let d = tempfile::tempdir().unwrap();
         let p = d.path().join("config.toml");
-        set_codex_skill_enabled(&p, "a", false).unwrap();
-        assert!(!is_codex_skill_disabled(&p, "never-touched"));
-        assert!(!is_codex_skill_disabled(
-            Path::new("/nope/config.toml"),
-            "a"
+        let a = document(d.path(), "a");
+        let unknown = document(d.path(), "unknown");
+        set_codex_skill_enabled_at(&p, &a, false).unwrap();
+        assert!(!is_codex_skill_disabled_at(&p, "unknown", &unknown));
+        assert!(!is_codex_skill_disabled_at(
+            &d.path().join("missing.toml"),
+            "a",
+            &a
         ));
     }
 
@@ -589,18 +453,20 @@ theme = "dark"   # 行内注释
     fn dispatch_routes_to_the_right_mechanism() {
         use crate::models::agent::find_agent;
         let d = tempfile::tempdir().unwrap();
+        let skill = document(d.path(), "deploy");
         let mut overrides = HashMap::new();
         overrides.insert("claude-code".to_string(), d.path().join("claude"));
         overrides.insert("codex".to_string(), d.path().join("codex"));
-
-        let claude = find_agent("claude-code").unwrap();
-        set_skill_enabled(claude, &overrides, "deploy", false).unwrap();
-        assert!(is_skill_disabled(claude, &overrides, "deploy"));
-        assert!(d.path().join("claude/settings.json").is_file());
-
-        let codex = find_agent("codex").unwrap();
-        set_skill_enabled(codex, &overrides, "deploy", false).unwrap();
-        assert!(is_skill_disabled(codex, &overrides, "deploy"));
-        assert!(d.path().join("codex/config.toml").is_file());
+        for (id, config) in [
+            ("claude-code", "claude/settings.json"),
+            ("codex", "codex/config.toml"),
+        ] {
+            let agent = find_agent(id).unwrap();
+            set_skill_enabled_at(agent, &overrides, "deploy", &skill, false).unwrap();
+            assert!(is_skill_disabled_at(agent, &overrides, "deploy", &skill));
+            assert!(d.path().join(config).is_file());
+            set_skill_enabled_at(agent, &overrides, "deploy", &skill, true).unwrap();
+            assert!(!is_skill_disabled_at(agent, &overrides, "deploy", &skill));
+        }
     }
 }

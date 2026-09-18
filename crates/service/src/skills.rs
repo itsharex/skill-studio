@@ -17,9 +17,7 @@ pub fn register_skills(
     force: Option<bool>,
 ) -> Result<LinkReport, String> {
     state
-        .mutate(|studio, config| {
-            studio.register(config, &skill_ids, &agent_ids, mode, force.unwrap_or(false))
-        })
+        .register_skills(&skill_ids, &agent_ids, mode, force.unwrap_or(false))
         .map_err(Into::into)
 }
 

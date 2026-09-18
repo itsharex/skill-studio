@@ -40,6 +40,12 @@ impl Studio {
             let r: SkillBackup =
                 serde_json::from_slice(&fs::read(&p).map_err(|e| Error::io(&p, e))?)
                     .map_err(|e| Error::json(&p, e))?;
+            if e.file_name()
+                .to_string_lossy()
+                .starts_with(&format!(".{}.backup-", r.id))
+            {
+                continue;
+            }
             if e.file_name().to_string_lossy() != r.id {
                 return Err(Error::invalid("备份记录不匹配"));
             }
@@ -191,10 +197,10 @@ impl Studio {
             if scanner::is_symlink_or_junction(path) {
                 linker::create_symlink(&scanner::link_destination(path)?, &payload)?;
             } else {
-                let before = scanner::dir_content_hash(path)?;
+                let before = scanner::backup_content_hash(path)?;
                 copy_exact(path, &payload, 0)?;
-                if scanner::dir_content_hash(path)? != before
-                    || scanner::dir_content_hash(&payload)? != before
+                if scanner::backup_content_hash(path)? != before
+                    || scanner::backup_content_hash(&payload)? != before
                 {
                     return Err(Error::invalid("备份时源文件发生变化"));
                 }
@@ -247,8 +253,8 @@ impl Studio {
                 )?;
             } else {
                 copy_exact(&payload, &record.original_path, 0)?;
-                if scanner::dir_content_hash(&payload)?
-                    != scanner::dir_content_hash(&record.original_path)?
+                if scanner::backup_content_hash(&payload)?
+                    != scanner::backup_content_hash(&record.original_path)?
                 {
                     return Err(Error::invalid("恢复校验失败"));
                 }

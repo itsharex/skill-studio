@@ -117,13 +117,11 @@ pub fn run() {
                 }
                 Err(err) => {
                     init_status::set(format!(
-                        "配置加载失败：{err}。可在 {} 里找回历史备份。",
+                        "配置加载失败：{err}。请在设置中恢复备份后重启应用；历史备份位于 {}。",
                         config_dir.join("backups").display()
                     ));
                     // 兜底：用默认配置让界面能起来，但不落盘覆盖坏文件
-                    let fallback =
-                        AppState::bootstrap(Store::new(config_dir.join(".recovery-scratch")))
-                            .expect("兜底配置目录初始化失败");
+                    let fallback = AppState::recovery(Store::new(config_dir.clone()));
                     app.manage(fallback);
                 }
             }

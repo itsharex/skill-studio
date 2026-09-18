@@ -31,21 +31,6 @@ export const STATUS_HINT: Record<LinkStatus, string> = {
   conflict: "该位置的链接指向了别的地方",
 };
 
-/** 状态点的颜色。蓝=正常可用，emerald=真身，amber=需处理，红=冲突，灰=未注册 */
-export const STATUS_DOT_CLASS: Record<LinkStatus, string> = {
-  notLinked: "bg-gray-300 dark:bg-gray-700",
-  source: "bg-emerald-500",
-  linked: "bg-blue-500",
-  copied: "bg-blue-500",
-  copyStale: "bg-amber-500",
-  copyModified: "bg-amber-500",
-  copyConflict: "bg-red-500",
-  copyDamaged: "bg-red-500",
-  foreign: "bg-red-500",
-  brokenLink: "bg-red-500",
-  conflict: "bg-red-500",
-};
-
 /**
  * 把批量操作报告变成一条 toast。
  *

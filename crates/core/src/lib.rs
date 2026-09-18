@@ -11,7 +11,3 @@ pub mod services;
 
 pub use error::{Error, Result};
 pub use models::*;
-
-pub fn core_version() -> &'static str {
-    env!("CARGO_PKG_VERSION")
-}

@@ -531,7 +531,7 @@ function ProjectDetail({
     await Promise.all([
       qc.invalidateQueries({ queryKey: queryKeys.projects }),
       qc.invalidateQueries({ queryKey: queryKeys.skills }),
-      qc.invalidateQueries({ queryKey: ["skill-backups"] }),
+      qc.invalidateQueries({ queryKey: queryKeys.skillBackups }),
     ]);
   };
   const collectLocal = useMutation({

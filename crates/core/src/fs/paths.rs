@@ -35,21 +35,6 @@ pub fn config_dir() -> PathBuf {
     home_dir().join(APP_DIR_NAME)
 }
 
-/// 配置文件 `~/.skill-studio/config.json`
-pub fn config_file() -> PathBuf {
-    config_dir().join("config.json")
-}
-
-/// Hub 模式下 skill 真身所在 `~/.skill-studio/skills`
-pub fn hub_skills_dir() -> PathBuf {
-    config_dir().join("skills")
-}
-
-/// 配置备份目录
-pub fn backups_dir() -> PathBuf {
-    config_dir().join("backups")
-}
-
 /// 读取环境变量指定的目录覆盖（如 `CLAUDE_CONFIG_DIR` / `CODEX_HOME`）。
 /// 空字符串视为未设置。
 pub fn env_dir_override(var: &str) -> Option<PathBuf> {
@@ -70,11 +55,13 @@ pub fn normalize_path_lexically(path: &Path) -> PathBuf {
     for component in path.components() {
         match component {
             Component::CurDir => {}
-            Component::ParentDir => {
-                if !normalized.pop() {
-                    normalized.push(component.as_os_str());
+            Component::ParentDir => match normalized.components().next_back() {
+                Some(Component::Normal(_)) => {
+                    normalized.pop();
                 }
-            }
+                Some(Component::RootDir | Component::Prefix(_)) => {}
+                _ => normalized.push(component.as_os_str()),
+            },
             Component::Normal(part) => normalized.push(part),
             Component::RootDir | Component::Prefix(_) => normalized.push(component.as_os_str()),
         }
@@ -338,5 +325,22 @@ mod tests {
         assert!(!paths_overlap(&dangling, &dir.path().join("other")));
         // 同一条目，应判为重叠
         assert!(paths_overlap(&dangling, &dangling));
+    }
+}
+
+#[cfg(test)]
+mod audit_regressions {
+    use super::*;
+    #[test]
+    fn preserves_leading_parent_components() {
+        assert_eq!(
+            normalize_path_lexically(Path::new("../../a/b")),
+            PathBuf::from("../../a/b")
+        );
+        #[cfg(unix)]
+        assert_eq!(
+            normalize_path_lexically(Path::new("/../../a")),
+            PathBuf::from("/a")
+        );
     }
 }

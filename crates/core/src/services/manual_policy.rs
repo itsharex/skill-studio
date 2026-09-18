@@ -5,7 +5,7 @@ use super::{
     transaction::Transaction,
 };
 use crate::{
-    fs::{atomic, paths},
+    fs::paths,
     models::{
         agent::{require_agent, AGENTS},
         config::AppConfig,
@@ -140,15 +140,7 @@ impl Studio {
                 let path = agent
                     .toggle_config_path(&config.settings.agent_dir_overrides)
                     .ok_or_else(|| Error::invalid("Agent 不支持启停"))?;
-                let bytes = match std::fs::read(&path) {
-                    Ok(bytes) => Some(bytes),
-                    Err(e) if e.kind() == std::io::ErrorKind::NotFound => None,
-                    Err(e) => return Err(Error::io(&path, e)),
-                };
-                tx.reserve(&path)?;
-                if let Some(bytes) = bytes {
-                    atomic::atomic_write(&path, &bytes)?;
-                }
+                tx.reserve_file_for_update(&path)?;
                 for (_, name, document, enabled) in toggles {
                     native_toggle::set_skill_enabled_at(
                         agent,

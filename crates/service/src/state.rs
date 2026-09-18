@@ -11,6 +11,7 @@ use skill_studio_core::Result;
 pub struct AppState {
     studio: Arc<Studio>,
     config: Arc<RwLock<AppConfig>>,
+    recovery_only: bool,
 }
 
 impl AppState {
@@ -21,7 +22,25 @@ impl AppState {
         Ok(Self {
             studio: Arc::new(studio),
             config: Arc::new(RwLock::new(config)),
+            recovery_only: false,
         })
+    }
+
+    pub fn recovery(store: Store) -> Self {
+        Self {
+            studio: Arc::new(Studio::new(store)),
+            config: Arc::new(RwLock::new(AppConfig::default())),
+            recovery_only: true,
+        }
+    }
+
+    pub fn ensure_writable(&self) -> Result<()> {
+        if self.recovery_only {
+            return Err(skill_studio_core::Error::invalid(
+                "配置尚未正常加载，请先恢复配置备份并重启应用",
+            ));
+        }
+        Ok(())
     }
 
     pub fn studio(&self) -> &Studio {
@@ -51,6 +70,7 @@ impl AppState {
     where
         F: FnOnce(&Studio, &mut AppConfig) -> Result<T>,
     {
+        self.ensure_writable()?;
         let mut guard = self.config_mut();
         let mut next = guard.clone();
         let outcome = f(&self.studio, &mut next)?;
@@ -59,11 +79,24 @@ impl AppState {
         Ok(outcome)
     }
 
+    pub fn register_skills(
+        &self,
+        ids: &[String],
+        agents: &[String],
+        mode: Option<skill_studio_core::models::skill::LinkMode>,
+        force: bool,
+    ) -> Result<skill_studio_core::models::skill::LinkReport> {
+        self.ensure_writable()?;
+        self.studio
+            .register(&mut self.config_mut(), ids, agents, mode, force)
+    }
+
     pub fn write_project(
         &self,
         id: &str,
         selection: Option<skill_studio_core::models::project::ProjectSelection>,
     ) -> Result<skill_studio_core::models::skill::LinkReport> {
+        self.ensure_writable()?;
         let mut guard = self.config_mut();
         self.studio.write_project(&mut guard, id, selection)
     }
@@ -73,6 +106,7 @@ impl AppState {
         id: &str,
         enabled: bool,
     ) -> Result<skill_studio_core::models::skill::LinkReport> {
+        self.ensure_writable()?;
         self.studio
             .set_project_enabled(&mut self.config_mut(), id, enabled)
     }
@@ -98,6 +132,7 @@ impl AppState {
 
     /// Hub adoption persists its own filesystem/config transaction under the write lock.
     pub fn adopt_to_hub(&self, skill_id: &str) -> Result<skill_studio_core::models::skill::Skill> {
+        self.ensure_writable()?;
         let mut guard = self.config_mut();
         self.studio.adopt_to_hub(&mut guard, skill_id)
     }
@@ -106,6 +141,7 @@ impl AppState {
         &self,
         prepared: &skill_studio_core::services::marketplace::PreparedSkill,
     ) -> Result<skill_studio_core::models::skill::Skill> {
+        self.ensure_writable()?;
         let mut guard = self.config_mut();
         self.studio.install_catalog_skill(&mut guard, prepared)
     }
@@ -114,11 +150,13 @@ impl AppState {
         &self,
         skill_id: &str,
     ) -> Result<skill_studio_core::models::skill::Skill> {
+        self.ensure_writable()?;
         let mut guard = self.config_mut();
         self.studio.release_from_hub(&mut guard, skill_id)
     }
 
     pub fn set_manual_skill_policy(&self, preserve: bool) -> Result<()> {
+        self.ensure_writable()?;
         let mut guard = self.config_mut();
         let mut next = guard.clone();
         next.settings.preserve_manual_skills = preserve;
@@ -128,12 +166,14 @@ impl AppState {
     }
 
     pub fn scan_with_policy(&self) -> Result<Vec<skill_studio_core::services::studio::SkillView>> {
+        self.ensure_writable()?;
         let mut guard = self.config_mut();
         self.studio.reconcile_manual_policy(&mut guard, false)?;
         self.studio.scan_skills(&guard)
     }
 
     pub fn set_managed_agents(&self, disabled: &[String]) -> Result<()> {
+        self.ensure_writable()?;
         use std::collections::HashSet;
         let mut guard = self.config_mut();
         for id in disabled {
@@ -153,6 +193,7 @@ impl AppState {
     }
 
     pub fn activate_agent_group(&self, agent_id: &str, group_id: Option<&str>) -> Result<()> {
+        self.ensure_writable()?;
         let mut guard = self.config_mut();
         self.studio
             .activate_agent_group(&mut guard, agent_id, group_id)
@@ -164,16 +205,8 @@ impl AppState {
     where
         F: FnOnce(&Studio, &AppConfig) -> Result<T>,
     {
+        self.ensure_writable()?;
         let guard = self.config_mut();
-        f(&self.studio, &guard)
-    }
-
-    /// 只读操作
-    pub fn with_config<T, F>(&self, f: F) -> Result<T>
-    where
-        F: FnOnce(&Studio, &AppConfig) -> Result<T>,
-    {
-        let guard = self.config();
         f(&self.studio, &guard)
     }
 }
@@ -227,5 +260,28 @@ mod tests {
             state.studio().load_config().unwrap().settings.language,
             "restored"
         );
+    }
+}
+
+#[cfg(test)]
+mod audit_regressions {
+    use super::*;
+    #[test]
+    fn recovery_keeps_real_backups_and_blocks_management() {
+        let dir = tempfile::tempdir().unwrap();
+        let store = Store::new(dir.path().into());
+        store.save(&AppConfig::default()).unwrap();
+        store.save(&AppConfig::default()).unwrap();
+        std::fs::write(store.config_path(), "broken").unwrap();
+        assert!(AppState::bootstrap(store.clone()).is_err());
+        let state = AppState::recovery(store.clone());
+        assert_eq!(state.studio().store().dir(), store.dir());
+        let backups = state.studio().store().list_backups();
+        assert!(!backups.is_empty());
+        assert!(state.mutate(|_, _| Ok(())).is_err());
+        assert!(state.scan_with_policy().is_err());
+        state.restore_backup(&backups[0]).unwrap();
+        assert!(AppState::bootstrap(store).is_ok());
+        assert!(!dir.path().join(".recovery-scratch").exists());
     }
 }

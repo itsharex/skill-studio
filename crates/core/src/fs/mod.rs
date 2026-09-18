@@ -6,7 +6,6 @@ pub use atomic::{
     write_json_file_with_contents, write_text_file,
 };
 pub use paths::{
-    backups_dir, comparable_path_key, config_dir, config_file, env_dir_override, home_dir,
-    hub_skills_dir, is_same_path, normalize_path_lexically, path_is_within, paths_alias,
-    paths_overlap,
+    comparable_path_key, config_dir, env_dir_override, home_dir, is_same_path,
+    normalize_path_lexically, path_is_within, paths_alias, paths_overlap,
 };
