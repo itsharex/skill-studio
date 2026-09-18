@@ -145,14 +145,28 @@ pub fn paths_alias(left: &Path, right: &Path) -> bool {
 ///
 /// `canonicalize()` 会跟随最后一段，因此对**悬空 symlink** 直接失败。分别解析父目录
 /// 再拼上文件名，才能保证两个互为别名的根不会删掉同一个目录项。
+///
+/// 代价是末段没有解析，**穿过末段 symlink 的包含关系看不见** —— 所以它只能当
+/// [`resolved_entry`] 的兜底，不能单独用来判断重叠。
 fn canonical_entry(path: &Path) -> Option<PathBuf> {
     let parent = path.parent()?;
     let name = path.file_name()?;
     Some(parent.canonicalize().ok()?.join(name))
 }
 
+/// 尽可能完整解析的路径：整条能解析就整条解析，否则退回只解析父目录。
+///
+/// 末段是活的 symlink 时，只有整条解析才能看出「一方其实在另一方内部」；末段悬空
+/// 或尚不存在时 `canonicalize()` 会失败，此时父目录解析是唯一可用的近似。
+fn resolved_entry(path: &Path) -> Option<PathBuf> {
+    path.canonicalize().ok().or_else(|| canonical_entry(path))
+}
+
 /// 两个目录是否重叠（相同、互为别名，或一方在另一方内部）。
 /// Hub 目录与任何 agent 的 skills 目录重叠时必须拒绝，否则同步会自己吃自己。
+///
+/// 前两级都是词法比较，而文件系统不是词法的：hub 指向 `…/b` 时，`…/b/skills` 既不
+/// 与它相等、也不是它的文本前缀。所以第三级必须拿**完整解析后**的路径再比一次。
 pub fn paths_overlap(left: &Path, right: &Path) -> bool {
     if paths_alias(left, right) {
         return true;
@@ -160,7 +174,7 @@ pub fn paths_overlap(left: &Path, right: &Path) -> bool {
     if path_is_within(left, right) || path_is_within(right, left) {
         return true;
     }
-    match (canonical_entry(left), canonical_entry(right)) {
+    match (resolved_entry(left), resolved_entry(right)) {
         (Some(l), Some(r)) => {
             paths_alias(&l, &r) || path_is_within(&l, &r) || path_is_within(&r, &l)
         }
@@ -268,6 +282,46 @@ mod tests {
         let link = dir.path().join("link");
         std::os::unix::fs::symlink(&real, &link).unwrap();
         assert!(paths_overlap(&real, &link));
+    }
+
+    /// `linker.rs` 把「Hub 目录不能与任何 agent 的 skills 目录重叠」列为安全底线。
+    /// hub 末段是 symlink 时，agent 目录可以真的躺在 hub 里面，而相等判定、词法前缀
+    /// 判定、以及只解析父目录的判定三者都看不见。
+    #[cfg(unix)]
+    #[test]
+    fn paths_overlap_sees_through_a_symlinked_final_component() {
+        let dir = tempfile::tempdir().unwrap();
+        let real = dir.path().join("b");
+        let agent = real.join("skills");
+        std::fs::create_dir_all(&agent).unwrap();
+        std::fs::create_dir(dir.path().join("a")).unwrap();
+        let hub = dir.path().join("a/link");
+        std::os::unix::fs::symlink(&real, &hub).unwrap();
+
+        // agent 目录确实在 hub 内部……
+        assert_eq!(
+            hub.join("skills").canonicalize().unwrap(),
+            agent.canonicalize().unwrap()
+        );
+        // ……那么护栏就必须这么说，两种参数顺序都要成立
+        assert!(paths_overlap(&hub, &agent));
+        assert!(paths_overlap(&agent, &hub));
+    }
+
+    /// 同样的形状，但 agent 目录尚未创建（agent 刚装上、还没跑过）。这一侧
+    /// `canonicalize()` 会失败，得靠父目录兜底把完整解析过的 hub 接上。
+    #[cfg(unix)]
+    #[test]
+    fn paths_overlap_sees_through_a_symlink_when_the_other_side_is_absent() {
+        let dir = tempfile::tempdir().unwrap();
+        let real = dir.path().join("b");
+        std::fs::create_dir(&real).unwrap();
+        std::fs::create_dir(dir.path().join("a")).unwrap();
+        let hub = dir.path().join("a/link");
+        std::os::unix::fs::symlink(&real, &hub).unwrap();
+        let agent = real.join("skills");
+        assert!(agent.canonicalize().is_err());
+        assert!(paths_overlap(&hub, &agent));
     }
 
     #[cfg(unix)]
