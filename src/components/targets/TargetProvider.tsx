@@ -17,6 +17,8 @@ import {
   Folder,
   Loader2,
   Monitor,
+  Network,
+  Power,
   Pencil,
   Plus,
   Server,
@@ -26,6 +28,7 @@ import {
 import { toast } from "sonner";
 import { SettingCard, SettingsSection } from "@/components/common/SettingCard";
 import { Button } from "@/components/ui/button";
+import { Switch } from "@/components/ui/switch";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import {
@@ -72,7 +75,19 @@ type DirectoryRequest = {
   resolve: (path: string | null) => void;
   serverId: string;
 };
+// Desktop-only preference: independent of the currently managed machine.
+const SERVER_CONNECTIONS_KEY = "skill-studio:server-connections-enabled";
+function readServerConnectionsEnabled() {
+  try {
+    return localStorage.getItem(SERVER_CONNECTIONS_KEY) !== "false";
+  } catch {
+    return true;
+  }
+}
 const Context = createContext<{
+  serverConnectionsEnabled: boolean;
+  changingConnections: boolean;
+  setServerConnectionsEnabled: (enabled: boolean) => void;
   servers: ServerProfile[];
   connecting: string | null;
   stage: string;
@@ -87,10 +102,19 @@ export const useTarget = () =>
   useSyncExternalStore(subscribeTransport, getTarget, getTarget);
 export const useTargetBusy = () =>
   useSyncExternalStore(subscribeTransport, getPending, getPending);
-export const useTargetConnecting = () => !!useContext(Context)?.connecting;
+export const useTargetConnecting = () => {
+  const ctx = useContext(Context);
+  return !!ctx?.connecting || !!ctx?.changingConnections;
+};
 
 export function TargetProvider({ children }: { children: React.ReactNode }) {
   const active = useTarget();
+  const [serverConnectionsEnabled, setServerConnectionsEnabledState] = useState(
+    readServerConnectionsEnabled,
+  );
+  const connectionsAllowed = useRef(serverConnectionsEnabled);
+  const [changingConnections, setChangingConnections] = useState(false);
+  const changingConnectionsRef = useRef(false);
   const requestNavigation = useNavigationGuard();
   const [servers, setServers] = useState<ServerProfile[]>([]);
   const [connecting, setConnecting] = useState<string | null>(null);
@@ -127,9 +151,10 @@ export function TargetProvider({ children }: { children: React.ReactNode }) {
 
   useEffect(() => {
     if (!("__TAURI_INTERNALS__" in window)) return;
-    void nativeInvoke<ServerProfile[]>("list_servers")
-      .then(setServers)
-      .catch((e) => setError(String(e)));
+    if (serverConnectionsEnabled)
+      void nativeInvoke<ServerProfile[]>("list_servers")
+        .then(setServers)
+        .catch((e) => setError(String(e)));
     const subscriptions = [
       listen<Prompt>("ssh-prompt", (e) => {
         setPrompt(e.payload);
@@ -142,7 +167,7 @@ export function TargetProvider({ children }: { children: React.ReactNode }) {
     return () => {
       subscriptions.forEach((p) => void p.then((off) => off()));
     };
-  }, []);
+  }, [serverConnectionsEnabled]);
 
   useEffect(() => {
     setRemoteDialogs(
@@ -198,9 +223,55 @@ export function TargetProvider({ children }: { children: React.ReactNode }) {
     setDirectory(null);
   };
 
+  const changeServerConnections = async (enabled: boolean) => {
+    if (getPending() || connecting || changingConnectionsRef.current) {
+      toast.info("正在处理当前目标的操作，请稍候");
+      return;
+    }
+    changingConnectionsRef.current = true;
+    setChangingConnections(true);
+    try {
+      if (!enabled) {
+        const current = getTarget();
+        const ids = new Set(servers.map((server) => server.id));
+        if (current.id !== "local") ids.add(current.id);
+        for (const serverId of ids) {
+          await nativeInvoke("disconnect_server", { serverId });
+          if (getTarget().id === serverId)
+            setTarget({ ...getTarget(), connected: false });
+        }
+        await clients.current.get(current.id)?.cancelQueries();
+        setTarget({ id: "local", name: "本机", connected: true });
+        setEditing(null);
+        directory?.resolve(null);
+        setDirectory(null);
+        for (const [id, client] of clients.current) {
+          if (id !== "local") {
+            client.clear();
+            clients.current.delete(id);
+          }
+        }
+      }
+      localStorage.setItem(SERVER_CONNECTIONS_KEY, String(enabled));
+      connectionsAllowed.current = enabled;
+      setServerConnectionsEnabledState(enabled);
+      setError(null);
+      setFailedServer(null);
+    } catch (e) {
+      setError(String(e));
+    } finally {
+      changingConnectionsRef.current = false;
+      setChangingConnections(false);
+    }
+  };
+  const setServerConnectionsEnabled = (enabled: boolean) => {
+    requestNavigation(() => void changeServerConnections(enabled));
+  };
+
   const choose = async (profile?: ServerProfile) => {
+    if (profile && !connectionsAllowed.current) return;
     const current = getTarget();
-    if (getPending() || connecting) {
+    if (getPending() || connecting || changingConnectionsRef.current) {
       toast.info("正在处理当前目标的操作，请稍候");
       return;
     }
@@ -239,7 +310,8 @@ export function TargetProvider({ children }: { children: React.ReactNode }) {
       setError(String(e));
     }
   };
-  const edit = (profile?: ServerProfile) =>
+  const edit = (profile?: ServerProfile) => {
+    if (!connectionsAllowed.current || changingConnectionsRef.current) return;
     setEditing(
       profile
         ? { ...profile }
@@ -255,7 +327,9 @@ export function TargetProvider({ children }: { children: React.ReactNode }) {
             helperBinary: null,
           },
     );
+  };
   const save = () => {
+    if (!connectionsAllowed.current || changingConnectionsRef.current) return;
     if (getPending() || connecting) {
       toast.info("正在处理当前目标的操作，请稍候");
       return;
@@ -263,7 +337,12 @@ export function TargetProvider({ children }: { children: React.ReactNode }) {
     requestNavigation(() => void saveAndConnect());
   };
   const saveAndConnect = async () => {
-    if (!editing) return;
+    if (
+      !editing ||
+      !connectionsAllowed.current ||
+      changingConnectionsRef.current
+    )
+      return;
     const next = [...servers.filter((s) => s.id !== editing.id), editing];
     try {
       await nativeInvoke("save_servers", { servers: next });
@@ -279,6 +358,7 @@ export function TargetProvider({ children }: { children: React.ReactNode }) {
     }
   };
   const remove = async (profile: ServerProfile) => {
+    if (!connectionsAllowed.current || changingConnectionsRef.current) return;
     if (getPending()) {
       toast.info("正在处理操作，请稍候");
       return;
@@ -316,6 +396,9 @@ export function TargetProvider({ children }: { children: React.ReactNode }) {
   return (
     <Context.Provider
       value={{
+        serverConnectionsEnabled,
+        changingConnections,
+        setServerConnectionsEnabled,
         servers,
         connecting,
         stage,
@@ -682,7 +765,7 @@ export function TargetPicker() {
   const active = useTarget();
   const pending = useTargetBusy();
   const guard = useNavigationGuard();
-  if (!ctx) return null;
+  if (!ctx || !ctx.serverConnectionsEnabled) return null;
   return (
     <DropdownMenu>
       <DropdownMenuTrigger asChild>
@@ -698,7 +781,7 @@ export function TargetPicker() {
                   ? "已连接"
                   : "已断开，点击重新连接"
           }
-          disabled={!!ctx.connecting || pending > 0}
+          disabled={!!ctx.connecting || ctx.changingConnections || pending > 0}
         >
           {ctx.connecting ? (
             <Loader2 className="h-5 w-5 animate-spin" />
@@ -784,10 +867,10 @@ export function TargetPicker() {
 export function ServerSettings() {
   const ctx = useContext(Context);
   const guard = useNavigationGuard();
-  if (!ctx) return null;
+  if (!ctx || !ctx.serverConnectionsEnabled) return null;
   return (
     <SettingsSection
-      title="服务器连接"
+      title="服务器设置"
       icon={<Server />}
       action={
         <Button onClick={() => ctx.edit()}>
@@ -831,6 +914,30 @@ export function ServerSettings() {
           </Button>
         </SettingCard>
       ))}
+    </SettingsSection>
+  );
+}
+
+export function ServerConnectionSetting() {
+  const ctx = useContext(Context);
+  const pending = useTargetBusy();
+  if (!ctx) return null;
+  return (
+    <SettingsSection title="远程管理" icon={<Network />}>
+      <SettingCard
+        title={
+          <label htmlFor="server-connections-enabled">启用服务器连接</label>
+        }
+        description="关闭后仅管理本机，隐藏主页服务器选择器和下方连接配置；已保存的连接记录会保留。"
+        icon={<Power />}
+      >
+        <Switch
+          id="server-connections-enabled"
+          checked={ctx.serverConnectionsEnabled}
+          disabled={ctx.changingConnections || !!ctx.connecting || pending > 0}
+          onCheckedChange={ctx.setServerConnectionsEnabled}
+        />
+      </SettingCard>
     </SettingsSection>
   );
 }

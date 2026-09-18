@@ -12,7 +12,7 @@ import { InstallSkillsPage } from "@/pages/InstallSkillsPage";
 import { PageToolsContext } from "@/components/common/PageTools";
 import { useEffect, useMemo, useRef, useState } from "react";
 import { useQueryClient } from "@tanstack/react-query";
-import { motion } from "framer-motion";
+import { motion, useReducedMotion } from "framer-motion";
 import {
   ArrowLeft,
   FolderGit2,
@@ -58,6 +58,7 @@ export default function App() {
   );
 }
 function AppContent() {
+  const reduceMotion = useReducedMotion();
   const target = useTarget();
   const connecting = useTargetConnecting();
   const requestNavigation = useNavigationGuard();
@@ -254,10 +255,17 @@ function AppContent() {
               )}
               <TargetPicker />
               {isSettings && (
-                <p className="min-w-0 flex-1 text-xs leading-relaxed text-muted-foreground">
+                <motion.p
+                  layout="position"
+                  transition={{
+                    duration: reduceMotion ? 0 : 0.2,
+                    ease: "easeOut",
+                  }}
+                  className="min-w-0 flex-1 text-xs leading-relaxed text-muted-foreground"
+                >
                   当前管理目标：{target.name} ·
                   目录、管理策略与备份属于此目标；外观与服务器连接属于桌面应用。
-                </p>
+                </motion.p>
               )}
             </div>
             {!isSubpage && (

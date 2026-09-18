@@ -1,4 +1,7 @@
-import { ServerSettings } from "@/components/targets/TargetProvider";
+import {
+  ServerSettings,
+  ServerConnectionSetting,
+} from "@/components/targets/TargetProvider";
 import { openUrl } from "@tauri-apps/plugin-opener";
 import { toast } from "sonner";
 import { SkillStudioIcon } from "@/components/common/SkillStudioIcon";
@@ -105,7 +108,8 @@ export function SettingsPage() {
         </TabsList>
 
         <div className="-mx-1 min-h-0 flex-1 overflow-y-auto px-1 pb-8 pt-1">
-          <TabsContent value="servers">
+          <TabsContent value="servers" className="space-y-7">
+            <ServerConnectionSetting />
             <ServerSettings />
           </TabsContent>
           <TabsContent value="general" className="space-y-7">
