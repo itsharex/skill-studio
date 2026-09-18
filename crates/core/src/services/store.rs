@@ -5,6 +5,7 @@
 
 use std::path::{Path, PathBuf};
 
+use super::transaction::Transaction;
 use crate::error::{Error, Result};
 use crate::fs::{atomic, paths};
 use crate::models::config::{AppConfig, CONFIG_VERSION};
@@ -94,6 +95,17 @@ impl Store {
     pub fn save(&self, config: &AppConfig) -> Result<()> {
         self.rotate_backup(config.settings.backup_keep)?;
         atomic::write_json_file(&self.config_path(), config)
+    }
+
+    /// 把 config.json 纳入 `tx` 的回滚日志，并在它被移走之前先轮转一份备份。
+    ///
+    /// [`Self::save`] 的备份是从 config.json 的**当前内容**复制出来的，而
+    /// `Transaction::reserve` 会把目标 rename 到兄弟位置。所以"先 reserve 再 save"时
+    /// `rotate_backup` 会 stat 不到文件、直接静默跳过 —— 分组切换、Hub 托管/还原、项目
+    /// 写入这些最该能回退的操作，恰好一份备份都不留。顺序必须是先备份、再 reserve。
+    pub fn reserve_config(&self, tx: &mut Transaction, config: &AppConfig) -> Result<()> {
+        self.rotate_backup(config.settings.backup_keep)?;
+        tx.reserve(&self.config_path())
     }
 
     /// 把当前 config.json 复制一份到 backups/，并只保留最近 `keep` 份。
@@ -241,6 +253,30 @@ mod tests {
         }
         let backups = s.list_backups();
         assert_eq!(backups.len(), 3, "只保留最近 3 份，实际 {}", backups.len());
+    }
+
+    /// 事务性写入同样必须留下备份。`reserve` 会把 config.json rename 到兄弟位置，
+    /// 所以"先 reserve 再 save"时 `rotate_backup` 会 stat 不到文件而静默跳过 ——
+    /// 而分组切换、Hub 托管/还原、项目写入走的正是这条路径。
+    #[test]
+    fn reserving_config_in_a_transaction_still_leaves_a_backup() {
+        let (_t, s) = store();
+        let mut cfg = AppConfig::default();
+        cfg.settings.backup_keep = 3;
+        cfg.groups.push(Group::new("g1".into(), "旧".into()));
+        s.save(&cfg).unwrap();
+        assert!(s.list_backups().is_empty(), "首次写入没有旧文件可备份");
+
+        let mut next = cfg.clone();
+        next.groups = vec![Group::new("g2".into(), "新".into())];
+        let mut tx = Transaction::begin(s.dir().join("group-switch.json")).unwrap();
+        s.reserve_config(&mut tx, &next).unwrap();
+        s.save(&next).unwrap();
+        tx.commit().unwrap();
+
+        let backups = s.list_backups();
+        assert_eq!(backups.len(), 1, "事务性写入必须留下一份备份");
+        assert_eq!(s.restore_backup(&backups[0]).unwrap().groups[0].name, "旧");
     }
 
     #[test]

@@ -261,7 +261,7 @@ impl Studio {
                 });
             }
             next.project_mut(id).unwrap().managed_entries = entries;
-            tx.reserve(&self.store().config_path())?;
+            self.store().reserve_config(&mut tx, &next)?;
             self.save_config(&next)?;
             Ok(report)
         })();

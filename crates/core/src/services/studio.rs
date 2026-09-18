@@ -1073,7 +1073,7 @@ impl Studio {
                 crate::fs::atomic::write_json_file(path, sidecar)?;
             }
             // Configuration is part of the same undo journal as filesystem changes.
-            tx.reserve(&self.store.config_path())?;
+            self.store.reserve_config(&mut tx, &next)?;
             self.store.save(&next)?;
             Ok(())
         })();

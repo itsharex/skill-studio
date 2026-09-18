@@ -462,7 +462,7 @@ impl Studio {
                 }
                 next.registrations.retain(|_, regs| !regs.is_empty());
             }
-            tx.reserve(&self.store().config_path())?;
+            self.store().reserve_config(&mut tx, &next)?;
             self.save_config(&next)?;
             Ok(())
         })();

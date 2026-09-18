@@ -651,3 +651,37 @@ fn restored_shared_skill_keeps_one_identity_and_group_policy_after_reenable() {
         "modified originals must stay independent"
     );
 }
+
+/// 分组切换把 registrations/active_groups 整片重写，是最该能回退的操作之一，
+/// 而它走的是"先把 config.json 纳入回滚日志、再写新内容"这条路径 —— 顺序错了的话
+/// `backups/` 里什么都不会多出来，用户在「维护」页找不回切换前的配置。
+#[test]
+#[serial]
+fn activating_a_group_leaves_a_restorable_config_backup() {
+    let env = Env::new();
+    let studio = env.studio();
+    let mut c = studio.load_config().unwrap();
+    make(&env, &studio, &mut c, "a", "codex", &["one"]);
+    studio.save_config(&c).unwrap();
+    let before = studio.store().list_backups().len();
+
+    studio
+        .activate_agent_group(&mut c, "codex", Some("a"))
+        .unwrap();
+
+    let backups = studio.store().list_backups();
+    assert!(
+        backups.len() > before,
+        "分组切换应留下备份，切换前 {before} 份，切换后 {} 份",
+        backups.len()
+    );
+    // 备份得是能读回来的完整配置，不是空壳
+    let restored = studio
+        .store()
+        .restore_backup(backups.last().unwrap())
+        .unwrap();
+    assert!(restored
+        .groups
+        .iter()
+        .any(|g| g.id == "a" && g.agent_id.as_deref() == Some("codex")));
+}

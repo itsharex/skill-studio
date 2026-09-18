@@ -321,7 +321,7 @@ impl Studio {
                 .find(|v| v.skill.id == id)
                 .ok_or_else(|| Error::invalid("安装后无法识别 skill"))?
                 .skill;
-            tx.reserve(&self.store().config_path())?;
+            self.store().reserve_config(&mut tx, &next)?;
             self.save_config(&next)?;
             Ok(skill)
         })();
