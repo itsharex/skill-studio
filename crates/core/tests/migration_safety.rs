@@ -282,3 +282,47 @@ fn replacing_a_copied_symlink_with_regular_text_is_detected() {
     );
     assert!(linker::register(&source, &dest, LinkMode::Copy, "id", false).is_err());
 }
+
+/// `.skill-studio-replace-*.json` files are gitignored, not hidden, so they travel
+/// with a cloned repository — and startup sweeps every bound project's agent dir for
+/// them by filename alone, then executes the absolute paths inside. A journal that
+/// names a path outside its own directory must be refused, and startup must survive
+/// refusing it.
+#[test]
+#[serial]
+fn a_project_journal_naming_an_outside_path_is_refused_without_blocking_startup() {
+    let env = Env::new();
+    let studio = env.studio();
+    let mut config = studio.load_config().unwrap();
+    let root = env.path().join("cloned-repo");
+    let scanned = root.join(".agents/skills");
+    fs::create_dir_all(&scanned).unwrap();
+    config
+        .projects
+        .push(ProjectBinding::new("p".into(), "P".into(), root));
+    studio.save_config(&config).unwrap();
+
+    let outside = env.path().join("precious");
+    fs::create_dir(&outside).unwrap();
+    fs::write(outside.join("keep.txt"), "mine").unwrap();
+    let journal = scanned.join(".skill-studio-replace-demo.json");
+    fs::write(
+        &journal,
+        serde_json::to_vec(&serde_json::json!({
+            "journal": journal,
+            "committed": false,
+            "entries": [{
+                "target": outside,
+                "backup": env.path().join("nowhere"),
+                "existed": false,
+            }],
+        }))
+        .unwrap(),
+    )
+    .unwrap();
+
+    // Startup still completes, and the directory the journal pointed at is untouched.
+    studio.load_config().unwrap();
+    assert!(outside.join("keep.txt").is_file());
+    assert!(journal.is_file(), "越界的日志应原样保留，不静默删除");
+}

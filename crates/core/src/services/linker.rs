@@ -384,7 +384,7 @@ pub(crate) fn recover_replacements(root: &Path) -> Result<()> {
         let path = entry.map_err(|e| Error::io(root, e))?.path();
         let name = path.file_name().unwrap().to_string_lossy();
         if name.starts_with(".skill-studio-replace-") && name.ends_with(".json") {
-            super::transaction::recover(&path)?;
+            super::transaction::recover_confined(&path)?;
         }
     }
     Ok(())

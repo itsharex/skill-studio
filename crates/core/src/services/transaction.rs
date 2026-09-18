@@ -3,12 +3,12 @@
 use super::scanner::is_symlink_or_junction;
 use crate::{
     error::{Error, Result},
-    fs::atomic,
+    fs::{atomic, paths},
 };
 use serde::{Deserialize, Serialize};
 use std::{
     fs,
-    path::{Path, PathBuf},
+    path::{Component, Path, PathBuf},
 };
 
 #[derive(Serialize, Deserialize)]
@@ -50,6 +50,19 @@ pub fn sibling(path: &Path, label: &str) -> PathBuf {
         label,
         std::process::id()
     ))
+}
+
+/// Whether `path` sits directly inside `dir`.
+///
+/// `..` is refused outright rather than normalized: `normalize_path_lexically`
+/// resolves it without consulting the filesystem, so a symlinked component makes the
+/// lexical answer disagree with the real one.
+fn is_direct_child(path: &Path, dir: &Path) -> bool {
+    if path.components().any(|c| matches!(c, Component::ParentDir)) {
+        return false;
+    }
+    path.parent()
+        .is_some_and(|parent| paths::is_same_path(parent, dir))
 }
 
 // The lock file is intentionally retained: unlinking it would allow two
@@ -124,6 +137,13 @@ impl Transaction {
     pub fn rollback(self) -> Result<()> {
         self.finish()
     }
+    /// The first target or backup that reaches outside `dir`, if any.
+    fn escaping_entry(&self, dir: &Path) -> Option<&Path> {
+        self.entries
+            .iter()
+            .flat_map(|e| [e.target.as_path(), e.backup.as_path()])
+            .find(|p| !is_direct_child(p, dir))
+    }
     fn finish(&self) -> Result<()> {
         for entry in self.entries.iter().rev() {
             if self.committed {
@@ -155,6 +175,42 @@ pub fn recover(journal: &Path) -> Result<()> {
         tx.finish()?;
     }
     Ok(())
+}
+
+/// Recover a journal that was found by scanning a directory the app does not own.
+///
+/// `recover` executes absolute paths taken from the journal's *contents*. That is
+/// sound for the store's own journals, which are opened by fixed path, but
+/// `.skill-studio-replace-*.json` files are different: they live inside user project
+/// trees and are gitignored rather than hidden, so they travel with a clone and their
+/// contents are untrusted input. A replacement journal only ever reserves `dest` plus
+/// its staging and backup siblings, so every path it carries must sit directly in the
+/// journal's own directory — which is taken from `journal`, not from the deserialized
+/// `journal` field, since that field is untrusted too.
+///
+/// A journal reaching past that is reported and left on disk rather than executed,
+/// and deliberately does not become an `Err`: `load_config` propagates one, so
+/// erroring here would trade arbitrary deletion for an app that cannot start.
+pub fn recover_confined(journal: &Path) -> Result<()> {
+    if !journal.try_exists().map_err(|e| Error::io(journal, e))? {
+        return Ok(());
+    }
+    let Some(dir) = journal.parent() else {
+        return Ok(());
+    };
+    let _lock = lock_journal(journal)?;
+    let Some(tx) = atomic::read_json_file::<Transaction>(journal)? else {
+        return Ok(());
+    };
+    if let Some(escaping) = tx.escaping_entry(dir) {
+        log::warn!(
+            "忽略 {}：条目 {} 越出所在目录，不执行恢复",
+            journal.display(),
+            escaping.display()
+        );
+        return Ok(());
+    }
+    tx.finish()
 }
 
 #[cfg(test)]
@@ -204,6 +260,63 @@ mod tests {
         assert_eq!(fs::read_to_string(&target).unwrap(), "new");
         assert_eq!(fs::read_dir(tmp.path()).unwrap().count(), 2);
     }
+    /// A replacement journal travels with a cloned repo, so its contents are
+    /// untrusted: an entry pointing outside the journal's own directory must be
+    /// refused, and refusing it must not take startup down with it.
+    #[test]
+    fn confined_recovery_refuses_entries_reaching_outside_the_journal_directory() {
+        let tmp = tempfile::tempdir().unwrap();
+        let scanned = tmp.path().join("repo/.claude/skills");
+        let outside = tmp.path().join("precious");
+        fs::create_dir_all(&scanned).unwrap();
+        fs::create_dir(&outside).unwrap();
+        fs::write(outside.join("keep.txt"), "mine").unwrap();
+        let journal = scanned.join(".skill-studio-replace-demo.json");
+        for target in [outside.clone(), scanned.join("..").join("escape")] {
+            fs::write(
+                &journal,
+                serde_json::to_vec(&serde_json::json!({
+                    "journal": journal,
+                    "committed": false,
+                    "entries": [{
+                        "target": target,
+                        "backup": tmp.path().join("nowhere"),
+                        "existed": false,
+                    }],
+                }))
+                .unwrap(),
+            )
+            .unwrap();
+            recover_confined(&journal).unwrap();
+            assert!(journal.is_file(), "越界的日志应原样保留，不静默删除");
+        }
+        assert!(outside.join("keep.txt").is_file());
+    }
+
+    /// The confinement check must not break the case it guards: an in-bounds
+    /// replacement journal still has to roll back. This path had no coverage at all.
+    #[test]
+    fn confined_recovery_still_rolls_back_an_in_bounds_journal() {
+        let tmp = tempfile::tempdir().unwrap();
+        let scanned = tmp.path().join("repo/.claude/skills");
+        fs::create_dir_all(&scanned).unwrap();
+        let dest = scanned.join("demo");
+        fs::create_dir(&dest).unwrap();
+        fs::write(dest.join("SKILL.md"), "original").unwrap();
+        let journal = scanned.join(".skill-studio-replace-demo.json");
+        let mut tx = Transaction::begin(journal.clone()).unwrap();
+        tx.reserve(&dest).unwrap();
+        fs::create_dir(&dest).unwrap();
+        fs::write(dest.join("SKILL.md"), "replacement").unwrap();
+        drop(tx); // Terminated before the commit marker.
+        recover_confined(&journal).unwrap();
+        assert_eq!(
+            fs::read_to_string(dest.join("SKILL.md")).unwrap(),
+            "original"
+        );
+        assert!(!journal.exists());
+    }
+
     #[test]
     fn failed_install_restores_original_target() {
         let tmp = tempfile::tempdir().unwrap();
