@@ -40,17 +40,23 @@ export function SettingCard({
   icon,
   children,
   details,
+  compact = false,
 }: {
   title: ReactNode;
   description?: ReactNode;
   icon: ReactNode;
   children?: ReactNode;
   details?: ReactNode;
+  compact?: boolean;
 }) {
   return (
-    <div className="rounded-xl border border-border-default bg-card px-5 py-4">
-      <div className="flex items-center gap-4">
-        <div className="flex h-10 w-10 shrink-0 items-center justify-center rounded-lg border border-border-default bg-background text-blue-500 [&>*]:h-5 [&>*]:w-5">
+    <div
+      className={`rounded-xl border border-border-default bg-card ${compact ? "px-4 py-3" : "px-5 py-4"}`}
+    >
+      <div className={`flex items-center ${compact ? "gap-3" : "gap-4"}`}>
+        <div
+          className={`flex shrink-0 items-center justify-center rounded-lg border border-border-default bg-background text-blue-500 [&>*]:h-5 [&>*]:w-5 ${compact ? "h-8 w-8" : "h-10 w-10"}`}
+        >
           {icon}
         </div>
         <div className="min-w-0 flex-1">
@@ -66,7 +72,11 @@ export function SettingCard({
         )}
       </div>
       {details && (
-        <div className="mt-4 border-t border-border/60 pt-4">{details}</div>
+        <div
+          className={`border-t border-border/60 ${compact ? "mt-3 pt-3" : "mt-4 pt-4"}`}
+        >
+          {details}
+        </div>
       )}
     </div>
   );

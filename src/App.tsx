@@ -14,6 +14,7 @@ import { useEffect, useMemo, useRef, useState } from "react";
 import { useQueryClient } from "@tanstack/react-query";
 import { motion, useReducedMotion } from "framer-motion";
 import {
+  Plug,
   ArrowLeft,
   FolderGit2,
   Layers,
@@ -31,6 +32,7 @@ import { isLinux, isWindows } from "@/lib/platform";
 import { AgentPage } from "@/pages/AgentGroupsPage";
 import { LibraryPage } from "@/pages/LibraryPage";
 import { ProjectsPage } from "@/pages/ProjectsPage";
+import { McpPage, mcpEditorTitle, type McpEditorState } from "@/pages/McpPage";
 import { SettingsPage } from "@/pages/SettingsPage";
 
 // macOS 把红绿灯悬浮在内容上（titleBarStyle: Overlay），需要让出 28px；
@@ -40,10 +42,11 @@ const DRAG_BAR_HEIGHT = isWindows() || isLinux() ? 0 : 28;
 const AGENT_PREFIX = "agent:";
 const VIEW_STORAGE_KEY = "skill-studio-view";
 
-type StaticView = "library" | "projects" | "settings" | "install";
+type StaticView = "mcp" | "library" | "projects" | "settings" | "install";
 type ViewId = StaticView | `agent:${string}`;
 
 const STATIC_TITLES: Record<StaticView, string> = {
+  mcp: "MCP Hub",
   library: "Skill Hub",
   projects: "项目",
   settings: "设置",
@@ -77,7 +80,8 @@ function AppContent() {
     // 设置是临时视图，重启后停在这里没有意义；
     // 旧版本可能已经把它写进过 localStorage，这里一并挡掉。
     return stored &&
-      (stored === "projects" ||
+      (stored === "mcp" ||
+        stored === "projects" ||
         stored === "library" ||
         stored.startsWith(AGENT_PREFIX))
       ? stored
@@ -85,8 +89,12 @@ function AppContent() {
   });
   const [searchHost, setSearchHost] = useState<HTMLDivElement | null>(null);
   const [addHost, setAddHost] = useState<HTMLDivElement | null>(null);
+  const [mcpEditor, setMcpEditor] = useState<McpEditorState | null>(null);
+  useEffect(() => setMcpEditor(null), [target.id]);
+  const activeMcpEditor =
+    view === "mcp" && target.id === "local" ? mcpEditor : null;
   const isSettings = view === "settings";
-  const isSubpage = isSettings || view === "install";
+  const isSubpage = isSettings || view === "install" || !!activeMcpEditor;
 
   // 设置页的返回目标 = 进入设置之前停留的那个视图
   const backTarget = useRef<ViewId>("library");
@@ -130,6 +138,7 @@ function AppContent() {
             label: STATIC_TITLES.library,
             icon: <Layers className="h-5 w-5" />,
           },
+          { id: "mcp", label: "MCP Hub", icon: <Plug className="h-5 w-5" /> },
         ],
       },
       {
@@ -164,6 +173,8 @@ function AppContent() {
       return <AgentPage key={view} agentId={view.slice(AGENT_PREFIX.length)} />;
     }
     switch (view) {
+      case "mcp":
+        return <McpPage editor={mcpEditor} onEditorChange={setMcpEditor} />;
       case "projects":
         return <ProjectsPage />;
       case "install":
@@ -211,7 +222,11 @@ function AppContent() {
                   title="返回"
                   aria-label="返回"
                   onClick={() =>
-                    requestNavigation(() => setView(backTarget.current))
+                    requestNavigation(() =>
+                      activeMcpEditor
+                        ? setMcpEditor(null)
+                        : setView(backTarget.current),
+                    )
                   }
                 >
                   <ArrowLeft className="h-4 w-4" />
@@ -223,12 +238,18 @@ function AppContent() {
                 className={`whitespace-nowrap text-xl font-semibold leading-7 tracking-tight ${isSubpage ? "text-foreground" : "text-blue-500"}`}
               >
                 {isSubpage
-                  ? titles[view]
+                  ? activeMcpEditor
+                    ? mcpEditorTitle(activeMcpEditor)
+                    : titles[view]
                   : import.meta.env.DEV
                     ? "Skill Studio Debug"
                     : "Skill Studio"}
               </span>
-              <h1 className="sr-only">{titles[view] ?? "Skill Studio"}</h1>
+              <h1 className="sr-only">
+                {activeMcpEditor
+                  ? mcpEditorTitle(activeMcpEditor)
+                  : (titles[view] ?? "Skill Studio")}
+              </h1>
               {!isSubpage && (
                 <Button
                   variant="ghost"

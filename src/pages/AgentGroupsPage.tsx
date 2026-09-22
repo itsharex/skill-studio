@@ -1,3 +1,4 @@
+import { AgentMcpGroups } from "@/pages/AgentMcpGroups";
 import { SkillBackups } from "@/components/common/SkillBackups";
 import { Tabs, TabsList, TabsTrigger, TabsContent } from "@/components/ui/tabs";
 import { PageTools } from "@/components/common/PageTools";
@@ -203,13 +204,15 @@ export function AgentPage({ agentId }: { agentId: string }) {
   };
   return (
     <div className="flex min-h-0 flex-1 flex-col">
-      <PageTools
-        query={query}
-        onQueryChange={setQuery}
-        placeholder={showInstalled ? "搜索已安装 skill…" : "搜索分组…"}
-        createLabel={showInstalled ? "添加 skill" : "新建分组"}
-        onCreate={() => (showInstalled ? setAddingSkill(true) : edit())}
-      />
+      {tab !== "mcp" && (
+        <PageTools
+          query={query}
+          onQueryChange={setQuery}
+          placeholder={showInstalled ? "搜索已安装 skill…" : "搜索分组…"}
+          createLabel={showInstalled ? "添加 skill" : "新建分组"}
+          onCreate={() => (showInstalled ? setAddingSkill(true) : edit())}
+        />
+      )}
       <Tabs
         value={tab}
         onValueChange={(value) => {
@@ -251,41 +254,54 @@ export function AgentPage({ agentId }: { agentId: string }) {
                 {skills.filter((s) => s.agents[agentId]?.manual).length}
               </span>
             </TabsTrigger>
+            {["claude-code", "codex"].includes(agentId) && (
+              <TabsTrigger
+                value="mcp"
+                className="data-[state=active]:bg-background data-[state=active]:text-foreground"
+              >
+                MCP 分组
+              </TabsTrigger>
+            )}
           </TabsList>
           {/*
             这三枚统计胶囊只报数、这一行没有筛选语义，所以是不可聚焦的 Badge
             而不是按钮。用 Badge 的 outline 变体而不是手抄它的类名 —— 裸 `border`
             会吃到 preflight 推出的 #e4e4e7，深色下就是近白边框套在已经变暗的卡片里。
           */}
-          <div className="ml-auto flex flex-wrap items-center gap-2">
-            <SkillBackups scope={`agent:${agentId}`} />
-            <Badge
-              variant="outline"
-              className="px-3 py-1 text-sm font-medium"
-              title={`每个 agent 同一时间只能启用一个分组；本 agent 共 ${own.length} 个分组`}
-            >
-              已启用 {activeGroupCount} 个分组
-            </Badge>
-            <Badge
-              variant="outline"
-              className="px-3 py-1 text-sm font-medium"
-              title="文件在位、且没被 agent 的原生开关停用的 skill。目录里有痕迹但用不上的（外来占位、悬空链接）不计。"
-            >
-              已启用 {enabledSkills.length} 个 skill
-            </Badge>
-            <Badge
-              variant="outline"
-              className="px-3 py-1 text-sm font-medium"
-              title={tokenTitle(
-                enabledTokens,
-                "当前已启用的 skill",
-                driftedCount,
-              )}
-            >
-              ≈ {formatTokens(enabledTokens.total)} tokens
-            </Badge>
-          </div>
+          {tab !== "mcp" && (
+            <div className="ml-auto flex flex-wrap items-center gap-2">
+              <SkillBackups scope={`agent:${agentId}`} />
+              <Badge
+                variant="outline"
+                className="px-3 py-1 text-sm font-medium"
+                title={`每个 agent 同一时间只能启用一个分组；本 agent 共 ${own.length} 个分组`}
+              >
+                已启用 {activeGroupCount} 个分组
+              </Badge>
+              <Badge
+                variant="outline"
+                className="px-3 py-1 text-sm font-medium"
+                title="文件在位、且没被 agent 的原生开关停用的 skill。目录里有痕迹但用不上的（外来占位、悬空链接）不计。"
+              >
+                已启用 {enabledSkills.length} 个 skill
+              </Badge>
+              <Badge
+                variant="outline"
+                className="px-3 py-1 text-sm font-medium"
+                title={tokenTitle(
+                  enabledTokens,
+                  "当前已启用的 skill",
+                  driftedCount,
+                )}
+              >
+                ≈ {formatTokens(enabledTokens.total)} tokens
+              </Badge>
+            </div>
+          )}
         </div>
+        <TabsContent value="mcp" className="min-h-0 flex-1 overflow-hidden">
+          <AgentMcpGroups agentId={agentId} />
+        </TabsContent>
         <TabsContent
           value="groups"
           className="min-h-0 flex-1 overflow-y-auto pb-6"

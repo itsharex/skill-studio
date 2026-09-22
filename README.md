@@ -38,6 +38,7 @@ AppImage 需先在文件属性中允许作为程序执行，再双击打开。
 ## 功能
 
 - **Skill Hub**：集中查看、搜索和托管 Skills，预览内容与 Token 估算；支持在线搜索安装和本地目录导入。
+- **MCP Hub**：自动扫描 Claude／Codex 配置，支持表单、JSON／TOML 和模板添加，一次同步多个 Agent；直连管理与共享授权网关可独立使用。[使用说明](docs/mcp.md)
 - **Agent 管理**：为 Claude Code、Codex 配置 Skills，按使用场景分组，一键启用或停用。
 - **项目配置**：为每个项目选择 Agent 和 Skills，让不同项目使用各自的配置。
 - **远程服务器**：读取 SSH config，选择 Linux 服务器后管理它的 Skills、分组、项目与备份，支持密钥、密码和跳板机连接。

@@ -16,6 +16,7 @@ doctest    = false
 tauri-build = { version = "2.4.0", features = [] }
 
 [dependencies]
+skill-studio-mcp = { path = "../crates/mcp" }
 skill-studio-service = { path = "../crates/service" }
 skill-studio-core = { path = "../crates/core" }
 

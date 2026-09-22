@@ -13,3 +13,6 @@ pub use projects::*;
 pub use settings::*;
 pub use skills::*;
 pub use window::*;
+
+pub mod mcp;
+pub use mcp::*;

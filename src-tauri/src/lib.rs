@@ -40,6 +40,7 @@ pub fn run() {
                 .build(),
         )
         .invoke_handler(tauri::generate_handler![
+            commands::mcp_request,
             commands::list_servers,
             commands::list_ssh_hosts,
             commands::save_servers,

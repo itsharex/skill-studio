@@ -1,10 +1,10 @@
 [workspace]
-members  = ["crates/core", "crates/remote-helper", "crates/service", "src-tauri"]
+members  = ["crates/core", "crates/mcp", "crates/remote-helper", "crates/service", "src-tauri"]
 resolver = "2"
 
 [workspace.package]
 edition      = "2021"
-rust-version = "1.85.0"
+rust-version = "1.88"
 version      = "0.3.2"
 license      = "MIT"
 

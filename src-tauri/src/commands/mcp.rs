@@ -1,0 +1,492 @@
+use crate::AppState;
+use serde_json::{json, Value};
+use skill_studio_mcp::{
+    config,
+    discovery::{self, ScanFile},
+    gateway, management, native,
+};
+use std::{path::PathBuf, process::Stdio, time::Duration};
+use tauri::State;
+fn dir(state: &AppState) -> PathBuf {
+    state.studio().store().dir().join("mcp")
+}
+
+pub async fn start(dir: PathBuf) -> Result<(), String> {
+    if gateway::request(&dir, "list", Value::Null).await.is_ok() {
+        return Ok(());
+    }
+    config::read(&dir).map_err(|e| e.to_string())?;
+    let mut command =
+        std::process::Command::new(std::env::current_exe().map_err(|e| e.to_string())?);
+    command
+        .arg("--mcp-daemon")
+        .arg(&dir)
+        .stdin(Stdio::null())
+        .stdout(Stdio::null())
+        .stderr(Stdio::null());
+    #[cfg(windows)]
+    {
+        use std::os::windows::process::CommandExt;
+        command.creation_flags(0x08000000 | 0x00000008);
+    }
+    let mut child = command.spawn().map_err(|e| e.to_string())?;
+    for _ in 0..50 {
+        tokio::time::sleep(Duration::from_millis(100)).await;
+        if gateway::request(&dir, "list", Value::Null).await.is_ok() {
+            std::thread::spawn(move || {
+                let _ = child.wait();
+            });
+            return Ok(());
+        }
+        if let Some(status) = child.try_wait().map_err(|e| e.to_string())? {
+            return Err(format!(
+                "网关启动失败（{status}），请检查端口占用或配置文件"
+            ));
+        }
+    }
+    let _ = child.kill();
+    let _ = child.wait();
+    Err("网关启动超时".into())
+}
+
+#[tauri::command(rename_all = "camelCase")]
+pub async fn mcp_request(
+    state: State<'_, AppState>,
+    app: tauri::AppHandle,
+    method: String,
+    params: Value,
+) -> Result<Value, String> {
+    let mut params = params;
+    let dir = dir(&state);
+    if method == "gatewayCheck" {
+        let entry: management::Entry =
+            serde_json::from_value(params["entry"].clone()).map_err(|e| e.to_string())?;
+        return Ok(json!({"issue":management::gateway_server(&entry).err().map(|e|e.to_string())}));
+    }
+    if method == "parse" {
+        let text = params["text"].as_str().ok_or("请粘贴配置")?;
+        return native::parse_definition(text).map_err(|e| e.to_string());
+    }
+    if matches!(
+        method.as_str(),
+        "saveGroup" | "removeGroup" | "activateGroup" | "reorderGroups"
+    ) {
+        state.ensure_writable().map_err(|e| e.to_string())?;
+        let state = state.inner().clone();
+        let task_dir = dir.clone();
+        tokio::task::spawn_blocking(move || -> anyhow::Result<()> {
+            use anyhow::Context;
+            use management::groups;
+            let agent = params["agent"].as_str().context("缺少 Agent")?;
+            match method.as_str() {
+                "saveGroup" => {
+                    let group: groups::Group = serde_json::from_value(params["group"].clone())?;
+                    anyhow::ensure!(group.agent == agent, "分组不属于此 Agent");
+                    let mut imports = vec![];
+                    if let Some(requested) = params["imports"].as_array().filter(|v| !v.is_empty())
+                    {
+                        let (files, _) = scan_files(&state);
+                        let scanned = discovery::scan(&files, &[], &task_dir);
+                        for requested in requested {
+                            let found = scanned
+                                .discovered
+                                .iter()
+                                .find(|d| Some(d.id.as_str()) == requested["id"].as_str())
+                                .context("MCP 来源已变化，请刷新后重试")?;
+                            let source = found.sources.first().context("MCP 来源已缺失")?;
+                            anyhow::ensure!(
+                                !found.sources.iter().any(|s| s.gateway),
+                                "请先在 Hub 管理此网关入口"
+                            );
+                            let definition = native::canonical(&source.definition, &source.agent);
+                            anyhow::ensure!(
+                                definition == requested["definition"],
+                                "MCP 来源已变化，请刷新后重试"
+                            );
+                            let bindings = found
+                                .sources
+                                .iter()
+                                .map(|s| management::Binding {
+                                    id: s.id.clone(),
+                                    agent: s.agent.clone(),
+                                    path: s.path.clone(),
+                                    project: s.project.clone(),
+                                    key: s.key.clone(),
+                                    original: Some(s.definition.clone()),
+                                    installed: s.definition.clone(),
+                                })
+                                .collect();
+                            imports.push(management::Entry {
+                                id: found.id.clone(),
+                                name: found.name.clone(),
+                                mode: "direct".into(),
+                                definition,
+                                oauth: false,
+                                client_id: None,
+                                scopes: vec![],
+                                bindings,
+                            });
+                        }
+                    }
+                    groups::save_group(&task_dir, group, imports)
+                }
+                "removeGroup" => groups::remove_group(
+                    &task_dir,
+                    agent,
+                    params["id"].as_str().context("缺少分组 ID")?,
+                ),
+                "reorderGroups" => groups::reorder(
+                    &task_dir,
+                    agent,
+                    &serde_json::from_value::<Vec<String>>(params["ids"].clone())?,
+                ),
+                _ => {
+                    let id = params["id"].as_str();
+                    if id.is_none() {
+                        return groups::activate(
+                            &task_dir,
+                            agent,
+                            None,
+                            &PathBuf::new(),
+                            &std::env::current_exe()?,
+                        );
+                    }
+                    let app_agent = if agent == "claude" {
+                        "claude-code"
+                    } else {
+                        agent
+                    };
+                    anyhow::ensure!(
+                        id.is_none()
+                            || !state
+                                .config()
+                                .settings
+                                .disabled_agents
+                                .iter()
+                                .any(|a| a == app_agent),
+                        "请先开启此 Agent 的管理"
+                    );
+                    let placeholder = management::Entry {
+                        id: "group".into(),
+                        name: "group".into(),
+                        mode: "direct".into(),
+                        definition: json!({}),
+                        oauth: false,
+                        client_id: None,
+                        scopes: vec![],
+                        bindings: vec![],
+                    };
+                    let targets = resolve_targets(
+                        &state,
+                        &task_dir,
+                        &json!({"agents":[agent]}),
+                        &placeholder,
+                        &management::Catalog::default(),
+                    )?;
+                    let path = &targets.first().context("未找到 Agent 配置")?.path;
+                    groups::activate(&task_dir, agent, id, path, &std::env::current_exe()?)
+                }
+            }
+        })
+        .await
+        .map_err(|e| e.to_string())?
+        .map_err(|e| e.to_string())?;
+        let _ = gateway::request(&dir, "list", Value::Null).await;
+        return Ok(Value::Null);
+    }
+    if method == "saveEntry" || method == "removeEntry" {
+        state.ensure_writable().map_err(|e| e.to_string())?;
+        let state = state.inner().clone();
+        let method = method.clone();
+        let task_dir = dir.clone();
+        tokio::task::spawn_blocking(move || -> Result<(), String> {
+            if method == "removeEntry" {
+                return management::remove(
+                    &task_dir,
+                    params["id"].as_str().ok_or("缺少 ID")?,
+                    params["restore"].as_bool().unwrap_or(true),
+                )
+                .map_err(|e| e.to_string());
+            }
+            let entry: management::Entry =
+                serde_json::from_value(params["entry"].clone()).map_err(|e| e.to_string())?;
+            let catalog = management::read(&task_dir).map_err(|e| e.to_string())?;
+            let targets = resolve_targets(&state, &task_dir, &params, &entry, &catalog)
+                .map_err(|e| e.to_string())?;
+            let expected: Option<management::Entry> =
+                serde_json::from_value(params["expectedEntry"].clone())
+                    .map_err(|e| e.to_string())?;
+            management::save(
+                &task_dir,
+                entry,
+                targets,
+                &std::env::current_exe().map_err(|e| e.to_string())?,
+                expected.as_ref(),
+            )
+            .map_err(|e| e.to_string())
+        })
+        .await
+        .map_err(|e| e.to_string())??;
+        // Notify a running gateway without starting it. Every gateway request also
+        // reads the latest committed catalog, so a missed notification is harmless.
+        let _ = gateway::request(&dir, "list", Value::Null).await;
+        return Ok(Value::Null);
+    }
+    if method == "list" {
+        let mut value = match gateway::request(&dir, "list", Value::Null).await {
+            Ok(value) => value,
+            Err(_) => {
+                let config = config::read(&dir).map_err(|e| e.to_string())?;
+                json!({"running":false,"port":config.port,"servers":config.servers,"bindings":config.bindings})
+            }
+        };
+        let catalog_dir = dir.clone();
+        let catalog = tokio::task::spawn_blocking(move || management::read(&catalog_dir))
+            .await
+            .map_err(|e| e.to_string())?
+            .map_err(|e| e.to_string())?;
+        let (files, warnings) = scan_files(&state);
+        let managed: Vec<config::Server> =
+            serde_json::from_value(value["servers"].clone()).map_err(|e| e.to_string())?;
+        let scanned = tokio::task::spawn_blocking(move || discovery::scan(&files, &managed, &dir))
+            .await
+            .map_err(|e| e.to_string())?;
+        value["gatewayOutdated"] = json!(
+            value["running"].as_bool() == Some(true)
+                && value["configurationVersion"].as_u64() != Some(2)
+        );
+        value["groupIssues"] = json!(management::groups::issues(&catalog));
+        value["entries"] = json!(catalog.entries);
+        value["groups"] = json!(catalog.groups);
+        value["activeGroups"] = json!(catalog.active_groups);
+        value["discovered"] = json!(scanned.discovered);
+        value["scanWarnings"] = json!(warnings
+            .into_iter()
+            .chain(scanned.warnings)
+            .collect::<Vec<_>>());
+        return Ok(value);
+    }
+    state.ensure_writable().map_err(|e| e.to_string())?;
+    if method == "start" {
+        start(dir).await?;
+        return Ok(Value::Null);
+    }
+    if method == "apply" {
+        let agent = params["agent"].as_str().ok_or("缺少 Agent")?;
+        let config = state.config();
+        let path = if let Some(id) = params["projectId"].as_str().filter(|s| !s.is_empty()) {
+            let project = config
+                .projects
+                .iter()
+                .find(|p| p.id == id)
+                .ok_or("项目不存在")?;
+            match agent {
+                "claude" => project.root.join(".mcp.json"),
+                "codex" => project.root.join(".codex/config.toml"),
+                _ => return Err("不支持的 Agent".into()),
+            }
+        } else {
+            match agent {
+                "claude" => {
+                    if config
+                        .settings
+                        .agent_dir_overrides
+                        .contains_key("claude-code")
+                        || std::env::var_os("CLAUDE_CONFIG_DIR").is_some()
+                    {
+                        return Err("自定义 Claude 配置目录暂不自动写入，请选择项目作用域".into());
+                    }
+                    skill_studio_core::fs::paths::home_dir().join(".claude.json")
+                }
+                "codex" => skill_studio_core::models::agent::AGENTS
+                    .iter()
+                    .find(|a| a.id == "codex")
+                    .unwrap()
+                    .resolved_config_dir(&config.settings.agent_dir_overrides)
+                    .join("config.toml"),
+                _ => return Err("不支持的 Agent".into()),
+            }
+        };
+        params["path"] = json!(path);
+    }
+    let result = gateway::request(&dir, &method, params)
+        .await
+        .map_err(|e| e.to_string())?;
+    if method == "login" {
+        use tauri_plugin_opener::OpenerExt;
+        let url = result["url"].as_str().ok_or("未返回授权链接")?;
+        // The UI always displays a copyable link when a browser cannot be opened.
+        let _ = app.opener().open_url(url, None::<&str>);
+    }
+    Ok(result)
+}
+
+fn scan_files(state: &AppState) -> (Vec<ScanFile>, Vec<String>) {
+    let config = state.config();
+    let overrides = &config.settings.agent_dir_overrides;
+    let mut files = Vec::new();
+    let mut warnings = Vec::new();
+    if overrides.contains_key("claude-code") || std::env::var_os("CLAUDE_CONFIG_DIR").is_some() {
+        warnings.push("检测到自定义 Claude 配置目录，暂不扫描其全局 MCP；项目配置仍会扫描".into());
+    } else {
+        files.push(ScanFile {
+            agent: "claude".into(),
+            path: skill_studio_core::fs::paths::home_dir().join(".claude.json"),
+            scope: "用户全局".into(),
+        });
+    }
+    let codex = skill_studio_core::models::agent::AGENTS
+        .iter()
+        .find(|a| a.id == "codex")
+        .unwrap();
+    files.push(ScanFile {
+        agent: "codex".into(),
+        path: codex.resolved_config_dir(overrides).join("config.toml"),
+        scope: "用户全局".into(),
+    });
+    for project in &config.projects {
+        files.push(ScanFile {
+            agent: "claude".into(),
+            path: project.root.join(".mcp.json"),
+            scope: format!("项目 · {}", project.name),
+        });
+        files.push(ScanFile {
+            agent: "codex".into(),
+            path: project.root.join(".codex/config.toml"),
+            scope: format!("项目 · {}", project.name),
+        });
+    }
+    (files, warnings)
+}
+
+fn resolve_targets(
+    state: &AppState,
+    dir: &std::path::Path,
+    params: &Value,
+    entry: &management::Entry,
+    catalog: &management::Catalog,
+) -> anyhow::Result<Vec<management::Target>> {
+    use anyhow::{bail, Context};
+    let mut targets = vec![];
+    if let Some(ids) = params["bindingIds"].as_array() {
+        for id in ids {
+            let binding = catalog
+                .entries
+                .iter()
+                .find(|e| e.id == entry.id)
+                .and_then(|e| {
+                    e.bindings
+                        .iter()
+                        .find(|b| Some(b.id.as_str()) == id.as_str())
+                })
+                .context("接入记录已变化，请刷新后重试")?;
+            targets.push(management::Target {
+                agent: binding.agent.clone(),
+                path: binding.path.clone(),
+                project: binding.project.clone(),
+                key: binding.key.clone(),
+                expected: Some(binding.installed.clone()),
+            });
+        }
+    }
+    if let Some(sources) = params["sources"].as_array().filter(|v| !v.is_empty()) {
+        let (files, _) = scan_files(state);
+        let scanned = discovery::scan(&files, &[], dir);
+        for source in sources {
+            let found = scanned
+                .discovered
+                .iter()
+                .flat_map(|d| &d.sources)
+                .find(|s| Some(s.id.as_str()) == source["id"].as_str())
+                .context("来源不存在，请刷新后重试")?;
+            if found.definition != source["definition"] {
+                bail!("来源配置已变化，请刷新后重试");
+            }
+            if found.gateway {
+                bail!("不能再次接管网关转发入口");
+            }
+            targets.push(management::Target {
+                agent: found.agent.clone(),
+                path: found.path.clone(),
+                project: found.project.clone(),
+                key: found.key.clone(),
+                expected: Some(found.definition.clone()),
+            });
+        }
+    }
+    let config = state.config();
+    let scope = params["scope"].as_str().unwrap_or("user");
+    if !matches!(scope, "user" | "project" | "local") {
+        bail!("无效的安装作用域");
+    }
+    if scope != "user" && params["projectId"].as_str().is_none_or(str::is_empty) {
+        bail!("请选择安装项目");
+    }
+    if let Some(agents) = params["agents"].as_array() {
+        for agent in agents {
+            let agent = agent.as_str().context("无效的 Agent")?;
+            let mut target_project = None;
+            let path = if let Some(id) = params["projectId"].as_str().filter(|s| !s.is_empty()) {
+                let project = config
+                    .projects
+                    .iter()
+                    .find(|p| p.id == id)
+                    .context("项目不存在")?;
+                match agent {
+                    "claude" if scope == "local" => {
+                        if config
+                            .settings
+                            .agent_dir_overrides
+                            .contains_key("claude-code")
+                            || std::env::var_os("CLAUDE_CONFIG_DIR").is_some()
+                        {
+                            bail!("自定义 Claude 配置目录暂不支持项目本地接入，请选择项目配置");
+                        }
+                        target_project = Some(project.root.to_string_lossy().to_string());
+                        skill_studio_core::fs::paths::home_dir().join(".claude.json")
+                    }
+                    "claude" => project.root.join(".mcp.json"),
+                    "codex" if scope == "local" => {
+                        bail!("项目本地作用域仅支持 Claude Code，请选择全局或项目配置")
+                    }
+                    "codex" => project.root.join(".codex/config.toml"),
+                    _ => bail!("不支持的 Agent"),
+                }
+            } else {
+                match agent {
+                    "claude" => {
+                        if config
+                            .settings
+                            .agent_dir_overrides
+                            .contains_key("claude-code")
+                            || std::env::var_os("CLAUDE_CONFIG_DIR").is_some()
+                        {
+                            bail!("自定义 Claude 目录请先选择项目作用域");
+                        }
+                        skill_studio_core::fs::paths::home_dir().join(".claude.json")
+                    }
+                    "codex" => skill_studio_core::models::agent::AGENTS
+                        .iter()
+                        .find(|a| a.id == "codex")
+                        .unwrap()
+                        .resolved_config_dir(&config.settings.agent_dir_overrides)
+                        .join("config.toml"),
+                    _ => bail!("不支持的 Agent"),
+                }
+            };
+            if !targets
+                .iter()
+                .any(|t| t.agent == agent && t.path == path && t.project == target_project)
+            {
+                targets.push(management::Target {
+                    agent: agent.into(),
+                    path,
+                    project: target_project,
+                    key: entry.name.trim().into(),
+                    expected: None,
+                });
+            }
+        }
+    }
+    Ok(targets)
+}
