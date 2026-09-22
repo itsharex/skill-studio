@@ -37,8 +37,29 @@ pub struct Discovered {
     #[serde(skip)]
     comparison: Value,
 }
+/// Identify bundled executables, never service names alone. Unknown paths remain user-managed.
+pub fn is_codex_builtin(value: &Value) -> bool {
+    let Some(command) = value["command"].as_str() else {
+        return false;
+    };
+    let command = command.replace('\\', "/");
+    [
+        "ChatGPT.app/Contents/Resources/cua_node/bin/node_repl",
+        "Codex.app/Contents/Resources/cua_node/bin/node_repl",
+        "Codex Computer Use.app/Contents/SharedSupport/SkyComputerUseClient.app/Contents/MacOS/SkyComputerUseClient",
+    ].iter().any(|suffix| command == *suffix || command.strip_suffix(suffix).is_some_and(|prefix| prefix.ends_with('/')))
+}
+
+#[derive(Serialize)]
+pub struct BuiltinService {
+    pub name: String,
+    pub agent: String,
+    pub path: PathBuf,
+    pub scope: String,
+}
 #[derive(Default, Serialize)]
 pub struct ScanResult {
+    pub builtins: Vec<BuiltinService>,
     pub discovered: Vec<Discovered>,
     pub warnings: Vec<String>,
 }
@@ -136,6 +157,15 @@ fn read_entries(
         return;
     };
     for (key, entry) in entries {
+        if file.agent == "codex" && is_codex_builtin(entry) {
+            result.builtins.push(BuiltinService {
+                name: key.clone(),
+                agent: file.agent.clone(),
+                path: file.path.clone(),
+                scope: file.scope.clone(),
+            });
+            continue;
+        }
         let identity = json!([file.agent, file.path, file.scope, key]).to_string();
         let id = format!("discovered-{:x}", Sha256::digest(identity.as_bytes()));
         let gateway = entry["args"]
@@ -332,6 +362,45 @@ mod tests {
             path,
             scope: "用户全局".into(),
         }
+    }
+    #[test]
+    fn builtins_are_read_only_and_names_alone_are_not_reserved() {
+        let temp = tempfile::tempdir().unwrap();
+        let text = r#"
+[mcp_servers.node_repl]
+command='/Applications/ChatGPT.app/Contents/Resources/cua_node/bin/node_repl'
+[mcp_servers.computer-use]
+command='./Codex Computer Use.app/Contents/SharedSupport/SkyComputerUseClient.app/Contents/MacOS/SkyComputerUseClient'
+args=['mcp']
+[mcp_servers.custom]
+command='/usr/local/bin/node_repl'
+"#;
+        let f = file(temp.path(), "config.toml", "codex", text);
+        let result = scan(std::slice::from_ref(&f), &[], temp.path());
+        assert_eq!(result.builtins.len(), 2);
+        assert_eq!(result.discovered.len(), 1);
+        assert_eq!(result.discovered[0].name, "custom");
+        let original = crate::native::entry(text, "codex", None, "node_repl").unwrap();
+        assert!(crate::native::patch(text, "codex", None, "node_repl", &original, &None).is_err());
+        assert!(crate::native::patch(
+            text,
+            "codex",
+            None,
+            "node_repl",
+            &original,
+            &Some(json!({"command":"demo"}))
+        )
+        .is_err());
+        let canonical = crate::native::canonical(original.as_ref().unwrap(), "codex");
+        assert!(crate::native::validate(&canonical).is_err());
+        assert_eq!(std::fs::read_to_string(&f.path).unwrap(), text);
+        std::fs::write(&f.path, "[mcp_servers.node_repl]\ncommand='/usr/local/bin/node_repl'\n[mcp_servers.computer-use]\ncommand='npx'\n").unwrap();
+        let custom = scan(&[f], &[], temp.path());
+        assert!(custom.builtins.is_empty());
+        assert_eq!(custom.discovered.len(), 2);
+        assert!(!is_codex_builtin(
+            &json!({"command":"/custom/FakeChatGPT.app/Contents/Resources/cua_node/bin/node_repl"})
+        ));
     }
     #[test]
     fn merges_equal_connections_keeps_conflicts_and_all_scopes_without_writing() {

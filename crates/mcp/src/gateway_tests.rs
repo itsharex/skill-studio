@@ -60,6 +60,7 @@ async fn client(dir: &Path, token: Option<&str>) -> Result<Upstream> {
             ..definition(String::new(), false)
         },
         auth: None,
+        auth_required: Arc::new(Mutex::new(HashSet::new())),
     })
     .await
 }
@@ -133,7 +134,7 @@ async fn oauth_login_is_persistent_and_shared_by_two_clients() {
         Default::default(),
     );
     let app=Router::new().nest_service("/mcp",service).layer(middleware::from_fn(|req:Request,next:Next|async move{
-   if req.headers().get("authorization").and_then(|v|v.to_str().ok())!=Some("Bearer refreshed"){return StatusCode::UNAUTHORIZED.into_response();}next.run(req).await
+   if req.headers().get("authorization").and_then(|v|v.to_str().ok())!=Some("Bearer refreshed"){return (StatusCode::UNAUTHORIZED, [("www-authenticate", "Bearer")]).into_response();}next.run(req).await
   })).route("/.well-known/oauth-authorization-server",get(move||async move{Json(metadata)})).route("/.well-known/oauth-protected-resource",get(move||async move{Json(protected)}))
   .route("/register",post(|Json(p):Json<Value>|async move{Json(json!({"client_id":"studio-fixture","redirect_uris":p["redirect_uris"],"token_endpoint_auth_method":"none"}))}))
   .route("/token",post(move|body:String|{let count=count.clone();async move{
@@ -150,11 +151,46 @@ async fn oauth_login_is_persistent_and_shared_by_two_clients() {
     request(
         &dir,
         "save",
-        serde_json::to_value(definition(format!("{base}/mcp"), true)).unwrap(),
+        serde_json::to_value(definition(format!("{base}/mcp"), false)).unwrap(),
+    )
+    .await
+    .unwrap();
+    let probe = request(&dir, "test", json!({"id":"demo"})).await.unwrap();
+    assert_eq!(probe, json!({"authRequired":true}));
+    let status = request(&dir, "list", Value::Null).await.unwrap();
+    assert_eq!(status["servers"][0]["authRequired"], true);
+    let mut with_token = definition(format!("{base}/mcp"), false);
+    if let Connection::Http { headers, .. } = &mut with_token.connection {
+        headers.insert("Authorization".into(), "Bearer invalid".into());
+    }
+    request(&dir, "save", serde_json::to_value(with_token).unwrap())
+        .await
+        .unwrap();
+    let error = request(&dir, "test", json!({"id":"demo"}))
+        .await
+        .unwrap_err();
+    assert!(error.to_string().contains("Token"));
+    request(
+        &dir,
+        "save",
+        serde_json::to_value(definition(format!("{base}/mcp"), false)).unwrap(),
     )
     .await
     .unwrap();
     let login = request(&dir, "login", json!({"id":"demo"})).await.unwrap();
+    let flow_params = json!({"id":"demo","flowId":login["flowId"]});
+    assert_eq!(
+        request(&dir, "loginStatus", flow_params.clone())
+            .await
+            .unwrap()["status"],
+        "pending"
+    );
+    assert_eq!(
+        request(&dir, "loginStatus", json!({"id":"demo","flowId":"wrong"}))
+            .await
+            .unwrap()["status"],
+        "expired"
+    );
     let url = reqwest::Url::parse(login["url"].as_str().unwrap()).unwrap();
     let query: HashMap<_, _> = url.query_pairs().into_owned().collect();
     assert_eq!(query["code_challenge_method"], "S256");
@@ -177,6 +213,16 @@ async fn oauth_login_is_persistent_and_shared_by_two_clients() {
         .await
         .unwrap();
     assert_eq!(ok.status(), StatusCode::OK);
+    assert_eq!(
+        request(&dir, "loginStatus", flow_params.clone())
+            .await
+            .unwrap()["status"],
+        "complete"
+    );
+    assert_eq!(
+        request(&dir, "loginStatus", flow_params).await.unwrap()["status"],
+        "expired"
+    );
     assert!(dir.join("oauth-demo.json").exists());
     let token = config::read(&dir).unwrap().tokens["demo"].clone();
     let (a, b) = tokio::join!(client(&dir, Some(&token)), client(&dir, Some(&token)));

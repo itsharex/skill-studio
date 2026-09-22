@@ -12,6 +12,7 @@ export interface McpServer {
   enabled: boolean;
   oauth: boolean;
   authorized?: boolean;
+  authRequired?: boolean;
   clientId?: string | null;
   scopes?: string[];
 }

@@ -1,11 +1,16 @@
-import { useState } from "react";
+import { useSettings } from "@/hooks/useData";
+import { ConfirmDialog } from "@/components/common/ConfirmDialog";
+import { useEffect, useState } from "react";
 import { useQuery } from "@tanstack/react-query";
 import {
   ArrowLeft,
+  ShieldCheck,
   Plug,
   Pencil,
   Power,
-  MoreHorizontal,
+  FolderOpen,
+  PackagePlus,
+  PackageMinus,
   Trash2,
   Play,
   LogIn,
@@ -21,12 +26,6 @@ import {
   DialogHeader,
   DialogTitle,
 } from "@/components/ui/dialog";
-import {
-  DropdownMenu,
-  DropdownMenuTrigger,
-  DropdownMenuContent,
-  DropdownMenuItem,
-} from "@/components/ui/dropdown-menu";
 import {
   NavigationGuard,
   useNavigationGuard,
@@ -81,9 +80,12 @@ function LocalMcpPage({
   onEditorChange,
 }: McpPageProps) {
   const requestNavigation = useNavigationGuard();
+  const { data: settings } = useSettings();
   const status = useQuery({
     queryKey: ["mcp", "local"],
     queryFn: managementApi.list,
+    // Keep polling in the background without fetching again on every Agent switch.
+    staleTime: 4_000,
     refetchInterval: 4000,
   });
   const catalog = rows(status.data);
@@ -95,13 +97,19 @@ function LocalMcpPage({
     controlledEditor === undefined ? localEditor : controlledEditor;
   const setEditor = onEditorChange ?? setLocalEditor;
   const [detailId, setDetailId] = useState<string | null>(null);
-  const [remove, setRemove] = useState<ManagedMcp | null>(null);
+  const [remove, setRemove] = useState<McpRow | null>(null);
+  const [adopt, setAdopt] = useState<McpRow | null>(null);
   const [restore, setRestore] = useState(true);
   const [busy, setBusy] = useState(false);
+  const [pendingLogin, setPendingLogin] = useState<{
+    entry: ManagedMcp;
+    flowId: string;
+  } | null>(null);
   const [loginUrl, setLoginUrl] = useState<string | null>(null);
   const [tools, setTools] = useState<
     { name: string; description?: string }[] | null
   >(null);
+  const [authRequired, setAuthRequired] = useState<string[]>([]);
   const detail = catalog.find((r) => r.entry.id === detailId);
   const hasAgent = (row: McpRow, agent: string) =>
     row.entry.bindings.some((b) => b.agent === agent) ||
@@ -120,6 +128,15 @@ function LocalMcpPage({
         .toLowerCase()
         .includes(query.trim().toLowerCase()),
   );
+  const builtinServices = (
+    settings?.showCodexBuiltinMcp ? (status.data?.builtins ?? []) : []
+  ).filter(
+    (service) =>
+      (filter === "all" || filter === "codex") &&
+      `${service.name} ${service.scope} ${service.path}`
+        .toLowerCase()
+        .includes(query.trim().toLowerCase()),
+  );
   async function run(fn: () => Promise<void>) {
     setBusy(true);
     try {
@@ -134,14 +151,83 @@ function LocalMcpPage({
   async function runtime(entry: ManagedMcp, method: string) {
     if (!running) await mcpRequest("start");
     if (method === "test") {
-      setTools(await mcpRequest("test", { id: entry.id }));
+      setTools(null);
+      const result = await mcpRequest<
+        { name: string; description?: string }[] | { authRequired: true }
+      >("test", { id: entry.id });
+      if (!Array.isArray(result)) {
+        setAuthRequired((ids) => [...new Set([...ids, entry.id])]);
+        toast.info("此服务需要登录，请点击登录授权后重新测试连接");
+      } else {
+        setAuthRequired((ids) => ids.filter((id) => id !== entry.id));
+        setTools(result);
+      }
     } else {
-      const result = await mcpRequest<{ url: string }>("login", {
-        id: entry.id,
-      });
+      const result = await mcpRequest<{ url: string; flowId: string }>(
+        "login",
+        {
+          id: entry.id,
+        },
+      );
       setLoginUrl(result.url);
+      if (result.flowId) {
+        setPendingLogin({ entry, flowId: result.flowId });
+      } else {
+        toast.warning("当前网关版本不支持自动返回，请关闭再开启网关后重新授权");
+      }
     }
   }
+  useEffect(() => {
+    if (!pendingLogin) return;
+    let cancelled = false;
+    let timer: ReturnType<typeof setTimeout>;
+    const check = async () => {
+      try {
+        const result = await mcpRequest<{
+          status: "pending" | "complete" | "expired";
+        }>("loginStatus", {
+          id: pendingLogin.entry.id,
+          flowId: pendingLogin.flowId,
+        });
+        if (cancelled) return;
+        if (result.status === "complete") {
+          setPendingLogin(null);
+          setLoginUrl(null);
+          setAuthRequired((ids) =>
+            ids.filter((id) => id !== pendingLogin.entry.id),
+          );
+          setDetailId(pendingLogin.entry.id);
+          toast.success("登录成功，正在测试连接");
+          void run(() => runtime(pendingLogin.entry, "test"));
+          return;
+        }
+        if (result.status === "expired") {
+          setPendingLogin(null);
+          setLoginUrl(null);
+          toast.error("授权已过期或已取消，请重新登录");
+          return;
+        }
+      } catch {
+        // Keep waiting across a transient gateway failure; the flow expires below.
+      }
+      if (!cancelled) timer = setTimeout(check, 1000);
+    };
+    timer = setTimeout(check, 1000);
+    const expiry = setTimeout(() => {
+      cancelled = true;
+      clearTimeout(timer);
+      setPendingLogin(null);
+      setLoginUrl(null);
+      toast.error("等待授权超时，请重新登录");
+    }, 300_000);
+    return () => {
+      cancelled = true;
+      clearTimeout(timer);
+      clearTimeout(expiry);
+    };
+    // The monitor belongs to this specific login attempt, not render-time callbacks.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [pendingLogin]);
   function saved(entry: ManagedMcp, result?: McpInstallResult) {
     setEditor(null);
     setQuery("");
@@ -161,7 +247,8 @@ function LocalMcpPage({
             ? "已保存并应用，使用前请开启网关"
             : "已保存并应用，请在 Agent 中重新加载 MCP",
       );
-      if (entry.mode === "gateway" && entry.oauth) setDetailId(entry.id);
+      if (result?.installed !== false && entry.mode === "gateway")
+        setDetailId(entry.id);
     }
   }
 
@@ -207,7 +294,7 @@ function LocalMcpPage({
             ["all", "全部"],
             ["claude", "Claude Code"],
             ["codex", "Codex"],
-            ["managed", "已管理"],
+            ["managed", "已托管"],
             ["gateway", "网关连接"],
           ].map(([key, label]) => (
             <button
@@ -280,13 +367,16 @@ function LocalMcpPage({
         </details>
       )}
       <div className="min-h-0 flex-1 overflow-y-auto pb-6">
-        {!status.isLoading && !status.error && !catalog.length && (
-          <EmptyState
-            icon={Plug}
-            title="MCP Hub 还没有发现服务"
-            description="已扫描 Claude Code、Codex 的全局和已登记项目配置。点击添加 MCP，粘贴安装命令、网址或配置即可安装。"
-          />
-        )}
+        {!status.isLoading &&
+          !status.error &&
+          !catalog.length &&
+          !builtinServices.length && (
+            <EmptyState
+              icon={Plug}
+              title="MCP Hub 还没有发现服务"
+              description="已扫描 Claude Code、Codex 的全局和已登记项目配置。点击添加 MCP，粘贴安装命令、网址或配置即可添加到 Hub，再到 Agent 或项目页面启用。"
+            />
+          )}
         <ListContainer cards>
           {filtered.map((row) => (
             <ListItemRow
@@ -310,20 +400,25 @@ function LocalMcpPage({
                   {row.managed && (
                     <Badge
                       variant="outline"
-                      className="border-blue-500/30 text-blue-500"
+                      className="h-4 border-blue-200 bg-blue-50 px-1.5 text-[10px] text-blue-600 dark:border-blue-800 dark:bg-blue-950/50 dark:text-blue-400"
                     >
-                      已管理
+                      托管中
                     </Badge>
                   )}
-                  {row.entry.mode === "gateway" && row.entry.oauth && (
-                    <Badge variant="outline">
-                      {row.authorized
-                        ? "已授权"
-                        : running
+                  {row.entry.mode === "gateway" &&
+                    (row.authorized ||
+                      row.authRequired ||
+                      authRequired.includes(row.entry.id)) && (
+                      <Badge variant="outline">
+                        {row.authRequired || authRequired.includes(row.entry.id)
                           ? "待授权"
-                          : "授权待检查"}
-                    </Badge>
-                  )}
+                          : row.authorized
+                            ? "已授权"
+                            : running
+                              ? "待授权"
+                              : "授权待检查"}
+                      </Badge>
+                    )}
                   {["claude", "codex"]
                     .filter((a) => hasAgent(row, a))
                     .map((agent) => (
@@ -338,7 +433,7 @@ function LocalMcpPage({
                       </span>
                     ))}
                 </div>
-                <p className="mt-1 truncate text-xs text-muted-foreground">
+                <p className="truncate pt-0.5 text-xs text-muted-foreground">
                   {String(
                     row.entry.definition.url ??
                       row.entry.definition.command ??
@@ -351,53 +446,118 @@ function LocalMcpPage({
                   variant="ghost"
                   size="icon"
                   className="h-8 w-8"
-                  disabled={
-                    busy || (row.sources.some((s) => s.gateway) && !row.managed)
-                  }
-                  aria-label={`${row.managed ? "编辑" : "管理"} ${row.entry.name}`}
-                  title={row.managed ? "编辑配置与接入" : "管理配置与接入"}
-                  onClick={() => setEditor({ row })}
+                  title="查看来源与托管记录"
+                  aria-label={`查看 ${row.entry.name} 的来源`}
+                  disabled={busy}
+                  onClick={() => setDetailId(row.entry.id)}
                 >
-                  <Pencil className="h-4 w-4" />
+                  <FolderOpen className="h-4 w-4" />
                 </Button>
-                {row.managed && (
-                  <DropdownMenu>
-                    <DropdownMenuTrigger asChild>
+                {row.managed ? (
+                  <>
+                    <Button
+                      variant="ghost"
+                      size="icon"
+                      className="h-8 w-8"
+                      disabled={busy}
+                      title="编辑服务配置"
+                      aria-label={`编辑 ${row.entry.name}`}
+                      onClick={() => setEditor({ row })}
+                    >
+                      <Pencil className="h-4 w-4" />
+                    </Button>
+                    {row.entry.bindings.some(
+                      (binding) => binding.original !== null,
+                    ) && (
                       <Button
                         variant="ghost"
                         size="icon"
                         className="h-8 w-8"
                         disabled={busy}
-                        aria-label={`${row.entry.name} 的更多操作`}
-                      >
-                        <MoreHorizontal className="h-4 w-4" />
-                      </Button>
-                    </DropdownMenuTrigger>
-                    <DropdownMenuContent align="end">
-                      <DropdownMenuItem
-                        onSelect={() => setDetailId(row.entry.id)}
-                      >
-                        <Plug className="h-4 w-4" />
-                        连接详情
-                      </DropdownMenuItem>
-                      <DropdownMenuItem
-                        destructive
-                        onSelect={() => {
-                          setRemove(row.entry);
+                        title="移出 Hub 并还原"
+                        aria-label={`还原 ${row.entry.name} 到原位置`}
+                        onClick={() => {
+                          setRemove(row);
                           setRestore(true);
                         }}
                       >
-                        <Trash2 className="h-4 w-4" />
-                        移出 Studio
-                      </DropdownMenuItem>
-                    </DropdownMenuContent>
-                  </DropdownMenu>
+                        <PackageMinus className="h-4 w-4" />
+                      </Button>
+                    )}
+                  </>
+                ) : (
+                  <Button
+                    variant="ghost"
+                    size="icon"
+                    className="h-8 w-8"
+                    disabled={
+                      busy || row.sources.some((source) => source.gateway)
+                    }
+                    title="托管到 Hub"
+                    aria-label={`托管 ${row.entry.name} 到 Hub`}
+                    onClick={() => setAdopt(row)}
+                  >
+                    <PackagePlus className="h-4 w-4" />
+                  </Button>
                 )}
+                <Button
+                  variant="ghost"
+                  size="icon"
+                  className="h-8 w-8"
+                  title="删除 MCP"
+                  aria-label={`删除 ${row.entry.name}`}
+                  disabled={
+                    busy ||
+                    (!row.managed &&
+                      row.sources.some((source) => source.gateway))
+                  }
+                  onClick={() => {
+                    setRemove(row);
+                    setRestore(false);
+                  }}
+                >
+                  <Trash2 className="h-4 w-4" />
+                </Button>
               </RowActions>
             </ListItemRow>
           ))}
+          {builtinServices.map((service) => (
+            <ListItemRow
+              key={`builtin:${service.path}:${service.scope}:${service.name}`}
+              card
+              className="cursor-default bg-muted/40 text-muted-foreground hover:bg-muted/40"
+            >
+              <div className="min-w-0 flex-1">
+                <div className="flex flex-wrap items-center gap-2">
+                  <span className="truncate text-sm font-medium">
+                    {service.name}
+                  </span>
+                  <Badge
+                    variant="outline"
+                    className="gap-1 border-border-default bg-muted text-muted-foreground"
+                  >
+                    <ShieldCheck className="h-4 w-4" />
+                    Codex 内置
+                  </Badge>
+                  <Badge variant="outline" className="text-muted-foreground">
+                    只读
+                  </Badge>
+                  <AgentIcon
+                    agentId="codex"
+                    className="h-4 w-4 grayscale opacity-60"
+                  />
+                </div>
+                <p className="pt-0.5 text-xs">
+                  由 Codex App 管理 · 不支持操作 · 不计入 MCP 数量
+                </p>
+                <p className="truncate pt-0.5 text-xs" title={service.path}>
+                  {service.scope} · {service.path}
+                </p>
+              </div>
+            </ListItemRow>
+          ))}
         </ListContainer>
-        {!!catalog.length && !filtered.length && (
+        {!!catalog.length && !filtered.length && !builtinServices.length && (
           <p className="py-6 text-center text-sm text-muted-foreground">
             没有匹配的 MCP
           </p>
@@ -430,18 +590,21 @@ function LocalMcpPage({
                     <Play className="h-4 w-4" />
                     {running ? "测试连接" : "启动并测试"}
                   </Button>
-                  {detail.entry.oauth && (
-                    <Button
-                      variant="outline"
-                      disabled={busy}
-                      onClick={() =>
-                        void run(() => runtime(detail.entry, "login"))
-                      }
-                    >
-                      <LogIn className="h-4 w-4" />
-                      {running ? "登录授权" : "启动并授权"}
-                    </Button>
-                  )}
+                  {detail.entry.definition.type !== "stdio" &&
+                    (detail.authorized ||
+                      detail.authRequired ||
+                      authRequired.includes(detail.entry.id)) && (
+                      <Button
+                        variant="outline"
+                        disabled={busy}
+                        onClick={() =>
+                          void run(() => runtime(detail.entry, "login"))
+                        }
+                      >
+                        <LogIn className="h-4 w-4" />
+                        {running ? "登录授权" : "启动并授权"}
+                      </Button>
+                    )}
                   {detail.authorized && (
                     <Button
                       variant="ghost"
@@ -507,60 +670,97 @@ function LocalMcpPage({
                   setDetailId(null);
                 }}
               >
-                {detail.managed ? "编辑配置与接入" : "管理此 MCP"}
+                {detail.managed ? "编辑服务配置" : "管理此 MCP"}
               </Button>
             </div>
           )}
         </DialogContent>
       </Dialog>
-      <Dialog
+      <ConfirmDialog
+        open={!!adopt}
+        onOpenChange={(open) => !open && !busy && setAdopt(null)}
+        title="托管到 Hub"
+        confirmText="托管"
+        variant="info"
+        pending={busy}
+        description={`将「${adopt?.entry.name ?? ""}」保存到 MCP Hub，并管理它的 ${adopt?.sources.length ?? 0} 处原有接入。配置文件会先备份，之后可移出 Hub 并还原。`}
+        onConfirm={() =>
+          adopt &&
+          void run(async () => {
+            await mcpRequest("saveEntry", {
+              entry: { ...adopt.entry, id: crypto.randomUUID() },
+              expectedEntry: null,
+              bindingIds: [],
+              sources: adopt.sources.map((source) => ({
+                id: source.id,
+                definition: source.definition,
+              })),
+              agents: [],
+              scope: "user",
+              projectId: "",
+            });
+            setAdopt(null);
+            setFilter("all");
+            toast.success("已托管到 MCP Hub");
+          })
+        }
+      />
+      <ConfirmDialog
         open={!!remove}
         onOpenChange={(open) => !open && !busy && setRemove(null)}
-      >
-        <DialogContent className="gap-4 p-6">
-          <DialogHeader>
-            <DialogTitle>移出 {remove?.name}</DialogTitle>
-          </DialogHeader>
-          <p className="text-sm text-muted-foreground">
-            移除 Studio
-            的管理记录。接入文件会先备份；若条目已被外部修改，将停止操作。
-          </p>
-          <label className="flex items-center gap-2 text-sm">
-            <input
-              type="checkbox"
-              checked={restore}
-              onChange={(e) => setRestore(e.target.checked)}
-            />
-            还原管理前的原始配置
-          </label>
-          <p className="text-xs text-muted-foreground">
-            {restore
-              ? "已有服务恢复原入口；由 Studio 新建的入口会移除。"
-              : "从所有受管理的 Agent 中删除此服务的接入条目。"}
-          </p>
-          <div className="flex justify-end gap-2">
-            <Button
-              variant="outline"
-              disabled={busy}
-              onClick={() => setRemove(null)}
-            >
-              取消
-            </Button>
-            <Button
-              disabled={busy}
-              onClick={() =>
-                void run(async () => {
-                  await mcpRequest("removeEntry", { id: remove!.id, restore });
-                  setRemove(null);
-                  toast.success("已移出 Studio");
-                })
-              }
-            >
-              确认移出
-            </Button>
-          </div>
-        </DialogContent>
-      </Dialog>
+        title={
+          restore
+            ? `移出 Hub 并还原 ${remove?.entry.name ?? ""}？`
+            : `删除 ${remove?.entry.name ?? ""}？`
+        }
+        confirmText={restore ? "还原" : "删除"}
+        variant={restore ? "info" : "destructive"}
+        pending={busy}
+        description={
+          <>
+            <span className="block">
+              {restore
+                ? "移除 Hub 托管记录，恢复托管前的原始配置；由 Studio 新建的接入会移除。"
+                : remove?.managed
+                  ? "删除 Hub 中的服务和全部受托管接入。扫描到但未托管的原有配置保留。"
+                  : `删除扫描到的 ${remove?.sources.length ?? 0} 处原有 MCP 配置。`}
+            </span>
+            <span className="mt-2 block">
+              配置文件会先备份。配置被外部修改或仍被启用的分组使用时，操作会停止。
+            </span>
+            <span className="mt-2 block space-y-1 break-all text-xs">
+              {(remove?.managed
+                ? remove.entry.bindings
+                : (remove?.sources ?? [])
+              ).map((source) => (
+                <span className="block" key={source.id}>
+                  {source.agent === "claude" ? "Claude Code" : "Codex"} ·{" "}
+                  {source.path} · {source.key}
+                </span>
+              ))}
+            </span>
+          </>
+        }
+        onConfirm={() =>
+          remove &&
+          void run(async () => {
+            if (remove.managed)
+              await mcpRequest("removeEntry", { id: remove.entry.id, restore });
+            else
+              await mcpRequest("removeSources", {
+                entry: remove.entry,
+                sources: remove.sources.map((source) => ({
+                  id: source.id,
+                  definition: source.definition,
+                })),
+              });
+            setRemove(null);
+            toast.success(
+              restore ? "已移出 Hub 并还原" : "MCP 已删除，配置文件已备份",
+            );
+          })
+        }
+      />
       <Dialog
         open={!!loginUrl}
         onOpenChange={(open) => !open && setLoginUrl(null)}

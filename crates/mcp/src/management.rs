@@ -315,6 +315,32 @@ pub fn remove(dir: &Path, id: &str, restore: bool) -> Result<()> {
     catalog.entries.retain(|e| e.id != id);
     commit(dir, files, &catalog)
 }
+/// Delete scanned, unmanaged entries without disturbing other configuration keys.
+pub fn remove_sources(dir: &Path, targets: Vec<Target>) -> Result<()> {
+    let _lock = lock(dir)?;
+    let catalog = read_unlocked(dir)?;
+    if targets.is_empty() {
+        bail!("请选择要删除的 MCP 来源");
+    }
+    let mut files = BTreeMap::new();
+    for target in targets {
+        if target.expected.is_none() {
+            bail!("缺少来源配置快照，请刷新后重试");
+        }
+        if catalog
+            .entries
+            .iter()
+            .flat_map(|e| &e.bindings)
+            .chain(catalog.active_groups.values().flat_map(|g| &g.bindings))
+            .any(|b| b.path == target.path && b.project == target.project && b.key == target.key)
+        {
+            bail!("此来源已被托管或由分组使用，请刷新后从对应入口管理");
+        }
+        stage(&mut files, &target, &target.expected, &None)?;
+    }
+    commit(dir, files, &catalog)
+}
+
 #[derive(Clone, Serialize, Deserialize)]
 struct Change {
     path: PathBuf,

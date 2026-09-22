@@ -1,4 +1,4 @@
-import { queryKeys } from "@/lib/queryKeys";
+import { queryKeys, NAVIGATION_STALE_TIME } from "@/lib/queryKeys";
 import { useState } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { invoke } from "@/lib/api/transport";
@@ -28,6 +28,7 @@ export function SkillBackups({ scope }: { scope: string }) {
   const { data = [], error } = useQuery({
     queryKey: queryKeys.skillBackups,
     queryFn: () => invoke<Backup[]>("list_skill_backups"),
+    staleTime: NAVIGATION_STALE_TIME,
   });
   const backups = data.filter((r) =>
     scope === "projects"

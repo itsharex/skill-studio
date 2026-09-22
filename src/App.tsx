@@ -1,3 +1,5 @@
+import { AgentMcpGroups } from "@/pages/AgentMcpGroups";
+import { McpProjectsPage } from "@/pages/McpProjectsPage";
 import {
   TargetPicker,
   useTarget,
@@ -87,6 +89,19 @@ function AppContent() {
       ? stored
       : "library";
   });
+  const [resource, setResource] = useState<"skills" | "mcp">(() =>
+    view === "mcp"
+      ? "mcp"
+      : view === "library"
+        ? "skills"
+        : localStorage.getItem("skill-studio-resource") === "mcp"
+          ? "mcp"
+          : "skills",
+  );
+  useEffect(() => {
+    localStorage.setItem("skill-studio-resource", resource);
+  }, [resource]);
+  const [hubSlide, setHubSlide] = useState(0);
   const [searchHost, setSearchHost] = useState<HTMLDivElement | null>(null);
   const [addHost, setAddHost] = useState<HTMLDivElement | null>(null);
   const [mcpEditor, setMcpEditor] = useState<McpEditorState | null>(null);
@@ -108,10 +123,13 @@ function AppContent() {
   useEffect(() => {
     const disabledView = (id: ViewId) =>
       id.startsWith(AGENT_PREFIX) &&
-      settings?.disabledAgents?.includes(id.slice(AGENT_PREFIX.length));
-    if (disabledView(backTarget.current)) backTarget.current = "library";
-    if (disabledView(view)) setView("library");
-  }, [settings?.disabledAgents, view]);
+      (settings?.disabledAgents?.includes(id.slice(AGENT_PREFIX.length)) ||
+        (resource === "mcp" &&
+          !["claude-code", "codex"].includes(id.slice(AGENT_PREFIX.length))));
+    const hub = resource === "mcp" ? "mcp" : "library";
+    if (disabledView(backTarget.current)) backTarget.current = hub;
+    if (disabledView(view)) setView(hub);
+  }, [settings?.disabledAgents, view, resource]);
 
   // 启动期错误（例如配置文件坏了）要让用户看见，而不是静默用默认值跑
   useEffect(() => {
@@ -143,12 +161,17 @@ function AppContent() {
       },
       {
         label: "AGENT",
-        items: agents.map((a) => ({
-          id: `${AGENT_PREFIX}${a.id}` as ViewId,
-          label: a.displayName,
-          icon: <AgentIcon agentId={a.id} className="h-5 w-5" />,
-          badge: a.detected ? undefined : "未装",
-        })),
+        items: agents
+          .filter(
+            (a) =>
+              resource === "skills" || ["claude-code", "codex"].includes(a.id),
+          )
+          .map((a) => ({
+            id: `${AGENT_PREFIX}${a.id}` as ViewId,
+            label: a.displayName,
+            icon: <AgentIcon agentId={a.id} className="h-5 w-5" />,
+            badge: a.detected ? undefined : "未装",
+          })),
       },
       {
         label: "项目",
@@ -161,7 +184,7 @@ function AppContent() {
         ],
       },
     ],
-    [agents],
+    [agents, resource],
   );
 
   const refresh = () => {
@@ -170,13 +193,17 @@ function AppContent() {
 
   const content = () => {
     if (view.startsWith(AGENT_PREFIX)) {
-      return <AgentPage key={view} agentId={view.slice(AGENT_PREFIX.length)} />;
+      return resource === "mcp" ? (
+        <AgentMcpGroups key={view} agentId={view.slice(AGENT_PREFIX.length)} />
+      ) : (
+        <AgentPage key={view} agentId={view.slice(AGENT_PREFIX.length)} />
+      );
     }
     switch (view) {
       case "mcp":
         return <McpPage editor={mcpEditor} onEditorChange={setMcpEditor} />;
       case "projects":
-        return <ProjectsPage />;
+        return resource === "mcp" ? <McpProjectsPage /> : <ProjectsPage />;
       case "install":
         return <InstallSkillsPage />;
       case "settings":
@@ -303,8 +330,27 @@ function AppContent() {
                   <NavSwitcher
                     sections={sections}
                     active={view}
+                    selected={resource === "mcp" ? "mcp" : "library"}
                     onSelect={(next) => {
-                      if (next !== view) requestNavigation(() => setView(next));
+                      if (next !== view)
+                        requestNavigation(() => {
+                          const nextResource =
+                            next === "mcp"
+                              ? "mcp"
+                              : next === "library"
+                                ? "skills"
+                                : resource;
+                          setHubSlide(
+                            nextResource !== resource
+                              ? nextResource === "mcp"
+                                ? 14
+                                : -14
+                              : 0,
+                          );
+                          if (next === "library" || next === "mcp")
+                            setResource(next === "mcp" ? "mcp" : "skills");
+                          setView(next);
+                        });
                     }}
                   />
                 </nav>
@@ -336,11 +382,16 @@ function AppContent() {
                 className={`flex min-h-0 min-w-0 flex-1 flex-col ${!target.connected && !isSettings ? "pointer-events-none opacity-60" : ""}`}
               >
                 <motion.div
-                  key={view}
+                  key={
+                    view.startsWith(AGENT_PREFIX) ? `agent:${resource}` : view
+                  }
                   className="flex min-h-0 flex-1 flex-col overflow-hidden px-6"
-                  initial={{ opacity: 0 }}
-                  animate={{ opacity: 1 }}
-                  transition={{ duration: 0.2 }}
+                  initial={reduceMotion ? false : { opacity: 0, x: hubSlide }}
+                  animate={{ opacity: 1, x: 0 }}
+                  transition={{
+                    duration: reduceMotion ? 0 : 0.22,
+                    ease: [0.22, 1, 0.36, 1],
+                  }}
                 >
                   {content()}
                 </motion.div>

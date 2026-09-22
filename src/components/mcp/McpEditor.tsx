@@ -1,3 +1,6 @@
+import { SettingCard, SettingsSection } from "@/components/common/SettingCard";
+import { Settings2 } from "lucide-react";
+import { McpChoiceCards } from "./McpChoiceCards";
 import { McpDefinitionFields, readDefinition } from "./McpDefinitionFields";
 import { McpQuickInstall } from "./McpQuickInstall";
 import { useState } from "react";
@@ -7,8 +10,6 @@ import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { useUnsavedProject } from "@/components/common/NavigationGuard";
-import { AgentIcon } from "@/components/common/AgentIcon";
-import { useProjects } from "@/hooks/useData";
 import { mcpRequest } from "@/lib/api/mcp";
 import {
   type ManagedMcp,
@@ -49,17 +50,6 @@ function McpExistingEditor({ row, onClose, onSaved }: EditorProps) {
   );
   const [busy, setBusy] = useState(false);
   useUnsavedProject(false, busy);
-  const [agents, setAgents] = useState<string[]>([]);
-  const [projectId, setProjectId] = useState("");
-  const [bindings, setBindings] = useState(() =>
-    entry.bindings.map((b) => b.id),
-  );
-  const [sources, setSources] = useState(() =>
-    existing
-      ? []
-      : (row?.sources.filter((s) => !s.gateway).map((s) => s.id) ?? []),
-  );
-  const { data: projects = [] } = useProjects();
   const { definition, error } = readDefinition(raw);
   const effective = {
     ...entry,
@@ -76,17 +66,6 @@ function McpExistingEditor({ row, onClose, onSaved }: EditorProps) {
     enabled: entry.mode === "gateway" && !error,
     retry: false,
   });
-  function toggle(
-    value: string,
-    values: string[],
-    set: (value: string[]) => void,
-  ) {
-    set(
-      values.includes(value)
-        ? values.filter((x) => x !== value)
-        : [...values, value],
-    );
-  }
   const local = definition.type === "stdio";
   return (
     <form
@@ -98,72 +77,66 @@ function McpExistingEditor({ row, onClose, onSaved }: EditorProps) {
         void mcpRequest("saveEntry", {
           entry: effective,
           expectedEntry: existing ? row?.entry : null,
-          bindingIds: bindings,
-          sources:
-            row?.sources
-              .filter((s) => sources.includes(s.id))
-              .map((s) => ({ id: s.id, definition: s.definition })) ?? [],
-          agents,
-          projectId,
-          scope: projectId ? "project" : "user",
+          bindingIds: entry.bindings.map((b) => b.id),
+          sources: [],
+          agents: [],
+          projectId: "",
+          scope: "user",
         })
-          .then(() => onSaved(effective))
+          .then(() =>
+            onSaved(effective, { installed: entry.bindings.length > 0 }),
+          )
           .catch((e) => toast.error(String(e)))
           .finally(() => setBusy(false));
       }}
     >
       <div className="-mx-1 min-h-0 flex-1 overflow-y-auto px-1">
-        <fieldset disabled={busy} className="min-w-0 space-y-5 py-4">
-          <div className="space-y-2">
-            <Label htmlFor="mcp-name">名称</Label>
-            <Input
-              id="mcp-name"
-              required
-              value={entry.name}
-              onChange={(e) => setEntry({ ...entry, name: e.target.value })}
-            />
-          </div>
-          <McpDefinitionFields raw={raw} setRaw={setRaw} />
-          <div className="space-y-2">
-            <Label htmlFor="mcp-mode">连接方式</Label>
-            <select
-              id="mcp-mode"
-              className="w-full rounded-md border border-border-default bg-background p-2"
-              value={entry.mode}
-              onChange={(e) =>
-                setEntry({
-                  ...entry,
-                  mode: e.target.value as ManagedMcp["mode"],
-                })
-              }
+        <fieldset disabled={busy} className="min-w-0 space-y-3 py-3">
+          <SettingsSection title="服务配置" icon={<Settings2 />}>
+            <SettingCard
+              compact
+              icon={<Settings2 />}
+              title={<Label htmlFor="mcp-name">名称</Label>}
+              description="用于在 Hub 和 Agent 中识别此 MCP。"
             >
-              <option value="direct">Agent 直连</option>
-              <option value="gateway">Studio 网关</option>
-            </select>
-            <p className="text-xs text-muted-foreground">
-              {entry.mode === "direct"
-                ? "Agent 直接连接服务并管理登录，网关关闭时也可使用。"
-                : "由 Studio 统一连接和授权。保存配置不会启动网关，使用前请开启网关。"}
-            </p>
-          </div>
+              <Input
+                className="w-52 sm:w-72"
+                id="mcp-name"
+                required
+                value={entry.name}
+                onChange={(e) => setEntry({ ...entry, name: e.target.value })}
+              />
+            </SettingCard>
+          </SettingsSection>
+          <McpDefinitionFields raw={raw} setRaw={setRaw} />
+          <McpChoiceCards
+            label="连接方式"
+            value={entry.mode}
+            onChange={(mode) => setEntry({ ...entry, mode })}
+            options={[
+              {
+                value: "direct",
+                title: "Agent 直连",
+                description: "由各 Agent 连接和登录，适合大多数情况。",
+              },
+              {
+                value: "gateway",
+                title: "Studio 代理",
+                description: "由 Studio 连接服务，可让多个 Agent 共用登录。",
+              },
+            ]}
+          />
           {entry.mode === "gateway" && (
             <>
               {!local && (
-                <label className="flex items-center gap-2 text-sm">
-                  <input
-                    type="checkbox"
-                    checked={entry.oauth}
-                    onChange={(e) =>
-                      setEntry({ ...entry, oauth: e.target.checked })
-                    }
-                  />
-                  使用浏览器 OAuth 授权
-                </label>
+                <p className="text-xs text-muted-foreground">
+                  连接时自动检查授权需求，需要时会提示登录。
+                </p>
               )}
-              {entry.oauth && !local && (
-                <details>
-                  <summary className="cursor-pointer text-sm">
-                    高级授权设置
+              {!local && (
+                <details className="space-y-3">
+                  <summary className="cursor-pointer text-sm text-muted-foreground">
+                    授权设置（可选）
                   </summary>
                   <Input
                     aria-label="OAuth Client ID"
@@ -200,95 +173,10 @@ function McpExistingEditor({ row, onClose, onSaved }: EditorProps) {
               )}
             </>
           )}
-          {!!row?.sources.filter((s) => !s.gateway).length && !existing && (
-            <fieldset className="space-y-2">
-              <legend className="mb-2 text-sm font-medium">管理已有接入</legend>
-              {row.sources
-                .filter((s) => !s.gateway)
-                .map((s) => (
-                  <label key={s.id} className="flex items-start gap-2 text-sm">
-                    <input
-                      className="mt-1"
-                      type="checkbox"
-                      checked={sources.includes(s.id)}
-                      onChange={() => toggle(s.id, sources, setSources)}
-                    />
-                    <span>
-                      {s.agent === "claude" ? "Claude Code" : "Codex"} ·{" "}
-                      {s.scope}
-                      <span className="block break-all text-xs text-muted-foreground">
-                        {s.path} · {s.key}
-                      </span>
-                    </span>
-                  </label>
-                ))}
-              <p className="text-xs text-muted-foreground">
-                切换到网关时替换所选原入口，并保留备份，不另建重复入口。
-              </p>
-            </fieldset>
-          )}
-          {!!entry.bindings.length && (
-            <fieldset className="space-y-2">
-              <legend className="mb-2 text-sm font-medium">现有接入</legend>
-              {entry.bindings.map((b) => (
-                <label key={b.id} className="flex items-start gap-2 text-sm">
-                  <input
-                    className="mt-1"
-                    type="checkbox"
-                    checked={bindings.includes(b.id)}
-                    onChange={() => toggle(b.id, bindings, setBindings)}
-                  />
-                  <span>
-                    {b.agent === "claude" ? "Claude Code" : "Codex"}
-                    <span className="block break-all text-xs text-muted-foreground">
-                      {b.path} · {b.key}
-                    </span>
-                  </span>
-                </label>
-              ))}
-              <p className="text-xs text-muted-foreground">
-                取消勾选会从该 Agent 移除条目。
-              </p>
-            </fieldset>
-          )}
-          <fieldset className="space-y-2">
-            <legend className="mb-2 text-sm font-medium">
-              {existing || row ? "增加接入" : "用于哪些 Agent"}
-            </legend>
-            <div className="flex gap-5">
-              {["claude", "codex"].map((a) => (
-                <label key={a} className="flex items-center gap-2 text-sm">
-                  <input
-                    type="checkbox"
-                    checked={agents.includes(a)}
-                    onChange={() => toggle(a, agents, setAgents)}
-                  />
-                  <AgentIcon
-                    agentId={a === "claude" ? "claude-code" : "codex"}
-                    className="h-4 w-4"
-                  />
-                  {a === "claude" ? "Claude Code" : "Codex"}
-                </label>
-              ))}
-            </div>
-            <Label htmlFor="mcp-scope">作用域</Label>
-            <select
-              id="mcp-scope"
-              className="w-full rounded-md border border-border-default bg-background p-2"
-              value={projectId}
-              onChange={(e) => setProjectId(e.target.value)}
-            >
-              <option value="">用户全局</option>
-              {projects.map((p) => (
-                <option key={p.id} value={p.id}>
-                  {p.name}
-                </option>
-              ))}
-            </select>
-          </fieldset>
           <p className="text-xs text-muted-foreground">
-            保存前自动备份。完成后在 Agent 中重新加载 MCP；项目配置需要由 Agent
-            信任。
+            {entry.bindings.length
+              ? "保存会同步已有接入；分组中的配置需在 Agent 页面应用修改。接入位置请在 Agent 或项目页面管理。"
+              : "保存到 MCP Hub 后，在 Agent 或项目页面选择使用。原有配置保持不变。"}
           </p>
         </fieldset>
       </div>
@@ -313,7 +201,7 @@ function McpExistingEditor({ row, onClose, onSaved }: EditorProps) {
                 !!gatewayCheck.error))
           }
         >
-          {busy ? "正在保存…" : "保存并应用"}
+          {busy ? "正在保存…" : "保存到 Hub"}
         </Button>
       </footer>
     </form>

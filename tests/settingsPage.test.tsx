@@ -88,3 +88,23 @@ it("persists application toggles and allows all applications to be hidden and re
   await user.click(codex);
   await waitFor(() => expect(settings.disabledAgents).toEqual(["claude-code"]));
 });
+
+it("defaults builtin MCP visibility off and saves the display preference", async () => {
+  let settings = { ...defaultSettings(), showCodexBuiltinMcp: false };
+  handlers.set("get_settings", () => settings);
+  handlers.set("update_settings", ({ patch }) => {
+    settings = { ...settings, ...patch };
+    return settings;
+  });
+  renderWithProviders(<SettingsPage />);
+  const toggle = await screen.findByRole("switch", {
+    name: "显示 Codex App 内置 MCP",
+  });
+  expect(toggle).not.toBeChecked();
+  fireEvent.click(toggle);
+  await waitFor(() => expect(toggle).toBeChecked());
+  expect(settings.showCodexBuiltinMcp).toBe(true);
+  fireEvent.click(toggle);
+  await waitFor(() => expect(toggle).not.toBeChecked());
+  expect(settings.showCodexBuiltinMcp).toBe(false);
+});

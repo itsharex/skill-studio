@@ -153,6 +153,26 @@ export function SettingsPage() {
                 <ThemeToggle />
               </SettingCard>
             </SettingsSection>
+            <SettingsSection title="MCP" icon={<ShieldCheck />}>
+              <SettingCard
+                title={
+                  <label htmlFor="show-codex-builtin-mcp">
+                    显示 Codex App 内置 MCP
+                  </label>
+                }
+                description="在 MCP Hub 中显示 Codex App 内置服务。卡片置灰且只读，不支持托管、编辑或删除。"
+                icon={<ShieldCheck />}
+              >
+                <Switch
+                  id="show-codex-builtin-mcp"
+                  checked={settings.showCodexBuiltinMcp ?? false}
+                  disabled={update.isPending}
+                  onCheckedChange={(value) =>
+                    update.mutate({ showCodexBuiltinMcp: value })
+                  }
+                />
+              </SettingCard>
+            </SettingsSection>
             <SettingsSection title="分组与安装" icon={<Package />}>
               <SettingCard
                 title={

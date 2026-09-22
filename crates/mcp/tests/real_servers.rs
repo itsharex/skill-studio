@@ -80,6 +80,7 @@ fn group(id: &str, agent: &str, ids: &[&str]) -> groups::Group {
         agent: agent.into(),
         name: id.into(),
         entry_ids: ids.iter().map(|s| s.to_string()).collect(),
+        references: vec![],
         sort_order: 0,
     }
 }

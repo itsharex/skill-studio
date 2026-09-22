@@ -50,17 +50,19 @@ async function open() {
   });
   await screen.findByDisplayValue("hf-mcp-server");
 }
-it("recognizes a command and defaults to the named agent with no login or gateway steps", async () => {
+it("imports a command into the Hub without agent or scope controls", async () => {
   await open();
-  expect(screen.getByRole("checkbox", { name: "Codex" })).toBeChecked();
   expect(
-    screen.getByRole("checkbox", { name: "Claude Code" }),
-  ).not.toBeChecked();
-  fireEvent.click(screen.getByRole("button", { name: "安装" }));
+    screen.queryByRole("checkbox", { name: "Codex" }),
+  ).not.toBeInTheDocument();
+  expect(screen.queryByText("安装位置")).not.toBeInTheDocument();
+  fireEvent.click(screen.getByRole("button", { name: "添加到 Hub" }));
   await waitFor(() => expect(save()).toBeDefined());
   expect(save()).toMatchObject({
     params: {
-      agents: ["codex"],
+      agents: [],
+      sources: [],
+      bindingIds: [],
       scope: "user",
       projectId: "",
       entry: {
@@ -74,50 +76,21 @@ it("recognizes a command and defaults to the named agent with no login or gatewa
   expect(methods()).not.toContain("start");
   expect(methods()).not.toContain("login");
 });
-it("installs, starts the proxy and opens login in order through one explicit action", async () => {
+it("stores gateway authorization settings without starting the gateway or opening login", async () => {
   await open();
   fireEvent.click(screen.getByRole("radio", { name: /Studio 代理/ }));
-  expect(
-    screen.getByRole("checkbox", { name: "此服务需要网页登录" }),
-  ).toBeChecked();
   await waitFor(() =>
-    expect(screen.getByRole("button", { name: "安装并登录" })).toBeEnabled(),
+    expect(screen.getByRole("button", { name: "添加到 Hub" })).toBeEnabled(),
   );
-  fireEvent.click(screen.getByRole("button", { name: "安装并登录" }));
-  await screen.findByDisplayValue("https://login.example/authorize");
-  expect(
-    methods().filter((m) => ["saveEntry", "start", "login"].includes(m)),
-  ).toEqual(["saveEntry", "start", "login"]);
+  fireEvent.click(screen.getByRole("button", { name: "添加到 Hub" }));
+  await waitFor(() => expect(save()).toBeDefined());
   expect(save()).toMatchObject({
-    params: { entry: { mode: "gateway", oauth: true } },
+    params: { agents: [], entry: { mode: "gateway", oauth: false } },
   });
-});
-it("keeps a saved entry after proxy startup fails rather than leaving a duplicate-prone add form", async () => {
-  handlers.set("mcp_request", ({ method, params }) => {
-    if (method === "list") return status;
-    if (method === "parse") return [parsed];
-    if (method === "gatewayCheck") return { issue: null };
-    if (method === "saveEntry") status = { ...status, entries: [params.entry] };
-    if (method === "start") throw new Error("port unavailable");
-    return null;
-  });
-  await open();
-  fireEvent.click(screen.getByRole("radio", { name: /Studio 代理/ }));
-  await waitFor(() =>
-    expect(screen.getByRole("button", { name: "安装并登录" })).toBeEnabled(),
-  );
-  fireEvent.click(screen.getByRole("button", { name: "安装并登录" }));
-  await screen.findByText("hf-mcp-server · 连接详情");
-  expect(
-    screen.queryByLabelText("粘贴安装命令、网址或配置"),
-  ).not.toBeInTheDocument();
-  expect(methods().filter((m) => m === "saveEntry")).toHaveLength(1);
+  expect(methods()).not.toContain("start");
   expect(methods()).not.toContain("login");
 });
-it("requires a project for Claude local scope and preserves that scope in the save", async () => {
-  handlers.set("list_projects", () => [
-    { id: "p1", name: "Work", root: "/work" },
-  ]);
+it("does not apply agent or project scope inferred from pasted commands", async () => {
   handlers.set("mcp_request", ({ method }) =>
     method === "list"
       ? status
@@ -126,14 +99,11 @@ it("requires a project for Claude local scope and preserves that scope in the sa
         : null,
   );
   await open();
-  expect(screen.getByRole("button", { name: "安装" })).toBeDisabled();
-  fireEvent.change(screen.getByLabelText("安装项目"), {
-    target: { value: "p1" },
-  });
-  fireEvent.click(screen.getByRole("button", { name: "安装" }));
+  expect(screen.queryByLabelText("安装项目")).not.toBeInTheDocument();
+  fireEvent.click(screen.getByRole("button", { name: "添加到 Hub" }));
   await waitFor(() => expect(save()).toBeDefined());
   expect(save()).toMatchObject({
-    params: { agents: ["claude"], projectId: "p1", scope: "local" },
+    params: { agents: [], projectId: "", scope: "user" },
   });
 });
 it("lets users edit inferred fields inline and preserves extensions", async () => {
@@ -153,8 +123,7 @@ it("lets users edit inferred fields inline and preserves extensions", async () =
   fireEvent.change(screen.getByLabelText("请求头值 1"), {
     target: { value: "test" },
   });
-  expect(screen.getByRole("checkbox", { name: "Codex" })).toBeChecked();
-  fireEvent.click(screen.getByRole("button", { name: "安装" }));
+  fireEvent.click(screen.getByRole("button", { name: "添加到 Hub" }));
   await waitFor(() => expect(save()).toBeDefined());
   expect(save()).toMatchObject({
     params: {
@@ -173,6 +142,6 @@ it("invalidates a previous preview immediately when the input changes", async ()
     target: { value: "" },
   });
   expect(screen.getByLabelText("名称")).toHaveValue("");
-  expect(screen.getByRole("button", { name: "安装" })).toBeDisabled();
+  expect(screen.getByRole("button", { name: "添加到 Hub" })).toBeDisabled();
   expect(methods()).not.toContain("saveEntry");
 });

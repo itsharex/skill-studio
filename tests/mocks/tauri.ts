@@ -27,6 +27,18 @@ export const invoke = vi.fn(async (command: string, args: unknown) => {
   calls.push({ command, args });
   const handler = handlers.get(command);
   if (handler) return handler(args as any);
+  if (
+    command === "mcp_request" &&
+    (args as { method?: string })?.method === "list"
+  ) {
+    return {
+      running: false,
+      entries: [],
+      servers: [],
+      discovered: [],
+      scanWarnings: [],
+    };
+  }
   return defaultResult(command);
 });
 

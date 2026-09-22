@@ -27,7 +27,7 @@ describe("窗口壳与侧栏导航", () => {
       disabledAgents: ["codex"],
     }));
     renderWithProviders(<App />);
-    const nav = within(screen.getByRole("navigation", { name: "主导航" }));
+    let nav = within(screen.getByRole("navigation", { name: "主导航" }));
     await waitFor(() => {
       expect(
         nav.getByRole("button", { name: /Claude Code/ }),
@@ -287,4 +287,139 @@ it("guards project drafts when leaving through the top navigation and search", a
   fireEvent.click(screen.getByRole("button", { name: "放弃修改并离开" }));
   expect(screen.queryByRole("checkbox", { name: "Alpha" })).toBeNull();
   expect(calls.filter((c) => c.command === "update_project")).toHaveLength(0);
+});
+
+it("uses the selected Hub to scope Agent and project pages without a second resource selector", async () => {
+  withAgents();
+  handlers.set("list_projects", () => [
+    makeProject({ id: "p", name: "Demo", root: "/work/demo" }),
+  ]);
+  const user = userEvent.setup();
+  renderWithProviders(<App />);
+  let nav = within(screen.getByRole("navigation", { name: "主导航" }));
+  await user.click(nav.getByRole("button", { name: "MCP Hub" }));
+  await user.click(await nav.findByRole("button", { name: "Codex" }));
+  expect(
+    await screen.findByRole("button", { name: "新建 MCP 分组" }),
+  ).toBeInTheDocument();
+  expect(
+    screen.queryByRole("tablist", { name: "资源类型" }),
+  ).not.toBeInTheDocument();
+  expect(nav.getByRole("button", { name: "MCP Hub" })).toHaveAttribute(
+    "aria-pressed",
+    "true",
+  );
+  await user.click(screen.getByRole("button", { name: "新建 MCP 分组" }));
+  await user.type(
+    screen.getByRole("textbox", { name: "MCP 分组名称" }),
+    "取消的草稿",
+  );
+  await user.click(
+    within(screen.getByRole("dialog")).getByRole("button", { name: "取消" }),
+  );
+  await waitFor(() =>
+    expect(screen.queryByRole("dialog")).not.toBeInTheDocument(),
+  );
+  await user.click(nav.getByRole("button", { name: "项目" }));
+  await user.click(
+    await screen.findByRole("button", { name: "查看 Demo 的 MCP" }),
+  );
+  expect(await screen.findByText("项目 MCP")).toBeInTheDocument();
+  expect(
+    screen.queryByRole("button", { name: "写入项目" }),
+  ).not.toBeInTheDocument();
+  expect(screen.queryByText("项目已有 skill")).not.toBeInTheDocument();
+  await user.click(screen.getByRole("button", { name: "设置" }));
+  await user.click(screen.getByRole("button", { name: "返回" }));
+  expect(screen.getByText("管理各项目的 MCP 接入")).toBeInTheDocument();
+  nav = within(screen.getByRole("navigation", { name: "主导航" }));
+  await user.click(nav.getByRole("button", { name: "Skill Hub" }));
+  await user.click(nav.getByRole("button", { name: "Codex" }));
+  expect(
+    await screen.findByRole("button", { name: "新建分组" }),
+  ).toBeInTheDocument();
+  expect(
+    screen.queryByRole("tab", { name: /^已配置 MCP/ }),
+  ).not.toBeInTheDocument();
+  await user.click(nav.getByRole("button", { name: "项目" }));
+  await user.click(await screen.findByRole("button", { name: "Demo" }));
+  expect(await screen.findByText("项目已有 skill")).toBeInTheDocument();
+  expect(screen.queryByText("项目 MCP")).not.toBeInTheDocument();
+});
+
+it("restores MCP mode for a saved Agent page", async () => {
+  withAgents();
+  localStorage.setItem("skill-studio-view", "agent:codex");
+  localStorage.setItem("skill-studio-resource", "mcp");
+  renderWithProviders(<App />);
+  expect(
+    await screen.findByRole("button", { name: "新建 MCP 分组" }),
+  ).toBeInTheDocument();
+  expect(screen.queryByRole("tab", { name: "Skill" })).not.toBeInTheDocument();
+});
+
+it("reuses shared Skill data and the page container when switching Agents, while manual refresh still fetches", async () => {
+  withAgents();
+  handlers.set("list_groups", () => [
+    makeGroup({
+      id: "claude-group",
+      agentId: "claude-code",
+      name: "Claude group",
+    }),
+    makeGroup({ id: "codex-group", agentId: "codex", name: "Codex group" }),
+  ]);
+  const user = userEvent.setup();
+  renderWithProviders(<App />);
+  const nav = within(screen.getByRole("navigation", { name: "主导航" }));
+  await user.click(await nav.findByRole("button", { name: "Claude Code" }));
+  await screen.findByText("Claude group");
+  const frame = screen
+    .getByText("Claude group")
+    .closest("fieldset")?.firstElementChild;
+  const tracked = [
+    "list_groups",
+    "get_config",
+    "get_settings",
+    "scan_skills",
+    "list_skill_backups",
+  ];
+  const counts = () =>
+    tracked.map(
+      (command) => calls.filter((call) => call.command === command).length,
+    );
+  const before = counts();
+  await user.click(nav.getByRole("button", { name: "Codex" }));
+  await screen.findByText("Codex group");
+  expect(
+    screen.getByText("Codex group").closest("fieldset")?.firstElementChild,
+  ).toBe(frame);
+  expect(screen.queryByText("Claude group")).not.toBeInTheDocument();
+  await user.click(nav.getByRole("button", { name: "Claude Code" }));
+  await screen.findByText("Claude group");
+  expect(counts()).toEqual(before);
+  await user.click(screen.getByRole("button", { name: "重新扫描" }));
+  await waitFor(() => expect(counts()[0]).toBeGreaterThan(before[0]));
+});
+
+it("reuses the MCP snapshot when switching Agents", async () => {
+  withAgents();
+  const user = userEvent.setup();
+  renderWithProviders(<App />);
+  const nav = within(screen.getByRole("navigation", { name: "主导航" }));
+  await user.click(nav.getByRole("button", { name: "MCP Hub" }));
+  await screen.findByText("网关已关闭");
+  await user.click(await nav.findByRole("button", { name: "Claude Code" }));
+  await screen.findByRole("button", { name: "新建 MCP 分组" });
+  const count = () =>
+    calls.filter(
+      (call) =>
+        call.command === "mcp_request" &&
+        (call.args as { method: string }).method === "list",
+    ).length;
+  const before = count();
+  await user.click(nav.getByRole("button", { name: "Codex" }));
+  await screen.findByRole("button", { name: "新建 MCP 分组" });
+  await user.click(nav.getByRole("button", { name: "Claude Code" }));
+  await screen.findByRole("button", { name: "新建 MCP 分组" });
+  expect(count()).toBe(before);
 });

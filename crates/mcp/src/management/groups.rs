@@ -8,6 +8,9 @@ pub struct Group {
     pub agent: String,
     pub name: String,
     pub entry_ids: Vec<String>,
+    /// Non-owning references captured from scanned sources; saving never adopts them.
+    #[serde(default)]
+    pub references: Vec<Entry>,
     #[serde(default)]
     pub sort_order: usize,
 }
@@ -46,29 +49,36 @@ pub fn save_group(dir: &Path, mut group: Group, imports: Vec<Entry>) -> Result<(
     {
         bail!("此 Agent 已存在同名分组");
     }
-    for entry in imports {
-        if !group.entry_ids.contains(&entry.id) {
+    // Ignore references submitted in the group payload; only server-rescanned imports
+    // or previously saved references can supply filesystem locations.
+    group.references = catalog
+        .groups
+        .iter()
+        .find(|g| g.id == group.id)
+        .map(|g| g.references.clone())
+        .unwrap_or_default();
+    group.references.retain(|e| group.entry_ids.contains(&e.id));
+    for mut entry in imports {
+        if !group.entry_ids.contains(&entry.id) || catalog.entries.iter().any(|e| e.id == entry.id)
+        {
             continue;
         }
-        if let Some(existing) = catalog.entries.iter().find(|e| e.id == entry.id) {
-            if existing.definition != entry.definition {
-                bail!("MCP 已变化，请刷新后重试");
-            }
-        } else {
-            native::validate(&entry.definition)?;
-            if entry.bindings.iter().any(|b| {
-                catalog
-                    .entries
-                    .iter()
-                    .flat_map(|e| &e.bindings)
-                    .any(|other| {
-                        other.path == b.path && other.project == b.project && other.key == b.key
-                    })
-            }) {
-                bail!("来源已由其他 MCP 管理，请刷新后重试");
-            }
-            catalog.entries.push(entry);
+        native::validate(&entry.definition)?;
+        entry.bindings.retain(|b| {
+            !catalog.active_groups.values().any(|g| {
+                g.bindings.iter().any(|owned| {
+                    owned.agent == b.agent
+                        && owned.path == b.path
+                        && owned.key == b.key
+                        && owned.project == b.project
+                })
+            })
+        });
+        if entry.bindings.is_empty() {
+            bail!("分组部署不能作为原始来源，请先在 Hub 添加独立配置");
         }
+        group.references.retain(|e| e.id != entry.id);
+        group.references.push(entry);
     }
     let mut seen = HashSet::new();
     group.entry_ids.retain(|id| seen.insert(id.clone()));
@@ -143,16 +153,36 @@ pub fn activate(
         }
         let mut names = HashSet::new();
         for entry_id in &group.entry_ids {
-            let mut entry = catalog
+            let entry = catalog
                 .entries
                 .iter()
                 .find(|e| &e.id == entry_id)
-                .context("分组包含已缺失的 MCP，请编辑分组")?
-                .clone();
+                .cloned()
+                .or_else(|| group.references.iter().find(|e| &e.id == entry_id).cloned())
+                .context("分组包含已缺失的 MCP，请编辑分组")?;
+            if !catalog.entries.iter().any(|e| e.id == entry.id) {
+                // A reference is valid only while its source still exists and matches.
+                // Never silently deploy a stale snapshot after the source was edited.
+                let valid = entry.bindings.iter().any(|b| {
+                    read_text(&b.path)
+                        .ok()
+                        .flatten()
+                        .and_then(|text| {
+                            native::entry(&text, &b.agent, b.project.as_deref(), &b.key)
+                                .ok()
+                                .flatten()
+                        })
+                        .is_some_and(|value| {
+                            native::canonical(&value, &b.agent) == entry.definition
+                        })
+                });
+                if !valid {
+                    bail!("MCP「{}」的来源已变化，请重新编辑分组选择成员", entry.name);
+                }
+            }
             if !names.insert(entry.name.trim().to_string()) {
                 bail!("组内 MCP 名称重复，请先在 Hub 修改名称");
             }
-            entry.bindings.clear();
             entries.push(entry);
         }
     }
@@ -177,6 +207,7 @@ pub fn activate(
             .entries
             .iter()
             .find(|e| e.id == entry.id)
+            .or(Some(entry))
             .and_then(|e| {
                 e.bindings
                     .iter()
@@ -193,6 +224,13 @@ pub fn activate(
         };
         let original = native::entry(&text, agent_id, None, &key)?;
         if let Some(value) = &original {
+            if value["enabled"].as_bool() == Some(false) {
+                bail!("MCP「{key}」已被手动停用，请先恢复启用");
+            }
+            // Match Skill groups: existing usable content remains externally owned.
+            if entry.mode == "direct" && native::canonical(value, agent_id) == entry.definition {
+                continue;
+            }
             let owned = catalog
                 .entries
                 .iter()
@@ -245,7 +283,13 @@ pub fn activate(
             agent_id.into(),
             ActiveGroup {
                 group_id: id.into(),
-                entries,
+                entries: entries
+                    .into_iter()
+                    .map(|mut e| {
+                        e.bindings.clear();
+                        e
+                    })
+                    .collect(),
                 bindings,
             },
         );

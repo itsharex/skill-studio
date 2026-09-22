@@ -28,7 +28,7 @@ use rmcp::{
 use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
 use std::{
-    collections::HashMap,
+    collections::{HashMap, HashSet},
     path::{Path, PathBuf},
     sync::Arc,
     time::Duration,
@@ -42,8 +42,11 @@ type HttpService = StreamableHttpService<Bridge, LocalSessionManager>;
 struct Runtime {
     server: Server,
     auth: Option<AuthClient<reqwest::Client>>,
+    auth_required: Arc<Mutex<HashSet<String>>>,
 }
 struct Pending {
+    flow_id: String,
+    completed: bool,
     oauth: OAuthState,
     started: std::time::Instant,
 }
@@ -54,6 +57,7 @@ struct App {
     services: Mutex<HashMap<String, HttpService>>,
     credentials: Mutex<HashMap<String, Credentials>>,
     pending: Mutex<HashMap<String, Pending>>,
+    auth_required: Arc<Mutex<HashSet<String>>>,
 }
 #[derive(Clone)]
 pub struct Bridge {
@@ -86,6 +90,33 @@ fn http_client(
         .redirect(reqwest::redirect::Policy::none())
         .connect_timeout(Duration::from_secs(15))
         .build()?)
+}
+fn requires_authorization(error: &anyhow::Error) -> bool {
+    // rmcp's initialization error owns its transport error but does not expose
+    // it via Error::source(), so unwrap that boundary explicitly.
+    let mut current: Option<&(dyn std::error::Error + 'static)> = Some(error.as_ref());
+    while let Some(cause) = current {
+        if cause.is::<rmcp::transport::streamable_http_client::AuthRequiredError>()
+            || matches!(
+                cause.downcast_ref::<rmcp::transport::auth::AuthError>(),
+                Some(rmcp::transport::auth::AuthError::AuthorizationRequired)
+            )
+            || cause
+                .downcast_ref::<reqwest::Error>()
+                .is_some_and(|e| e.status() == Some(StatusCode::UNAUTHORIZED))
+        {
+            return true;
+        }
+        current =
+            if let Some(rmcp::service::ClientInitializeError::TransportError { error, .. }) =
+                cause.downcast_ref::<rmcp::service::ClientInitializeError>()
+            {
+                Some(error.error.as_ref())
+            } else {
+                cause.source()
+            };
+    }
+    false
 }
 async fn connect(runtime: &Runtime) -> Result<Upstream> {
     let info = ClientConfig::default();
@@ -124,9 +155,24 @@ async fn connect(runtime: &Runtime) -> Result<Upstream> {
             }
         }
     };
-    tokio::time::timeout(Duration::from_secs(30), future)
+    let result = tokio::time::timeout(Duration::from_secs(30), future)
         .await
-        .context("MCP 握手超时")?
+        .context("MCP 握手超时")?;
+    let mut needed = runtime.auth_required.lock().await;
+    match &result {
+        Ok(_) => {
+            needed.remove(&runtime.server.id);
+        }
+        Err(error) if requires_authorization(error) => {
+            if matches!(&runtime.server.connection, Connection::Http { headers, .. }
+                if !headers.keys().any(|k| k.eq_ignore_ascii_case("authorization")))
+            {
+                needed.insert(runtime.server.id.clone());
+            }
+        }
+        _ => {}
+    }
+    result
 }
 impl Bridge {
     async fn forward<T: serde::de::DeserializeOwned>(
@@ -164,10 +210,16 @@ impl ServerHandler for Bridge {
         ctx: RequestContext<RoleServer>,
     ) -> Result<InitializeResult, ErrorData> {
         ctx.peer.set_peer_info(request.clone());
-        let up = self
-            .upstream
-            .get_or_try_init(|| async { connect(&self.runtime).await.map_err(mcp_err) })
-            .await?;
+        let up =
+            self.upstream
+                .get_or_try_init(|| async {
+                    connect(&self.runtime).await.map_err(|error| {
+                if requires_authorization(&error) {
+                    mcp_err("服务需要认证，请在 Studio MCP Hub 中检查连接并登录授权或更新 Token")
+                } else { mcp_err(error) }
+            })
+                })
+                .await?;
         let upstream_info = up.peer_info().ok_or_else(|| mcp_err("上游未返回信息"))?;
         let mut info = ServerConfig::new(upstream_info.capabilities.clone()).with_server_info(
             upstream_info
@@ -305,7 +357,16 @@ impl App {
         Ok(())
     }
     async fn runtime(&self, server: Server) -> Result<Runtime> {
-        let auth = if server.oauth {
+        // Authentication is driven by saved credentials and the upstream challenge,
+        // not the legacy manual OAuth flag. Explicit headers take precedence.
+        let credentials = self.credentials(&server.id).await;
+        let use_credentials = matches!(&server.connection, Connection::Http { headers, .. }
+            if !headers.keys().any(|k| k.eq_ignore_ascii_case("authorization")))
+            && credentials
+                .load()
+                .await?
+                .is_some_and(|c| c.token_response.is_some());
+        let auth = if use_credentials {
             let Connection::Http { url, headers } = &server.connection else {
                 bail!("OAuth 需要 HTTP")
             };
@@ -324,9 +385,14 @@ impl App {
         } else {
             None
         };
-        Ok(Runtime { server, auth })
+        Ok(Runtime {
+            server,
+            auth,
+            auth_required: self.auth_required.clone(),
+        })
     }
     async fn invalidate(&self, id: &str) {
+        self.auth_required.lock().await.remove(id);
         if let Some(s) = self.services.lock().await.remove(id) {
             s.config.cancellation_token.cancel();
         }
@@ -458,10 +524,11 @@ async fn action(app: &Arc<App>, method: &str, mut p: Value) -> Result<Value> {
                     .load()
                     .await?
                     .is_some_and(|c| c.token_response.is_some()));
+                v["authRequired"] = json!(app.auth_required.lock().await.contains(&s.id));
                 servers.push(v);
             }
             Ok(
-                json!({"running":true,"configurationVersion":2,"port":c.port,"servers":servers,"bindings":c.bindings}),
+                json!({"running":true,"configurationVersion":3,"port":c.port,"servers":servers,"bindings":c.bindings}),
             )
         }
         "save" => {
@@ -521,10 +588,40 @@ async fn action(app: &Arc<App>, method: &str, mut p: Value) -> Result<Value> {
                 .cloned()
                 .context("MCP 不存在")?;
             let runtime = app.runtime(s).await?;
-            let up = connect(&runtime).await?;
+            let up = match connect(&runtime).await {
+                Ok(up) => up,
+                Err(error) if requires_authorization(&error) => {
+                    if matches!(&runtime.server.connection, Connection::Http { headers, .. }
+                        if headers.keys().any(|k| k.eq_ignore_ascii_case("authorization")))
+                    {
+                        bail!("服务拒绝了 Authorization 请求头，请检查 Token 是否有效");
+                    }
+                    return Ok(json!({"authRequired": true}));
+                }
+                Err(error) => return Err(error),
+            };
             let result = tokio::time::timeout(Duration::from_secs(30), up.list_all_tools()).await;
             let _ = up.cancel().await;
             Ok(serde_json::to_value(result.context("列出工具超时")??)?)
+        }
+        "loginStatus" => {
+            let id = p["id"].as_str().context("缺少 ID")?;
+            let flow_id = p["flowId"].as_str().context("缺少授权流程 ID")?;
+            let mut pending = app.pending.lock().await;
+            let Some(flow) = pending.get(id).filter(|flow| flow.flow_id == flow_id) else {
+                return Ok(json!({"status":"expired"}));
+            };
+            let status = if flow.started.elapsed() > Duration::from_secs(300) {
+                "expired"
+            } else if flow.completed {
+                "complete"
+            } else {
+                "pending"
+            };
+            if status != "pending" {
+                pending.remove(id);
+            }
+            Ok(json!({"status":status}))
         }
         "login" => {
             let id = p["id"].as_str().context("缺少 ID")?;
@@ -537,8 +634,13 @@ async fn action(app: &Arc<App>, method: &str, mut p: Value) -> Result<Value> {
             let Connection::Http { url, .. } = &s.connection else {
                 bail!("仅 HTTP 服务支持 OAuth");
             };
-            if !s.oauth {
-                bail!("请先开启 OAuth");
+            if let Connection::Http { headers, .. } = &s.connection {
+                if headers
+                    .keys()
+                    .any(|k| k.eq_ignore_ascii_case("authorization"))
+                {
+                    bail!("已配置 Authorization 请求头，请先移除再使用网页登录");
+                }
             }
             app.invalidate(id).await;
             let mut manager = AuthorizationManager::new(url).await?;
@@ -559,14 +661,17 @@ async fn action(app: &Arc<App>, method: &str, mut p: Value) -> Result<Value> {
             }
             state.start_authorization(request).await?;
             let url = state.get_authorization_url().await?;
+            let flow_id = uuid::Uuid::new_v4().to_string();
             app.pending.lock().await.insert(
                 id.into(),
                 Pending {
+                    flow_id: flow_id.clone(),
+                    completed: false,
                     oauth: state,
                     started: std::time::Instant::now(),
                 },
             );
-            Ok(json!({"url":url}))
+            Ok(json!({"url":url,"flowId":flow_id}))
         }
         "logout" => {
             let id = p["id"].as_str().context("缺少 ID")?;
@@ -626,6 +731,9 @@ async fn callback(
     let Some(flow) = pending.get_mut(&id) else {
         return (StatusCode::BAD_REQUEST, "登录已过期，请回到 Studio 重试").into_response();
     };
+    if flow.completed {
+        return (StatusCode::BAD_REQUEST, "此授权回调已处理").into_response();
+    }
     if flow.started.elapsed() > Duration::from_secs(300) {
         pending.remove(&id);
         return (StatusCode::BAD_REQUEST, "登录已过期").into_response();
@@ -646,12 +754,12 @@ async fn callback(
         .await
     {
         Ok(()) => {
-            pending.remove(&id);
+            flow.completed = true;
             drop(pending);
             app.invalidate(&id).await;
             (
                 StatusCode::OK,
-                "授权成功，可以关闭此页面并返回 Skill Studio。",
+                "授权成功，正在返回 Skill Studio。此页面可以关闭；若应用未显示，请手动切回。",
             )
                 .into_response()
         }
@@ -683,6 +791,7 @@ pub async fn serve(dir: PathBuf) -> Result<()> {
         services: Mutex::new(HashMap::new()),
         credentials: Mutex::new(HashMap::new()),
         pending: Mutex::new(HashMap::new()),
+        auth_required: Arc::new(Mutex::new(HashSet::new())),
     });
     app.reload().await?;
     let router = Router::new()
@@ -744,7 +853,11 @@ pub async fn bridge_stdio(dir: PathBuf, id: String) -> Result<()> {
         scopes: vec![],
     };
     Bridge {
-        runtime: Runtime { server, auth: None },
+        runtime: Runtime {
+            server,
+            auth: None,
+            auth_required: Arc::new(Mutex::new(HashSet::new())),
+        },
         upstream: Arc::new(OnceCell::new()),
     }
     .serve(rmcp::transport::stdio())

@@ -267,6 +267,7 @@ fn group(id: &str, agent: &str, ids: &[&str]) -> groups::Group {
         agent: agent.into(),
         name: id.into(),
         entry_ids: ids.iter().map(|s| s.to_string()).collect(),
+        references: vec![],
         sort_order: 0,
     }
 }
@@ -383,12 +384,13 @@ fn group_edits_are_pending_and_external_drift_prevents_partial_switch() {
     assert!(groups::issues(&read(&dir).unwrap()).contains_key("codex"));
 }
 #[test]
-fn group_reuses_imported_native_entry_and_restores_it_after_pending_update() {
+fn group_references_do_not_adopt_or_overwrite_manual_entries() {
     let root = tempfile::tempdir().unwrap();
     let dir = root.path().join("studio");
     let path = root.path().join("config.toml");
-    std::fs::write(&path, "[mcp_servers.Sample]\ncommand='a'\nenabled=false\n").unwrap();
-    let definition = json!({"command":"a","enabled":false});
+    let original = "# keep formatting\n[mcp_servers.Sample]\ncommand='a'\n";
+    std::fs::write(&path, original).unwrap();
+    let definition = json!({"command":"a"});
     let mut imported = entry(native::canonical(&definition, "codex"), "direct");
     imported.name = "Display name".into();
     imported.bindings.push(Binding {
@@ -398,63 +400,21 @@ fn group_reuses_imported_native_entry_and_restores_it_after_pending_update() {
         project: None,
         key: "Sample".into(),
         original: Some(definition.clone()),
-        installed: definition.clone(),
+        installed: definition,
     });
     groups::save_group(&dir, group("one", "codex", &["sample"]), vec![imported]).unwrap();
+    assert!(read(&dir).unwrap().entries.is_empty());
+    assert_eq!(std::fs::read_to_string(&path).unwrap(), original);
     groups::activate(&dir, "codex", Some("one"), &path, Path::new("/app")).unwrap();
-    assert!(native::entry(
-        &std::fs::read_to_string(&path).unwrap(),
-        "codex",
-        None,
-        "Display name"
-    )
-    .unwrap()
-    .is_none());
-    let old = read(&dir).unwrap().entries[0].clone();
-    let mut next = old.clone();
-    next.definition["command"] = json!("new");
-    save(
-        &dir,
-        next,
-        current_targets(&old),
-        Path::new("/app"),
-        Some(&old),
-    )
-    .unwrap();
-    assert_eq!(
-        native::entry(
-            &std::fs::read_to_string(&path).unwrap(),
-            "codex",
-            None,
-            "Sample"
-        )
-        .unwrap()
-        .unwrap()["command"],
-        "a"
-    );
-    groups::activate(&dir, "codex", Some("one"), &path, Path::new("/app")).unwrap();
-    assert_eq!(
-        native::entry(
-            &std::fs::read_to_string(&path).unwrap(),
-            "codex",
-            None,
-            "Sample"
-        )
-        .unwrap()
-        .unwrap()["command"],
-        "new"
-    );
+    assert!(read(&dir).unwrap().active_groups["codex"]
+        .bindings
+        .is_empty());
+    assert_eq!(std::fs::read_to_string(&path).unwrap(), original);
     groups::activate(&dir, "codex", None, &path, Path::new("/app")).unwrap();
-    assert_eq!(
-        native::entry(
-            &std::fs::read_to_string(&path).unwrap(),
-            "codex",
-            None,
-            "Sample"
-        )
-        .unwrap(),
-        Some(definition)
-    );
+    assert_eq!(std::fs::read_to_string(&path).unwrap(), original);
+    std::fs::write(&path, "[mcp_servers.Sample]\ncommand='changed'\n").unwrap();
+    assert!(groups::activate(&dir, "codex", Some("one"), &path, Path::new("/app")).is_err());
+    assert!(read(&dir).unwrap().active_groups.is_empty());
 }
 #[test]
 fn groups_validate_ownership_missing_members_names_and_order_without_writing_targets() {
@@ -484,4 +444,186 @@ fn groups_validate_ownership_missing_members_names_and_order_without_writing_tar
         0
     );
     groups::remove_group(&dir, "claude", "one").unwrap();
+}
+
+#[test]
+fn deleting_unmanaged_sources_preserves_other_keys_and_rejects_stale_snapshots() {
+    let root = tempfile::tempdir().unwrap();
+    let dir = root.path().join("studio");
+    let claude = root.path().join("claude.json");
+    let codex = root.path().join("config.toml");
+    let original = r#"{"env":{"KEEP":"yes"},"mcpServers":{"sample":{"command":"sample"},"other":{"command":"other"}}}"#;
+    std::fs::write(&claude, original).unwrap();
+    std::fs::write(
+        &codex,
+        "model='keep'\n[mcp_servers.sample]\ncommand='changed'\n",
+    )
+    .unwrap();
+    let targets = || {
+        vec![
+            target(
+                claude.clone(),
+                "claude",
+                "sample",
+                Some(json!({"command":"sample"})),
+            ),
+            target(
+                codex.clone(),
+                "codex",
+                "sample",
+                Some(json!({"command":"sample"})),
+            ),
+        ]
+    };
+    assert!(remove_sources(&dir, targets()).is_err());
+    assert_eq!(std::fs::read_to_string(&claude).unwrap(), original);
+    std::fs::write(
+        &codex,
+        "model='keep'\n[mcp_servers.sample]\ncommand='sample'\n",
+    )
+    .unwrap();
+    remove_sources(&dir, targets()).unwrap();
+    let text = std::fs::read_to_string(&claude).unwrap();
+    assert!(native::entry(&text, "claude", None, "sample")
+        .unwrap()
+        .is_none());
+    assert!(native::entry(&text, "claude", None, "other")
+        .unwrap()
+        .is_some());
+    assert!(text.contains("KEEP"));
+    let text = std::fs::read_to_string(&codex).unwrap();
+    assert!(native::entry(&text, "codex", None, "sample")
+        .unwrap()
+        .is_none());
+    assert!(text.contains("keep"));
+    assert!(read(&dir).unwrap().entries.is_empty());
+}
+
+#[test]
+fn deleting_scanned_sources_rejects_managed_bindings() {
+    let root = tempfile::tempdir().unwrap();
+    let dir = root.path().join("studio");
+    let path = root.path().join("claude.json");
+    save(
+        &dir,
+        entry(json!({"type":"stdio","command":"sample"}), "direct"),
+        vec![target(path.clone(), "claude", "sample", None)],
+        Path::new("/app"),
+        None,
+    )
+    .unwrap();
+    let catalog = read(&dir).unwrap();
+    assert!(remove_sources(&dir, current_targets(&catalog.entries[0])).is_err());
+    assert!(native::entry(
+        &std::fs::read_to_string(path).unwrap(),
+        "claude",
+        None,
+        "sample"
+    )
+    .unwrap()
+    .is_some());
+}
+
+#[test]
+fn deleting_scanned_sources_rejects_active_group_bindings() {
+    let root = tempfile::tempdir().unwrap();
+    let dir = root.path().join("studio");
+    let path = root.path().join("config.toml");
+    save(
+        &dir,
+        entry(json!({"type":"stdio","command":"sample"}), "direct"),
+        vec![],
+        Path::new("/app"),
+        None,
+    )
+    .unwrap();
+    groups::save_group(&dir, group("one", "codex", &["sample"]), vec![]).unwrap();
+    groups::activate(&dir, "codex", Some("one"), &path, Path::new("/app")).unwrap();
+    let before = std::fs::read_to_string(&path).unwrap();
+    let current = native::entry(&before, "codex", None, "Sample")
+        .unwrap()
+        .unwrap();
+    assert!(remove_sources(
+        &dir,
+        vec![target(path.clone(), "codex", "Sample", Some(current))]
+    )
+    .is_err());
+    assert_eq!(std::fs::read_to_string(&path).unwrap(), before);
+}
+
+#[test]
+fn referenced_group_deploys_only_missing_target_and_removes_only_its_copy() {
+    let root = tempfile::tempdir().unwrap();
+    let dir = root.path().join("studio");
+    let source = root.path().join("claude.json");
+    let target = root.path().join("config.toml");
+    let definition = json!({"command":"demo"});
+    std::fs::write(
+        &source,
+        json!({"mcpServers":{"Sample":definition}}).to_string(),
+    )
+    .unwrap();
+    let original = std::fs::read(&source).unwrap();
+    let mut reference = entry(native::canonical(&definition, "claude"), "direct");
+    reference.bindings.push(Binding {
+        id: "source".into(),
+        agent: "claude".into(),
+        path: source.clone(),
+        project: None,
+        key: "Sample".into(),
+        original: Some(definition.clone()),
+        installed: definition,
+    });
+    groups::save_group(&dir, group("one", "codex", &["sample"]), vec![reference]).unwrap();
+    assert!(read(&dir).unwrap().entries.is_empty());
+    assert!(!target.exists());
+    for _ in 0..2 {
+        groups::activate(&dir, "codex", Some("one"), &target, Path::new("/app")).unwrap();
+        assert_eq!(read(&dir).unwrap().active_groups["codex"].bindings.len(), 1);
+    }
+    groups::activate(&dir, "codex", None, &target, Path::new("/app")).unwrap();
+    assert!(native::entry(
+        &std::fs::read_to_string(&target).unwrap(),
+        "codex",
+        None,
+        "Sample"
+    )
+    .unwrap()
+    .is_none());
+    groups::remove_group(&dir, "codex", "one").unwrap();
+    assert_eq!(std::fs::read(&source).unwrap(), original);
+    assert!(read(&dir).unwrap().entries.is_empty());
+}
+
+#[test]
+fn group_does_not_reenable_manually_disabled_mcp() {
+    let root = tempfile::tempdir().unwrap();
+    let dir = root.path().join("studio");
+    let path = root.path().join("config.toml");
+    let definition = json!({"command":"demo","enabled":false});
+    let mut reference = entry(native::canonical(&definition, "codex"), "direct");
+    std::fs::write(
+        &path,
+        "[mcp_servers.Sample]\ncommand='demo'\nenabled=false\n",
+    )
+    .unwrap();
+    let original = std::fs::read(&path).unwrap();
+    reference.bindings.push(Binding {
+        id: "source".into(),
+        agent: "codex".into(),
+        path: path.clone(),
+        project: None,
+        key: "Sample".into(),
+        original: Some(definition.clone()),
+        installed: definition,
+    });
+    groups::save_group(&dir, group("one", "codex", &["sample"]), vec![reference]).unwrap();
+    assert!(
+        groups::activate(&dir, "codex", Some("one"), &path, Path::new("/app"))
+            .unwrap_err()
+            .to_string()
+            .contains("手动停用")
+    );
+    assert_eq!(std::fs::read(&path).unwrap(), original);
+    assert!(read(&dir).unwrap().active_groups.is_empty());
 }

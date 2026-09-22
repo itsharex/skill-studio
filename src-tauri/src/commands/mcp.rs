@@ -6,7 +6,7 @@ use skill_studio_mcp::{
     gateway, management, native,
 };
 use std::{path::PathBuf, process::Stdio, time::Duration};
-use tauri::State;
+use tauri::{Manager, State};
 fn dir(state: &AppState) -> PathBuf {
     state.studio().store().dir().join("mcp")
 }
@@ -91,9 +91,25 @@ pub async fn mcp_request(
                             let found = scanned
                                 .discovered
                                 .iter()
-                                .find(|d| Some(d.id.as_str()) == requested["id"].as_str())
+                                .find(|d| {
+                                    Some(d.id.as_str()) == requested["id"].as_str()
+                                        || requested["sourceIds"].as_array().is_some_and(|ids| {
+                                            d.sources.iter().any(|source| {
+                                                ids.iter().any(|id| {
+                                                    id.as_str() == Some(source.id.as_str())
+                                                })
+                                            })
+                                        })
+                                })
                                 .context("MCP 来源已变化，请刷新后重试")?;
-                            let source = found.sources.first().context("MCP 来源已缺失")?;
+                            let source = found
+                                .sources
+                                .iter()
+                                .find(|source| {
+                                    native::canonical(&source.definition, &source.agent)
+                                        == requested["definition"]
+                                })
+                                .context("MCP 来源已变化，请刷新后重试")?;
                             anyhow::ensure!(
                                 !found.sources.iter().any(|s| s.gateway),
                                 "请先在 Hub 管理此网关入口"
@@ -117,7 +133,7 @@ pub async fn mcp_request(
                                 })
                                 .collect();
                             imports.push(management::Entry {
-                                id: found.id.clone(),
+                                id: requested["id"].as_str().context("缺少成员 ID")?.into(),
                                 name: found.name.clone(),
                                 mode: "direct".into(),
                                 definition,
@@ -194,7 +210,7 @@ pub async fn mcp_request(
         let _ = gateway::request(&dir, "list", Value::Null).await;
         return Ok(Value::Null);
     }
-    if method == "saveEntry" || method == "removeEntry" {
+    if method == "saveEntry" || method == "removeEntry" || method == "removeSources" {
         state.ensure_writable().map_err(|e| e.to_string())?;
         let state = state.inner().clone();
         let method = method.clone();
@@ -211,8 +227,16 @@ pub async fn mcp_request(
             let entry: management::Entry =
                 serde_json::from_value(params["entry"].clone()).map_err(|e| e.to_string())?;
             let catalog = management::read(&task_dir).map_err(|e| e.to_string())?;
-            let targets = resolve_targets(&state, &task_dir, &params, &entry, &catalog)
+            let target_params = if method == "removeSources" {
+                json!({"sources": params["sources"]})
+            } else {
+                params.clone()
+            };
+            let targets = resolve_targets(&state, &task_dir, &target_params, &entry, &catalog)
                 .map_err(|e| e.to_string())?;
+            if method == "removeSources" {
+                return management::remove_sources(&task_dir, targets).map_err(|e| e.to_string());
+            }
             let expected: Option<management::Entry> =
                 serde_json::from_value(params["expectedEntry"].clone())
                     .map_err(|e| e.to_string())?;
@@ -253,13 +277,14 @@ pub async fn mcp_request(
             .map_err(|e| e.to_string())?;
         value["gatewayOutdated"] = json!(
             value["running"].as_bool() == Some(true)
-                && value["configurationVersion"].as_u64() != Some(2)
+                && value["configurationVersion"].as_u64() != Some(3)
         );
         value["groupIssues"] = json!(management::groups::issues(&catalog));
         value["entries"] = json!(catalog.entries);
         value["groups"] = json!(catalog.groups);
         value["activeGroups"] = json!(catalog.active_groups);
         value["discovered"] = json!(scanned.discovered);
+        value["builtins"] = json!(scanned.builtins);
         value["scanWarnings"] = json!(warnings
             .into_iter()
             .chain(scanned.warnings)
@@ -312,6 +337,13 @@ pub async fn mcp_request(
     let result = gateway::request(&dir, &method, params)
         .await
         .map_err(|e| e.to_string())?;
+    if method == "loginStatus" && result["status"].as_str() == Some("complete") {
+        if let Some(window) = app.get_webview_window("main") {
+            let _ = window.show();
+            let _ = window.unminimize();
+            let _ = window.set_focus();
+        }
+    }
     if method == "login" {
         use tauri_plugin_opener::OpenerExt;
         let url = result["url"].as_str().ok_or("未返回授权链接")?;

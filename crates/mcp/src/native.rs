@@ -24,6 +24,9 @@ pub fn canonical(value: &Value, agent: &str) -> Value {
     value
 }
 pub fn validate(value: &Value) -> Result<()> {
+    if crate::discovery::is_codex_builtin(value) {
+        bail!("Codex 内置服务由 Codex 管理，不能托管或修改");
+    }
     let map = value.as_object().context("MCP 配置必须为对象")?;
     let kind = map
         .get("type")
@@ -135,7 +138,16 @@ pub fn patch(
     expected: &Option<Value>,
     next: &Option<Value>,
 ) -> Result<String> {
-    if &entry(text, agent, project, key)? != expected {
+    let current = entry(text, agent, project, key)?;
+    if agent == "codex"
+        && current
+            .iter()
+            .chain(next.iter())
+            .any(crate::discovery::is_codex_builtin)
+    {
+        bail!("Codex 内置服务由 Codex 管理，不能修改或删除");
+    }
+    if &current != expected {
         bail!("MCP「{key}」已被其他程序修改或存在同名配置，请刷新后重试");
     }
     if expected == next {

@@ -1,4 +1,3 @@
-import { AgentMcpGroups } from "@/pages/AgentMcpGroups";
 import { SkillBackups } from "@/components/common/SkillBackups";
 import { Tabs, TabsList, TabsTrigger, TabsContent } from "@/components/ui/tabs";
 import { PageTools } from "@/components/common/PageTools";
@@ -20,7 +19,7 @@ import {
   verticalListSortingStrategy,
 } from "@dnd-kit/sortable";
 import { CSS } from "@dnd-kit/utilities";
-import { queryKeys } from "@/lib/queryKeys";
+import { queryKeys, NAVIGATION_STALE_TIME } from "@/lib/queryKeys";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import {
   RefreshCw,
@@ -66,6 +65,7 @@ export function AgentPage({ agentId }: { agentId: string }) {
   const { data: liveConfig } = useQuery({
     queryKey: queryKeys.config,
     queryFn: settingsApi.getConfig,
+    staleTime: NAVIGATION_STALE_TIME,
   });
   // Keep one consistent render while config and filesystem queries refresh independently.
   const [operationView, setOperationView] = useState<{
@@ -254,14 +254,6 @@ export function AgentPage({ agentId }: { agentId: string }) {
                 {skills.filter((s) => s.agents[agentId]?.manual).length}
               </span>
             </TabsTrigger>
-            {["claude-code", "codex"].includes(agentId) && (
-              <TabsTrigger
-                value="mcp"
-                className="data-[state=active]:bg-background data-[state=active]:text-foreground"
-              >
-                MCP 分组
-              </TabsTrigger>
-            )}
           </TabsList>
           {/*
             这三枚统计胶囊只报数、这一行没有筛选语义，所以是不可聚焦的 Badge
@@ -299,9 +291,6 @@ export function AgentPage({ agentId }: { agentId: string }) {
             </div>
           )}
         </div>
-        <TabsContent value="mcp" className="min-h-0 flex-1 overflow-hidden">
-          <AgentMcpGroups agentId={agentId} />
-        </TabsContent>
         <TabsContent
           value="groups"
           className="min-h-0 flex-1 overflow-y-auto pb-6"

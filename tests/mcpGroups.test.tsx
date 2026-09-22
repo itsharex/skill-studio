@@ -1,7 +1,7 @@
-import { fireEvent, screen, waitFor } from "@testing-library/react";
+import { fireEvent, screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { beforeEach, expect, it } from "vitest";
-import { AgentPage } from "@/pages/AgentGroupsPage";
+import { AgentMcpGroups } from "@/pages/AgentMcpGroups";
 import { renderWithProviders } from "./utils/render";
 import { handlers, calls, claudeAgent, codexAgent } from "./mocks/tauri";
 import { setTarget } from "@/lib/api/transport";
@@ -65,8 +65,11 @@ beforeEach(() => {
 });
 async function open() {
   const user = userEvent.setup();
-  renderWithProviders(<AgentPage agentId="claude-code" />);
-  await user.click(screen.getByRole("tab", { name: "MCP 分组" }));
+  renderWithProviders(<AgentMcpGroups agentId="claude-code" />);
+  expect(screen.getByRole("tab", { name: /^分组/ })).toHaveAttribute(
+    "data-state",
+    "active",
+  );
   await screen.findByRole("button", { name: "编辑 开发" });
   return user;
 }
@@ -115,7 +118,7 @@ it("saves membership without applying it and exposes pending changes on the acti
   expect(screen.getByRole("button", { name: "应用修改" })).toBeDisabled();
   expect(screen.getByRole("button", { name: "停用" })).toBeEnabled();
 });
-it("can select automatically discovered MCPs from the Hub when creating a group", async () => {
+it("records discovered MCP references without adopting or activating on save", async () => {
   status.discovered = [
     {
       id: "scanned",
@@ -196,4 +199,79 @@ it("does not duplicate Hub entries when group activation changes the native enab
   ];
   expect(rows(status)).toHaveLength(1);
   expect(rows(status)[0].sources).toHaveLength(1);
+});
+
+it("uses the same group-first navigation and toolbar flow as Skills", async () => {
+  const user = await open();
+  expect(screen.getByRole("tab", { name: /^分组/ })).toHaveAttribute(
+    "data-state",
+    "active",
+  );
+  expect(
+    screen.getByRole("button", { name: "新建 MCP 分组" }),
+  ).toBeInTheDocument();
+  await user.click(screen.getByRole("tab", { name: /^已配置 MCP/ }));
+  expect(screen.getAllByRole("button", { name: "添加 MCP" })).toHaveLength(1);
+  await user.click(screen.getByRole("button", { name: "添加 MCP" }));
+  const dialog = await screen.findByRole("dialog");
+  await user.click(within(dialog).getByRole("button", { name: "取消" }));
+  await user.click(screen.getByRole("tab", { name: /^未托管 MCP/ }));
+  expect(
+    screen.getByRole("textbox", { name: "搜索已配置 MCP…" }),
+  ).toBeInTheDocument();
+  expect(screen.queryByRole("tab", { name: "Skill" })).not.toBeInTheDocument();
+  expect(methods()).not.toContain("saveEntry");
+  expect(methods()).not.toContain("activateGroup");
+});
+
+it("keeps reference identity and original definition after deployment changes scan order", () => {
+  const source = {
+    id: "source",
+    agent: "codex",
+    path: "/codex/config.toml",
+    project: null,
+    key: "Work",
+    scope: "用户全局",
+    gateway: false,
+    enabled: true,
+    definition: { command: "work" },
+  };
+  const reference = {
+    ...entry,
+    id: "original",
+    bindings: [
+      { ...source, original: source.definition, installed: source.definition },
+    ],
+  };
+  status.entries = [];
+  status.groups = [
+    { ...group, entryIds: ["original"], references: [reference] },
+  ];
+  status.discovered = [
+    {
+      id: "new-scan-id",
+      name: "Work",
+      server: null,
+      issue: null,
+      managedId: null,
+      sources: [
+        {
+          ...source,
+          id: "deployed",
+          agent: "claude",
+          path: "/claude.json",
+          definition: { command: "work", enabled: true },
+        },
+        source,
+      ],
+    },
+  ];
+  const result = rows(status);
+  expect(result).toHaveLength(1);
+  expect(result[0].managed).toBe(false);
+  expect(result[0].entry.id).toBe("original");
+  expect(result[0].entry.definition).toEqual({
+    type: "stdio",
+    command: "work",
+  });
 });

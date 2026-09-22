@@ -46,6 +46,8 @@ pub struct Settings {
     /// 关闭管理入口的应用；不修改已安装内容或来源记录。
     #[serde(default)]
     pub disabled_agents: Vec<String>,
+    #[serde(default)]
+    pub show_codex_builtin_mcp: bool,
     /// 新建注册时的默认链接方式
     #[serde(default)]
     pub default_link_mode: LinkMode,
@@ -89,6 +91,7 @@ impl Default for Settings {
     fn default() -> Self {
         Self {
             disabled_agents: Vec::new(),
+            show_codex_builtin_mcp: false,
             default_link_mode: LinkMode::default(),
             preserve_manual_skills: true,
             language: default_language(),

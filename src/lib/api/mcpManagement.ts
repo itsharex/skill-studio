@@ -37,6 +37,7 @@ export interface ManagedMcp {
   bindings: ManagedBinding[];
 }
 export interface McpGroup {
+  references?: ManagedMcp[];
   id: string;
   agent: string;
   name: string;
@@ -49,6 +50,7 @@ export interface ActiveMcpGroup {
   bindings: ManagedBinding[];
 }
 export interface ManagementStatus {
+  builtins?: { name: string; agent: string; path: string; scope: string }[];
   groupIssues?: Record<string, string>;
   groups?: McpGroup[];
   activeGroups?: Record<string, ActiveMcpGroup>;
@@ -64,6 +66,7 @@ export interface McpRow {
   managed: boolean;
   sources: McpSource[];
   authorized?: boolean;
+  authRequired?: boolean;
 }
 export function canonical(
   definition: Definition,
@@ -94,12 +97,48 @@ export function rows(status?: ManagementStatus): McpRow[] {
     managed: true,
     sources: [],
     authorized: status.servers?.find((s) => s.id === entry.id)?.authorized,
+    authRequired: status.servers?.find((s) => s.id === entry.id)?.authRequired,
   }));
   for (const discovered of status.discovered ?? []) {
-    const definition = canonical(
-      discovered.sources[0]?.definition ?? {},
-      discovered.sources[0]?.agent,
-    );
+    const reference = (status.groups ?? [])
+      .flatMap((g) => g.references ?? [])
+      .find(
+        (entry) =>
+          entry.id === discovered.id ||
+          entry.bindings.some((b) =>
+            discovered.sources.some(
+              (source) =>
+                b.agent === source.agent &&
+                b.path === source.path &&
+                b.key === source.key &&
+                b.project === (source.project ?? null),
+            ),
+          ) ||
+          Object.values(status.activeGroups ?? {}).some((group) =>
+            group.bindings.some(
+              (b) =>
+                b.id === entry.id &&
+                discovered.sources.some(
+                  (source) =>
+                    b.agent === source.agent &&
+                    b.path === source.path &&
+                    b.key === source.key &&
+                    b.project === (source.project ?? null),
+                ),
+            ),
+          ),
+      );
+    const source =
+      discovered.sources.find((source) =>
+        reference?.bindings.some(
+          (b) =>
+            b.agent === source.agent &&
+            b.path === source.path &&
+            b.key === source.key &&
+            b.project === (source.project ?? null),
+        ),
+      ) ?? discovered.sources[0];
+    const definition = canonical(source?.definition ?? {}, source?.agent);
     const match = result.find(
       (row) =>
         row.entry.id === discovered.managedId ||
@@ -127,7 +166,7 @@ export function rows(status?: ManagementStatus): McpRow[] {
       managed: false,
       sources: discovered.sources,
       entry: {
-        id: discovered.id,
+        id: reference?.id ?? discovered.id,
         name: discovered.name,
         mode: "direct",
         definition,

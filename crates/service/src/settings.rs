@@ -23,6 +23,7 @@ pub fn get_settings(state: &AppState) -> Result<Settings, String> {
 #[serde(rename_all = "camelCase", default)]
 pub struct SettingsPatch {
     pub disabled_agents: Option<Vec<String>>,
+    pub show_codex_builtin_mcp: Option<bool>,
     pub default_link_mode: Option<LinkMode>,
     pub preserve_manual_skills: Option<bool>,
     pub language: Option<String>,
@@ -44,6 +45,7 @@ pub fn update_settings(state: &AppState, patch: SettingsPatch) -> Result<Setting
             || patch.hub_dir.is_some()
             || patch.clear_hub_dir.is_some()
             || patch.backup_keep.is_some()
+            || patch.show_codex_builtin_mcp.is_some()
         {
             return Err("应用管理开关需单独保存".into());
         }
@@ -58,6 +60,7 @@ pub fn update_settings(state: &AppState, patch: SettingsPatch) -> Result<Setting
             || patch.hub_dir.is_some()
             || patch.clear_hub_dir.is_some()
             || patch.backup_keep.is_some()
+            || patch.show_codex_builtin_mcp.is_some()
         {
             return Err("保留手动 skill 策略需单独保存".into());
         }
@@ -73,6 +76,9 @@ pub fn update_settings(state: &AppState, patch: SettingsPatch) -> Result<Setting
                 || patch.agent_dir_overrides.is_some();
             let old_hub = studio.store().hub_dir(config);
             let s = &mut config.settings;
+            if let Some(show) = patch.show_codex_builtin_mcp {
+                s.show_codex_builtin_mcp = show;
+            }
             if let Some(m) = patch.default_link_mode {
                 s.default_link_mode = m;
             }

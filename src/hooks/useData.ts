@@ -10,7 +10,7 @@ import {
   skillsApi,
   systemApi,
 } from "@/lib/api";
-import { queryKeys } from "@/lib/queryKeys";
+import { queryKeys, NAVIGATION_STALE_TIME } from "@/lib/queryKeys";
 import { toastLinkReport } from "@/lib/linkReport";
 import { useTauriEvent } from "@/hooks/useTauriEvent";
 import type { LinkMode, SettingsPatch } from "@/types";
@@ -42,6 +42,7 @@ export function useGroups() {
   return useQuery({
     queryKey: queryKeys.groups,
     queryFn: () => groupsApi.list(),
+    staleTime: NAVIGATION_STALE_TIME,
   });
 }
 
@@ -49,6 +50,7 @@ export function useProjects() {
   return useQuery({
     queryKey: queryKeys.projects,
     queryFn: () => projectsApi.list(),
+    staleTime: NAVIGATION_STALE_TIME,
   });
 }
 
@@ -56,6 +58,7 @@ export function useSettings() {
   return useQuery({
     queryKey: queryKeys.settings,
     queryFn: () => settingsApi.get(),
+    staleTime: NAVIGATION_STALE_TIME,
   });
 }
 
