@@ -94,6 +94,36 @@ pub async fn mcp_request(
             .await
             .map_err(|e| e.to_string());
     }
+    if method == "restoreBackup" {
+        state.ensure_writable().map_err(|e| e.to_string())?;
+        let id = params["id"].as_str().ok_or("缺少备份 ID")?.to_owned();
+        let task_dir = dir.clone();
+        tokio::task::spawn_blocking(move || management::restore_backup(&task_dir, &id))
+            .await
+            .map_err(|e| e.to_string())?
+            .map_err(|e| e.to_string())?;
+        let _ = gateway::request(&dir, "list", Value::Null).await;
+        return Ok(Value::Null);
+    }
+    if method == "removeProjectBindings" {
+        state.ensure_writable().map_err(|e| e.to_string())?;
+        let project_id = params["projectId"].as_str().ok_or("缺少项目 ID")?;
+        let project_root = state
+            .config()
+            .projects
+            .iter()
+            .find(|project| project.id == project_id)
+            .ok_or("项目不存在")?
+            .root
+            .clone();
+        let count = tokio::task::spawn_blocking(move || {
+            management::remove_project_bindings(&dir, &project_root)
+        })
+        .await
+        .map_err(|e| e.to_string())?
+        .map_err(|e| e.to_string())?;
+        return Ok(json!({"removed":count}));
+    }
     if matches!(
         method.as_str(),
         "saveGroup" | "removeGroup" | "activateGroup" | "reorderGroups"
@@ -309,6 +339,15 @@ pub async fn mcp_request(
         value["groupIssues"] = json!(management::groups::issues(&catalog));
         value["entries"] = json!(catalog.entries);
         value["groups"] = json!(catalog.groups);
+        value["backups"] = json!(catalog
+            .backups
+            .iter()
+            .map(|backup| json!({
+                "id": backup.id,
+                "paths": backup.files.iter().map(|file| &file.path).collect::<Vec<_>>(),
+                "createdAt": backup.created_at,
+            }))
+            .collect::<Vec<_>>());
         value["activeGroups"] = json!(catalog.active_groups);
         value["discovered"] = json!(scanned.discovered);
         value["builtins"] = json!(scanned.builtins);

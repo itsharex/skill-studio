@@ -1,5 +1,165 @@
 use super::*;
 use crate::native;
+
+#[test]
+fn backup_restore_requires_unchanged_target_and_preserves_other_entries() {
+    let root = tempfile::tempdir().unwrap();
+    let dir = root.path().join("studio");
+    let path = root.path().join("config.toml");
+    let original =
+        "# retained\n[mcp_servers.one]\ncommand='one'\n[mcp_servers.two]\ncommand='two'\n";
+    std::fs::write(&path, original).unwrap();
+    let one = native::entry(original, "codex", None, "one").unwrap();
+    remove_sources(&dir, vec![target(path.clone(), "codex", "one", one)]).unwrap();
+    let backup = read(&dir).unwrap().backups[0].clone();
+    let after = std::fs::read_to_string(&path).unwrap();
+    assert_eq!(
+        std::fs::read_to_string(backup.files[0].backup_path.as_ref().unwrap()).unwrap(),
+        original
+    );
+    std::fs::write(
+        &path,
+        "# edited by user\n[mcp_servers.two]\ncommand='two'\n",
+    )
+    .unwrap();
+    assert!(restore_backup(&dir, &backup.id)
+        .unwrap_err()
+        .to_string()
+        .contains("备份后修改"));
+    assert!(std::fs::read_to_string(&path)
+        .unwrap()
+        .contains("edited by user"));
+    std::fs::write(&path, &after).unwrap();
+    // Restore requires the exact post-write file, including TOML formatting.
+    assert_eq!(Some(digest(&after)), backup.files[0].after_hash);
+    restore_backup(&dir, &backup.id).unwrap();
+    assert_eq!(std::fs::read_to_string(&path).unwrap(), original);
+    assert!(!read(&dir)
+        .unwrap()
+        .backups
+        .iter()
+        .any(|b| b.id == backup.id));
+}
+#[test]
+fn backup_restore_updates_catalog_and_rejects_later_catalog_edits() {
+    let root = tempfile::tempdir().unwrap();
+    let dir = root.path().join("studio");
+    let path = root.path().join("config.toml");
+    std::fs::write(&path, "# original\n").unwrap();
+    save(
+        &dir,
+        entry(json!({"type":"stdio","command":"demo"}), "direct"),
+        vec![target(path.clone(), "codex", "sample", None)],
+        Path::new("/app"),
+        None,
+    )
+    .unwrap();
+    let backup = read(&dir).unwrap().backups[0].clone();
+    let after = std::fs::read_to_string(&path).unwrap();
+    let mut edited = read(&dir).unwrap().entries[0].clone();
+    edited.name = "Changed".into();
+    save(
+        &dir,
+        edited,
+        current_targets(&read(&dir).unwrap().entries[0]),
+        Path::new("/app"),
+        Some(&read(&dir).unwrap().entries[0]),
+    )
+    .unwrap();
+    assert!(restore_backup(&dir, &backup.id)
+        .unwrap_err()
+        .to_string()
+        .contains("托管状态"));
+    assert_eq!(std::fs::read_to_string(&path).unwrap(), after);
+    // Recreate the transaction and restore without intervening edits.
+    let fresh = root.path().join("fresh");
+    let fresh_file = root.path().join("fresh.toml");
+    std::fs::write(&fresh_file, "# original\n").unwrap();
+    save(
+        &fresh,
+        entry(json!({"type":"stdio","command":"demo"}), "direct"),
+        vec![target(fresh_file.clone(), "codex", "sample", None)],
+        Path::new("/app"),
+        None,
+    )
+    .unwrap();
+    let id = read(&fresh).unwrap().backups[0].id.clone();
+    restore_backup(&fresh, &id).unwrap();
+    assert!(read(&fresh).unwrap().entries.is_empty());
+    assert_eq!(std::fs::read_to_string(fresh_file).unwrap(), "# original\n");
+}
+#[test]
+fn project_bulk_remove_preserves_global_and_manual_entries() {
+    let root = tempfile::tempdir().unwrap();
+    let dir = root.path().join("studio");
+    let project = root.path().join("project");
+    std::fs::create_dir_all(&project).unwrap();
+    let project_file = project.join(".mcp.json");
+    let global_file = root.path().join("global.json");
+    std::fs::write(
+        &project_file,
+        r#"{"mcpServers":{"manual":{"command":"keep"}}}"#,
+    )
+    .unwrap();
+    std::fs::write(&global_file, "{}").unwrap();
+    save(
+        &dir,
+        entry(json!({"type":"stdio","command":"demo"}), "direct"),
+        vec![
+            target(project_file.clone(), "claude", "sample", None),
+            target(global_file.clone(), "claude", "sample", None),
+        ],
+        Path::new("/app"),
+        None,
+    )
+    .unwrap();
+    assert_eq!(remove_project_bindings(&dir, &project).unwrap(), 1);
+    let project_doc: Value =
+        serde_json::from_str(&std::fs::read_to_string(project_file).unwrap()).unwrap();
+    assert_eq!(project_doc["mcpServers"]["manual"]["command"], "keep");
+    assert!(project_doc["mcpServers"].get("sample").is_none());
+    assert!(native::entry(
+        &std::fs::read_to_string(global_file).unwrap(),
+        "claude",
+        None,
+        "sample"
+    )
+    .unwrap()
+    .is_some());
+    assert_eq!(read(&dir).unwrap().entries[0].bindings.len(), 1);
+}
+#[test]
+fn backup_restores_multi_file_transaction_including_new_project_file() {
+    let root = tempfile::tempdir().unwrap();
+    let dir = root.path().join("studio");
+    let codex = root.path().join("config.toml");
+    let project = root.path().join("project");
+    std::fs::create_dir_all(&project).unwrap();
+    let claude = project.join(".mcp.json");
+    std::fs::write(&codex, "# before\n").unwrap();
+    save(
+        &dir,
+        entry(json!({"type":"stdio","command":"demo"}), "direct"),
+        vec![
+            target(codex.clone(), "codex", "sample", None),
+            target(claude.clone(), "claude", "sample", None),
+        ],
+        Path::new("/app"),
+        None,
+    )
+    .unwrap();
+    let backup = read(&dir).unwrap().backups[0].clone();
+    assert_eq!(backup.files.len(), 2);
+    let written = std::fs::read_to_string(&codex).unwrap();
+    std::fs::write(&codex, "# user edit\n").unwrap();
+    assert!(restore_backup(&dir, &backup.id).is_err());
+    assert!(claude.exists());
+    std::fs::write(&codex, written).unwrap();
+    restore_backup(&dir, &backup.id).unwrap();
+    assert_eq!(std::fs::read_to_string(codex).unwrap(), "# before\n");
+    assert!(!claude.exists());
+    assert!(read(&dir).unwrap().entries.is_empty());
+}
 fn entry(definition: Value, mode: &str) -> Entry {
     Entry {
         id: "sample".into(),
@@ -248,12 +408,12 @@ fn interrupted_transaction_rolls_back_without_overwriting_external_changes() {
         changes: vec![Change {
             path: a.clone(),
             before: Some("old".into()),
-            after: "new".into(),
+            after: Some("new".into()),
         }],
         catalog: Change {
             path: dir.join("catalog.json"),
             before: None,
-            after: "committed".into(),
+            after: Some("committed".into()),
         },
     };
     atomic::write_json_file(&dir.join("management-transaction.json"), &journal).unwrap();
@@ -263,6 +423,22 @@ fn interrupted_transaction_rolls_back_without_overwriting_external_changes() {
     atomic::write_json_file(&dir.join("management-transaction.json"), &journal).unwrap();
     assert!(recover(dir).is_err());
     assert_eq!(std::fs::read_to_string(a).unwrap(), "external");
+    let deleted = dir.join("project-mcp.json");
+    let deletion = Journal {
+        changes: vec![Change {
+            path: deleted.clone(),
+            before: Some("project config".into()),
+            after: None,
+        }],
+        catalog: Change {
+            path: dir.join("catalog.json"),
+            before: None,
+            after: Some("committed".into()),
+        },
+    };
+    atomic::write_json_file(&dir.join("management-transaction.json"), &deletion).unwrap();
+    recover(dir).unwrap();
+    assert_eq!(std::fs::read_to_string(deleted).unwrap(), "project config");
 }
 #[test]
 fn claude_local_scope_is_preserved_during_migration() {

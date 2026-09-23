@@ -15,6 +15,7 @@ import {
   Play,
   LogIn,
   LogOut,
+  ArchiveRestore,
 } from "lucide-react";
 import { toast } from "sonner";
 import { Button } from "@/components/ui/button";
@@ -120,6 +121,9 @@ function LocalMcpPage({
   >({});
   const signature = (entry: ManagedMcp) =>
     JSON.stringify({ mode: entry.mode, definition: entry.definition });
+  const [backupsOpen, setBackupsOpen] = useState(false);
+  const [restoreBackup, setRestoreBackup] = useState<string | null>(null);
+  const backups = [...(status.data?.backups ?? [])].reverse();
   const detail = catalog.find((r) => r.entry.id === detailId);
   const detailUsesSse =
     detail?.entry.mode === "direct" && detail.entry.definition.type === "sse";
@@ -395,26 +399,36 @@ function LocalMcpPage({
             </button>
           ))}
         </div>
-        <Button
-          variant="ghost"
-          size="sm"
-          aria-label="MCP 网关"
-          aria-pressed={running}
-          title={running ? "点击关闭网关" : "点击开启网关"}
-          disabled={busy || status.isLoading || !!status.error}
-          onClick={() =>
-            void run(async () => {
-              await mcpRequest(running ? "stop" : "start");
-              toast.success(running ? "网关已关闭" : "网关已开启");
-            })
-          }
-        >
-          <span
-            className={`h-2 w-2 rounded-full ${running ? "bg-emerald-500" : "bg-muted-foreground"}`}
-          />
-          {running ? "网关已开启" : "网关已关闭"}
-          <Power className="h-4 w-4" />
-        </Button>
+        <div className="flex items-center gap-2">
+          <Button
+            variant="outline"
+            size="sm"
+            onClick={() => setBackupsOpen(true)}
+          >
+            <ArchiveRestore className="h-4 w-4" />
+            已备份 {backups.length} 次
+          </Button>
+          <Button
+            variant="ghost"
+            size="sm"
+            aria-label="MCP 网关"
+            aria-pressed={running}
+            title={running ? "点击关闭网关" : "点击开启网关"}
+            disabled={busy || status.isLoading || !!status.error}
+            onClick={() =>
+              void run(async () => {
+                await mcpRequest(running ? "stop" : "start");
+                toast.success(running ? "网关已关闭" : "网关已开启");
+              })
+            }
+          >
+            <span
+              className={`h-2 w-2 rounded-full ${running ? "bg-emerald-500" : "bg-muted-foreground"}`}
+            />
+            {running ? "网关已开启" : "网关已关闭"}
+            <Power className="h-4 w-4" />
+          </Button>
+        </div>
       </div>
       {status.data?.gatewayOutdated && (
         <p
@@ -875,6 +889,58 @@ function LocalMcpPage({
             toast.success(
               restore ? "已移出 Hub 并还原" : "MCP 已删除，配置文件已备份",
             );
+          })
+        }
+      />
+      <Dialog open={backupsOpen} onOpenChange={setBackupsOpen}>
+        <DialogContent className="max-w-xl">
+          <DialogHeader>
+            <DialogTitle>MCP 配置备份</DialogTitle>
+          </DialogHeader>
+          <div className="max-h-96 space-y-3 overflow-y-auto px-6 pb-6">
+            <p className="text-xs text-muted-foreground">
+              可恢复一次写入涉及的配置文件和托管状态；备份后若文件或托管状态已变化，恢复会停止以保护新内容。
+            </p>
+            {!backups.length && (
+              <p className="text-sm text-muted-foreground">暂无可恢复的备份</p>
+            )}
+            {backups.map((backup) => (
+              <div
+                key={backup.id}
+                className="rounded-xl border border-border-default p-3"
+              >
+                <p className="break-all text-sm">{backup.paths.join(" · ")}</p>
+                <p className="mt-1 text-xs text-muted-foreground">
+                  {new Date(backup.createdAt * 1000).toLocaleString()}
+                </p>
+                <Button
+                  className="mt-2"
+                  size="sm"
+                  variant="outline"
+                  disabled={busy}
+                  onClick={() => setRestoreBackup(backup.id)}
+                >
+                  <ArchiveRestore className="h-4 w-4" /> 恢复
+                </Button>
+              </div>
+            ))}
+          </div>
+        </DialogContent>
+      </Dialog>
+      <ConfirmDialog
+        open={!!restoreBackup}
+        onOpenChange={(open) => !open && !busy && setRestoreBackup(null)}
+        title="恢复 MCP 配置备份？"
+        description="将配置文件及对应托管状态恢复到备份前。若之后的配置或托管状态已修改，操作会停止。"
+        confirmText="恢复"
+        pending={busy}
+        onConfirm={() =>
+          restoreBackup &&
+          void run(async () => {
+            await mcpRequest("restoreBackup", { id: restoreBackup });
+            setRestoreBackup(null);
+            setBackupsOpen(false);
+            toast.success("配置已恢复，请在 Agent 中重新加载 MCP");
           })
         }
       />

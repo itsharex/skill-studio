@@ -7,6 +7,7 @@ use anyhow::{bail, Context, Result};
 use fs2::FileExt;
 use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
+use sha2::{Digest, Sha256};
 use skill_studio_core::fs::atomic;
 use std::{
     collections::{BTreeMap, HashSet},
@@ -55,6 +56,90 @@ pub struct Catalog {
     pub groups: Vec<groups::Group>,
     #[serde(default, rename = "activeGroups")]
     pub active_groups: BTreeMap<String, groups::ActiveGroup>,
+    #[serde(default)]
+    pub backups: Vec<Backup>,
+}
+#[derive(Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct Backup {
+    pub id: String,
+    pub files: Vec<BackupFile>,
+    pub created_at: u64,
+    pub catalog_backup_path: PathBuf,
+    pub before_catalog_hash: String,
+    pub after_catalog_hash: String,
+}
+#[derive(Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct BackupFile {
+    pub path: PathBuf,
+    pub backup_path: Option<PathBuf>,
+    pub before_hash: Option<String>,
+    pub after_hash: Option<String>,
+}
+fn digest(text: &str) -> String {
+    format!("{:x}", Sha256::digest(text.as_bytes()))
+}
+fn catalog_state_hash(catalog: &Catalog) -> Result<String> {
+    let mut state = catalog.clone();
+    state.backups.clear();
+    Ok(digest(&serde_json::to_string(&state)?))
+}
+pub fn restore_backup(dir: &Path, id: &str) -> Result<()> {
+    let _lock = lock(dir)?;
+    let mut catalog = read_unlocked(dir)?;
+    let backup = catalog
+        .backups
+        .iter()
+        .find(|b| b.id == id)
+        .context("备份不存在")?
+        .clone();
+    if catalog_state_hash(&catalog)? != backup.after_catalog_hash {
+        bail!("MCP 托管状态已在备份后修改，停止恢复以保护新配置");
+    }
+    let old_catalog = read_text(&backup.catalog_backup_path)?.context("托管状态备份不存在")?;
+    if digest(&old_catalog) != backup.before_catalog_hash {
+        bail!("托管状态备份已变化，停止恢复");
+    }
+    let old_catalog: Catalog = serde_json::from_str(&old_catalog)?;
+    catalog.backups.retain(|b| b.id != id);
+    catalog.entries = old_catalog.entries;
+    catalog.groups = old_catalog.groups;
+    catalog.active_groups = old_catalog.active_groups;
+    let mut files = BTreeMap::new();
+    for file in backup.files {
+        let current = read_text(&file.path)?;
+        if current.as_deref().map(digest) != file.after_hash {
+            bail!(
+                "配置已在备份后修改，停止恢复以保护新内容：{}",
+                file.path.display()
+            );
+        }
+        let original = match file.backup_path {
+            Some(path) => {
+                let text = read_text(&path)?.context("备份文件不存在")?;
+                if Some(digest(&text)) != file.before_hash {
+                    bail!("备份文件已变化，停止恢复");
+                }
+                Some(text)
+            }
+            None => {
+                if file.before_hash.is_some() {
+                    bail!("备份记录无效");
+                }
+                None
+            }
+        };
+        files.insert(
+            file.path.clone(),
+            Change {
+                path: file.path,
+                before: current,
+                after: original,
+            },
+        );
+    }
+    commit(dir, files, &catalog)
 }
 
 fn lock(dir: &Path) -> Result<std::fs::File> {
@@ -128,6 +213,7 @@ fn read_unlocked(dir: &Path) -> Result<Catalog> {
         ..Default::default()
     })
 }
+
 pub fn gateway_server(entry: &Entry) -> Result<Server> {
     let mut server =
         crate::discovery::normalize(&entry.name, &entry.id, &entry.definition, "claude")?;
@@ -362,6 +448,62 @@ pub fn remove(dir: &Path, id: &str, restore: bool) -> Result<()> {
     catalog.entries.retain(|e| e.id != id);
     commit(dir, files, &catalog)
 }
+/// Remove only Studio-owned bindings for one registered project in a single transaction.
+pub fn remove_project_bindings(dir: &Path, root: &Path) -> Result<usize> {
+    let _lock = lock(dir)?;
+    let mut catalog = read_unlocked(dir)?;
+    let local_root = root.to_string_lossy();
+    let project_files = [root.join(".mcp.json"), root.join(".codex/config.toml")];
+    let bindings: Vec<Binding> = catalog
+        .entries
+        .iter()
+        .flat_map(|e| &e.bindings)
+        .filter(|b| {
+            b.project.as_deref() == Some(local_root.as_ref()) || project_files.contains(&b.path)
+        })
+        .cloned()
+        .collect();
+    if bindings.is_empty() {
+        return Ok(0);
+    }
+    if bindings.iter().any(|b| {
+        catalog
+            .active_groups
+            .values()
+            .flat_map(|g| &g.bindings)
+            .any(|active| {
+                active.path == b.path && active.project == b.project && active.key == b.key
+            })
+    }) {
+        bail!("项目接入正由分组使用，请先停用对应分组");
+    }
+    let mut files = BTreeMap::new();
+    for b in &bindings {
+        stage(
+            &mut files,
+            &Target {
+                agent: b.agent.clone(),
+                path: b.path.clone(),
+                project: b.project.clone(),
+                key: b.key.clone(),
+                expected: None,
+            },
+            &Some(b.installed.clone()),
+            &b.original,
+        )?;
+    }
+    let identities: HashSet<_> = bindings
+        .iter()
+        .map(|b| (b.path.clone(), b.project.clone(), b.key.clone()))
+        .collect();
+    for entry in &mut catalog.entries {
+        entry
+            .bindings
+            .retain(|b| !identities.contains(&(b.path.clone(), b.project.clone(), b.key.clone())));
+    }
+    commit(dir, files, &catalog)?;
+    Ok(bindings.len())
+}
 /// Delete scanned, unmanaged entries without disturbing other configuration keys.
 pub fn remove_sources(dir: &Path, targets: Vec<Target>) -> Result<()> {
     let _lock = lock(dir)?;
@@ -392,7 +534,7 @@ pub fn remove_sources(dir: &Path, targets: Vec<Target>) -> Result<()> {
 struct Change {
     path: PathBuf,
     before: Option<String>,
-    after: String,
+    after: Option<String>,
 }
 #[derive(Serialize, Deserialize)]
 struct Journal {
@@ -418,33 +560,75 @@ fn stage(
             target.path.clone(),
             Change {
                 path: target.path.clone(),
-                after: before.clone().unwrap_or_default(),
+                after: before.clone(),
                 before,
             },
         );
     }
     let change = files.get_mut(&target.path).unwrap();
-    change.after = native::patch(
-        &change.after,
+    change.after = Some(native::patch(
+        change.after.as_deref().unwrap_or_default(),
         &target.agent,
         target.project.as_deref(),
         &target.key,
         expected,
         next,
-    )?;
+    )?);
     Ok(())
 }
 fn commit(dir: &Path, files: BTreeMap<PathBuf, Change>, catalog: &Catalog) -> Result<()> {
+    let mut catalog = catalog.clone();
     let catalog_path = dir.join("catalog.json");
+    let mut previous_catalog = read_unlocked(dir)?;
+    previous_catalog.backups.clear();
+    let previous_catalog_text = serde_json::to_string(&previous_catalog)?;
+    let after_catalog_hash = catalog_state_hash(&catalog)?;
+    let changes: Vec<Change> = files
+        .into_values()
+        .filter(|c| c.before != c.after)
+        .collect();
+    let backup = if changes.is_empty() {
+        None
+    } else {
+        let id = uuid::Uuid::new_v4().to_string();
+        Some(Backup {
+            files: changes
+                .iter()
+                .enumerate()
+                .map(|(index, change)| BackupFile {
+                    path: change.path.clone(),
+                    backup_path: change.before.as_ref().map(|_| {
+                        change
+                            .path
+                            .with_extension(format!("studio-backup-{id}-{index}"))
+                    }),
+                    before_hash: change.before.as_deref().map(digest),
+                    after_hash: change.after.as_deref().map(digest),
+                })
+                .collect(),
+            created_at: std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap_or_default()
+                .as_secs(),
+            catalog_backup_path: dir.join(format!("catalog.studio-backup-{id}.json")),
+            before_catalog_hash: digest(&previous_catalog_text),
+            after_catalog_hash,
+            id,
+        })
+    };
+    if let Some(backup) = &backup {
+        atomic::atomic_write_private(
+            &backup.catalog_backup_path,
+            previous_catalog_text.as_bytes(),
+        )?;
+        catalog.backups.push(backup.clone());
+    }
     let journal = Journal {
-        changes: files
-            .into_values()
-            .filter(|c| c.before.as_deref() != Some(&c.after))
-            .collect(),
+        changes,
         catalog: Change {
             before: read_text(&catalog_path)?,
             path: catalog_path,
-            after: serde_json::to_string_pretty(catalog)?,
+            after: Some(serde_json::to_string_pretty(&catalog)?),
         },
     };
     for c in &journal.changes {
@@ -452,11 +636,12 @@ fn commit(dir: &Path, files: BTreeMap<PathBuf, Change>, catalog: &Catalog) -> Re
             bail!("配置已被修改，请刷新后重试：{}", c.path.display());
         }
         if let Some(before) = &c.before {
-            atomic::atomic_write_private(
-                &c.path
-                    .with_extension(format!("studio-backup-{}", uuid::Uuid::new_v4())),
-                before.as_bytes(),
-            )?;
+            let backup_path = backup
+                .as_ref()
+                .and_then(|b| b.files.iter().find(|f| f.path == c.path))
+                .and_then(|f| f.backup_path.as_ref())
+                .context("缺少备份记录")?;
+            atomic::atomic_write_private(backup_path, before.as_bytes())?;
         }
     }
     atomic::write_json_file(&dir.join("management-transaction.json"), &journal)?;
@@ -469,7 +654,11 @@ fn commit(dir: &Path, files: BTreeMap<PathBuf, Change>, catalog: &Catalog) -> Re
             if read_text(&c.path)? != c.before {
                 bail!("配置已被修改，请刷新后重试：{}", c.path.display());
             }
-            atomic::atomic_write_private(&c.path, c.after.as_bytes())?;
+            if let Some(after) = &c.after {
+                atomic::atomic_write_private(&c.path, after.as_bytes())?;
+            } else {
+                std::fs::remove_file(&c.path)?;
+            }
         }
         Ok(())
     })();
@@ -485,19 +674,19 @@ fn recover(dir: &Path) -> Result<()> {
     let Some(journal): Option<Journal> = atomic::read_json_file(&path)? else {
         return Ok(());
     };
-    if read_text(&journal.catalog.path)?.as_deref() == Some(&journal.catalog.after) {
+    if read_text(&journal.catalog.path)? == journal.catalog.after {
         std::fs::remove_file(path)?;
         return Ok(());
     }
     // Check every file before rollback; never overwrite edits made after interruption.
     for c in &journal.changes {
         let current = read_text(&c.path)?;
-        if current != c.before && current.as_deref() != Some(&c.after) {
+        if current != c.before && current != c.after {
             bail!("事务恢复检测到外部修改：{}", c.path.display());
         }
     }
     for c in journal.changes.iter().rev() {
-        if read_text(&c.path)?.as_deref() == Some(&c.after) {
+        if read_text(&c.path)? == c.after {
             if let Some(before) = &c.before {
                 atomic::atomic_write_private(&c.path, before.as_bytes())?;
             } else {

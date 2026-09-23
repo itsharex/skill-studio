@@ -1,6 +1,7 @@
 import { useState } from "react";
 import { useQuery } from "@tanstack/react-query";
-import { ArrowLeft, FolderGit2, FolderOpen } from "lucide-react";
+import { ArrowLeft, FolderGit2, FolderOpen, Trash2 } from "lucide-react";
+import { toast } from "sonner";
 import { McpAssignments } from "@/components/mcp/McpAssignments";
 import { PageTools } from "@/components/common/PageTools";
 import {
@@ -9,6 +10,7 @@ import {
   RowActions,
 } from "@/components/common/ListItemRow";
 import { EmptyState } from "@/components/common/EmptyState";
+import { ConfirmDialog } from "@/components/common/ConfirmDialog";
 import {
   NavigationGuard,
   useNavigationGuard,
@@ -33,6 +35,7 @@ import {
   MCP_STATUS_STALE_TIME,
   MCP_STATUS_POLL_INTERVAL,
 } from "@/lib/api/mcpManagement";
+import { mcpRequest } from "@/lib/api/mcp";
 
 export function McpProjectsPage() {
   const target = useTarget();
@@ -62,9 +65,45 @@ function McpProjectsContent() {
   const [query, setQuery] = useState("");
   const [detail, setDetail] = useState<string | null>(null);
   const [creating, setCreating] = useState(false);
+  const [removingProject, setRemovingProject] = useState(false);
+  const [removeBusy, setRemoveBusy] = useState(false);
   const [form, setForm] = useState({ name: "", root: "" });
   const active = projects.data?.find((project) => project.id === detail);
   const catalog = rows(status.data);
+  const managedProjectCount = active
+    ? catalog.reduce(
+        (sum, row) =>
+          sum +
+          row.entry.bindings.filter(
+            (binding) =>
+              binding.project === active.root ||
+              ["/.mcp.json", "/.codex/config.toml"].some(
+                (suffix) =>
+                  binding.path === active.root.replace(/\/+$/, "") + suffix,
+              ),
+          ).length,
+        0,
+      )
+    : 0;
+  async function removeAll() {
+    if (!active || removeBusy) return;
+    setRemoveBusy(true);
+    try {
+      const result = await mcpRequest<{ removed: number }>(
+        "removeProjectBindings",
+        { projectId: active.id },
+      );
+      await status.refetch();
+      setRemovingProject(false);
+      toast.success(
+        `已移除 ${result.removed} 处托管接入，请在 Agent 中重新加载 MCP`,
+      );
+    } catch (error) {
+      toast.error(String(error));
+    } finally {
+      setRemoveBusy(false);
+    }
+  }
   const count = (root: string) =>
     catalog.filter((row) =>
       [...row.sources, ...row.entry.bindings].some(
@@ -124,6 +163,17 @@ function McpProjectsContent() {
             >
               <FolderOpen className="h-4 w-4" />
             </Button>
+            {managedProjectCount > 0 && (
+              <Button
+                variant="outline"
+                size="sm"
+                disabled={removeBusy}
+                onClick={() => setRemovingProject(true)}
+              >
+                <Trash2 className="h-4 w-4" />
+                移除托管接入 ({managedProjectCount})
+              </Button>
+            )}
           </div>
           <div className="min-h-0 flex-1 overflow-y-auto pb-6">
             <McpAssignments key={active.id} project={active} />
@@ -280,6 +330,15 @@ function McpProjectsContent() {
           </DialogFooter>
         </DialogContent>
       </Dialog>
+      <ConfirmDialog
+        open={removingProject}
+        onOpenChange={setRemovingProject}
+        title={`移除 ${active?.name ?? "此项目"} 的托管 MCP？`}
+        description="仅恢复此项目中由 Studio 写入的 MCP 接入，保留 Hub 服务、原有手动配置和项目中的 Skill。若配置已被手动修改，操作会停止，不会覆盖修改。"
+        confirmText="移除托管接入"
+        pending={removeBusy}
+        onConfirm={() => void removeAll()}
+      />
     </div>
   );
 }

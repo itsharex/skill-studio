@@ -52,6 +52,11 @@ export interface ActiveMcpGroup {
   bindings: ManagedBinding[];
 }
 export interface ManagementStatus {
+  backups?: {
+    id: string;
+    paths: string[];
+    createdAt: number;
+  }[];
   builtins?: { name: string; agent: string; path: string; scope: string }[];
   groupIssues?: Record<string, string>;
   groups?: McpGroup[];

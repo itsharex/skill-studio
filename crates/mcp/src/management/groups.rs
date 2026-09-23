@@ -219,7 +219,7 @@ pub fn activate(
             bail!("组内 MCP 使用了相同的配置名称，请先在 Hub 核对");
         }
         let text = match files.get(path) {
-            Some(c) => c.after.clone(),
+            Some(c) => c.after.clone().unwrap_or_default(),
             None => read_text(path)?.unwrap_or_default(),
         };
         let original = native::entry(&text, agent_id, None, &key)?;
