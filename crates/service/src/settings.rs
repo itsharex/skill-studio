@@ -24,6 +24,7 @@ pub fn get_settings(state: &AppState) -> Result<Settings, String> {
 pub struct SettingsPatch {
     pub disabled_agents: Option<Vec<String>>,
     pub show_codex_builtin_mcp: Option<bool>,
+    pub manage_mcp: Option<bool>,
     pub default_link_mode: Option<LinkMode>,
     pub preserve_manual_skills: Option<bool>,
     pub language: Option<String>,
@@ -46,6 +47,7 @@ pub fn update_settings(state: &AppState, patch: SettingsPatch) -> Result<Setting
             || patch.clear_hub_dir.is_some()
             || patch.backup_keep.is_some()
             || patch.show_codex_builtin_mcp.is_some()
+            || patch.manage_mcp.is_some()
         {
             return Err("应用管理开关需单独保存".into());
         }
@@ -61,12 +63,28 @@ pub fn update_settings(state: &AppState, patch: SettingsPatch) -> Result<Setting
             || patch.clear_hub_dir.is_some()
             || patch.backup_keep.is_some()
             || patch.show_codex_builtin_mcp.is_some()
+            || patch.manage_mcp.is_some()
         {
             return Err("保留手动 skill 策略需单独保存".into());
         }
         state
             .set_manual_skill_policy(preserve)
             .map_err(String::from)?;
+        return Ok(state.config().settings.clone());
+    }
+    if let Some(enabled) = patch.manage_mcp {
+        if patch.show_codex_builtin_mcp.is_some()
+            || patch.default_link_mode.is_some()
+            || patch.language.is_some()
+            || patch.theme.is_some()
+            || patch.agent_dir_overrides.is_some()
+            || patch.hub_dir.is_some()
+            || patch.clear_hub_dir.is_some()
+            || patch.backup_keep.is_some()
+        {
+            return Err("MCP 管理开关需单独保存".into());
+        }
+        state.set_mcp_management(enabled).map_err(String::from)?;
         return Ok(state.config().settings.clone());
     }
     state
@@ -178,6 +196,7 @@ fn validate_hub_change(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use skill_studio_core::services::store::Store;
     #[test]
     fn hub_change_rejects_relative_overlapping_and_nonempty_roots() {
         let temp = tempfile::tempdir().unwrap();
@@ -196,6 +215,42 @@ mod tests {
         std::fs::write(old.join("SKILL.md"), "keep").unwrap();
         assert!(validate_hub_change(&old, &new, &config).is_err());
         assert!(validate_hub_change(&old, &old, &config).is_ok());
+    }
+
+    #[test]
+    fn mcp_management_toggle_is_persisted_and_isolated_from_other_settings() {
+        let temp = tempfile::tempdir().unwrap();
+        let state = AppState::bootstrap(Store::new(temp.path().to_path_buf())).unwrap();
+        assert!(get_settings(&state).unwrap().manage_mcp);
+        let off = update_settings(
+            &state,
+            SettingsPatch {
+                manage_mcp: Some(false),
+                ..Default::default()
+            },
+        )
+        .unwrap();
+        assert!(!off.manage_mcp);
+        assert!(
+            skill_studio_mcp::management::read(&temp.path().join("mcp"))
+                .unwrap()
+                .suspended
+        );
+        assert!(!state.studio().load_config().unwrap().settings.manage_mcp);
+        let on = update_settings(
+            &state,
+            SettingsPatch {
+                manage_mcp: Some(true),
+                ..Default::default()
+            },
+        )
+        .unwrap();
+        assert!(on.manage_mcp);
+        assert!(
+            !skill_studio_mcp::management::read(&temp.path().join("mcp"))
+                .unwrap()
+                .suspended
+        );
     }
 }
 

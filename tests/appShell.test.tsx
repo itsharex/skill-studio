@@ -297,7 +297,7 @@ it("uses the selected Hub to scope Agent and project pages without a second reso
   const user = userEvent.setup();
   renderWithProviders(<App />);
   let nav = within(screen.getByRole("navigation", { name: "主导航" }));
-  await user.click(nav.getByRole("button", { name: "MCP Hub" }));
+  await user.click(await nav.findByRole("button", { name: "MCP Hub" }));
   await user.click(await nav.findByRole("button", { name: "Codex" }));
   expect(
     await screen.findByRole("button", { name: "新建 MCP 分组" }),
@@ -358,6 +358,59 @@ it("restores MCP mode for a saved Agent page", async () => {
   expect(screen.queryByRole("tab", { name: "Skill" })).not.toBeInTheDocument();
 });
 
+it("hides MCP navigation and returns a saved MCP view to Skill management when disabled", async () => {
+  withAgents();
+  handlers.set("get_settings", () => ({
+    ...defaultSettings(),
+    manageMcp: false,
+  }));
+  localStorage.setItem("skill-studio-view", "mcp");
+  localStorage.setItem("skill-studio-resource", "mcp");
+  renderWithProviders(<App />);
+  const nav = within(await screen.findByRole("navigation", { name: "主导航" }));
+  await waitFor(() =>
+    expect(nav.getByRole("button", { name: "Skill Hub" })).toHaveAttribute(
+      "aria-current",
+      "page",
+    ),
+  );
+  expect(
+    nav.queryByRole("button", { name: "MCP Hub" }),
+  ).not.toBeInTheDocument();
+  expect(screen.queryByText("网关已关闭")).not.toBeInTheDocument();
+  expect(calls.filter((call) => call.command === "mcp_request")).toHaveLength(
+    0,
+  );
+  expect(localStorage.getItem("skill-studio-resource")).toBe("skills");
+});
+
+it("returns from MCP settings to Skill Hub when management is turned off", async () => {
+  withAgents();
+  let settings = { ...defaultSettings(), manageMcp: true };
+  handlers.set("get_settings", () => settings);
+  handlers.set("update_settings", ({ patch }) => {
+    settings = { ...settings, ...patch };
+    return settings;
+  });
+  const user = userEvent.setup();
+  renderWithProviders(<App />);
+  const nav = within(screen.getByRole("navigation", { name: "主导航" }));
+  await user.click(await nav.findByRole("button", { name: "MCP Hub" }));
+  await user.click(screen.getByRole("button", { name: "设置" }));
+  await user.click(
+    await screen.findByRole("switch", { name: "启用 MCP 管理" }),
+  );
+  await waitFor(() => expect(settings.manageMcp).toBe(false));
+  await user.click(screen.getByRole("button", { name: "返回" }));
+  const skill = await within(
+    screen.getByRole("navigation", { name: "主导航" }),
+  ).findByRole("button", { name: "Skill Hub" });
+  await waitFor(() => expect(skill).toHaveAttribute("aria-current", "page"));
+  expect(
+    screen.queryByRole("button", { name: "MCP Hub" }),
+  ).not.toBeInTheDocument();
+});
+
 it("reuses shared Skill data and the page container when switching Agents, while manual refresh still fetches", async () => {
   withAgents();
   handlers.set("list_groups", () => [
@@ -406,7 +459,7 @@ it("reuses the MCP snapshot when switching Agents", async () => {
   const user = userEvent.setup();
   renderWithProviders(<App />);
   const nav = within(screen.getByRole("navigation", { name: "主导航" }));
-  await user.click(nav.getByRole("button", { name: "MCP Hub" }));
+  await user.click(await nav.findByRole("button", { name: "MCP Hub" }));
   await screen.findByText("网关已关闭");
   await user.click(await nav.findByRole("button", { name: "Claude Code" }));
   await screen.findByRole("button", { name: "新建 MCP 分组" });

@@ -329,9 +329,20 @@ impl ServerHandler for Bridge {
 }
 impl App {
     async fn reload(&self) -> Result<()> {
-        let Some(servers) = crate::management::projection(&self.dir)? else {
+        let Some(projection) = crate::management::projection(&self.dir)? else {
             return Ok(());
         };
+        if projection.suspended {
+            // Temporarily disconnect managed services without revoking OAuth or
+            // replacing persistent bridge tokens. Re-enabling reuses both.
+            let mut current = self.config.lock().await;
+            for old in &current.servers {
+                self.invalidate(&old.id).await;
+            }
+            current.servers.clear();
+            return Ok(());
+        }
+        let servers = projection.servers;
         let mut current = self.config.lock().await;
         if serde_json::to_value(&current.servers)? == serde_json::to_value(&servers)? {
             return Ok(());
@@ -861,6 +872,9 @@ pub async fn request(dir: &Path, method: &str, params: Value) -> Result<Value> {
 
 /// A thin stdio adapter keeps the gateway bearer credential out of project files.
 pub async fn bridge_stdio(dir: PathBuf, id: String) -> Result<()> {
+    if crate::management::read(&dir)?.suspended {
+        bail!("MCP 管理已关闭");
+    }
     let c = config::read(&dir)?;
     let token = c
         .tokens

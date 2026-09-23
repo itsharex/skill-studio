@@ -18,7 +18,24 @@ impl AppState {
     /// 启动时加载配置。加载失败**不静默回落默认值**，把错误交给上层决定怎么提示。
     pub fn bootstrap(store: Store) -> Result<Self> {
         let studio = Studio::new(store);
-        let config = studio.load_config()?;
+        let mut config = studio.load_config()?;
+        let mcp_dir = studio.store().dir().join("mcp");
+        if mcp_dir.join("catalog.json").exists()
+            || mcp_dir.join("management-transaction.json").exists()
+        {
+            // Native configurations and suspended are committed together. Recover
+            // that transaction before reconciling the separately saved UI setting.
+            // Never reapply native entries here: they may have been edited since.
+            let enabled = !skill_studio_mcp::management::read(&mcp_dir)
+                .map_err(|error| {
+                    skill_studio_core::Error::invalid(format!("恢复 MCP 管理状态失败：{error:#}"))
+                })?
+                .suspended;
+            if config.settings.manage_mcp != enabled {
+                config.settings.manage_mcp = enabled;
+                studio.save_config(&config)?;
+            }
+        }
         Ok(Self {
             studio: Arc::new(studio),
             config: Arc::new(RwLock::new(config)),
@@ -120,6 +137,18 @@ impl AppState {
             ));
         }
         let restored = self.studio.store().read_backup(path)?;
+        let mcp_enabled = if self.recovery_only {
+            !skill_studio_mcp::management::read(&self.studio.store().dir().join("mcp"))
+                .map_err(|error| skill_studio_core::Error::invalid(error.to_string()))?
+                .suspended
+        } else {
+            guard.settings.manage_mcp
+        };
+        if restored.settings.manage_mcp != mcp_enabled {
+            return Err(skill_studio_core::Error::invalid(
+                "备份中的 MCP 管理状态与当前接入不一致，请先通过设置开关切换，再恢复此备份",
+            ));
+        }
         if !restored.active_groups.is_empty() || !restored.policy_suspensions.is_empty() {
             return Err(skill_studio_core::Error::invalid(
                 "此备份包含运行中的分组，不能只恢复配置；请选择停用分组后生成的备份",
@@ -161,6 +190,33 @@ impl AppState {
         let mut next = guard.clone();
         next.settings.preserve_manual_skills = preserve;
         self.studio.reconcile_manual_policy(&mut next, true)?;
+        *guard = next;
+        Ok(())
+    }
+
+    pub fn set_mcp_management(&self, enabled: bool) -> Result<()> {
+        self.ensure_writable()?;
+        let mut guard = self.config_mut();
+        if guard.settings.manage_mcp == enabled {
+            return Ok(());
+        }
+        let dir = self.studio.store().dir().join("mcp");
+        skill_studio_mcp::management::set_enabled(&dir, enabled).map_err(|error| {
+            skill_studio_core::Error::invalid(format!(
+                "无法{} MCP 管理：{error:#}。开关保持原状态，请核对配置文件后重试",
+                if enabled { "开启" } else { "关闭" }
+            ))
+        })?;
+        let mut next = guard.clone();
+        next.settings.manage_mcp = enabled;
+        if let Err(error) = self.studio.save_config(&next) {
+            if let Err(rollback) = skill_studio_mcp::management::set_enabled(&dir, !enabled) {
+                return Err(skill_studio_core::Error::invalid(format!(
+                    "保存 MCP 管理开关失败：{error}；回滚 MCP 配置也失败：{rollback}"
+                )));
+            }
+            return Err(error);
+        }
         *guard = next;
         Ok(())
     }
@@ -215,6 +271,171 @@ impl AppState {
 mod tests {
     use super::*;
     use skill_studio_core::models::group::ActiveGroup;
+
+    fn interrupted_mcp_toggle(enabled: bool) {
+        use serde_json::json;
+        use skill_studio_mcp::management::{self, Entry, Target};
+
+        let temp = tempfile::tempdir().unwrap();
+        let store = Store::new(temp.path().join("studio"));
+        let state = AppState::bootstrap(store.clone()).unwrap();
+        state
+            .mutate(|_, config| {
+                config.settings.language = "en".into();
+                Ok(())
+            })
+            .unwrap();
+        let dir = store.dir().join("mcp");
+        let path = temp.path().join("config.toml");
+        std::fs::write(
+            &path,
+            "model='keep'\n[mcp_servers.sample]\ncommand='original'\n",
+        )
+        .unwrap();
+        management::save(
+            &dir,
+            Entry {
+                id: "sample".into(),
+                name: "sample".into(),
+                mode: "direct".into(),
+                definition: json!({"type":"stdio","command":"managed"}),
+                oauth: false,
+                client_id: None,
+                scopes: vec![],
+                bindings: vec![],
+            },
+            vec![Target {
+                agent: "codex".into(),
+                path: path.clone(),
+                project: None,
+                key: "sample".into(),
+                expected: Some(json!({"command":"original"})),
+            }],
+            std::path::Path::new("/app"),
+            None,
+        )
+        .unwrap();
+        if enabled {
+            state.set_mcp_management(false).unwrap();
+        }
+        // Simulate termination after the MCP transaction commits but before
+        // set_mcp_management saves the application setting.
+        management::set_enabled(&dir, enabled).unwrap();
+        assert_ne!(
+            state.studio().load_config().unwrap().settings.manage_mcp,
+            enabled
+        );
+        let native_after = std::fs::read(&path).unwrap();
+        drop(state);
+
+        let restarted = AppState::bootstrap(store.clone()).unwrap();
+        assert_eq!(restarted.config().settings.manage_mcp, enabled);
+        assert_eq!(store.load().unwrap().settings.manage_mcp, enabled);
+        assert_eq!(restarted.config().settings.language, "en");
+        assert_eq!(std::fs::read(&path).unwrap(), native_after);
+        // The recovered state must still allow the opposite operation.
+        restarted.set_mcp_management(!enabled).unwrap();
+        assert_eq!(management::read(&dir).unwrap().suspended, enabled);
+    }
+
+    #[test]
+    fn bootstrap_recovers_interrupted_mcp_disable() {
+        interrupted_mcp_toggle(false);
+    }
+
+    #[test]
+    fn bootstrap_recovers_interrupted_mcp_enable() {
+        interrupted_mcp_toggle(true);
+    }
+
+    #[test]
+    fn bootstrap_recovers_mcp_journal_before_reading_toggle_state() {
+        use serde_json::json;
+        use skill_studio_mcp::management::Catalog;
+
+        for committed in [false, true] {
+            let temp = tempfile::tempdir().unwrap();
+            let store = Store::new(temp.path().join("studio"));
+            store.save(&AppConfig::default()).unwrap();
+            let dir = store.dir().join("mcp");
+            std::fs::create_dir_all(&dir).unwrap();
+            let catalog_path = dir.join("catalog.json");
+            let before = serde_json::to_string(&Catalog::default()).unwrap();
+            let after = serde_json::to_string(&Catalog {
+                suspended: true,
+                ..Default::default()
+            })
+            .unwrap();
+            let native = temp.path().join("config.toml");
+            std::fs::write(&native, "# original").unwrap();
+            std::fs::write(&catalog_path, if committed { &after } else { &before }).unwrap();
+            let journal = dir.join("management-transaction.json");
+            std::fs::write(
+                &journal,
+                serde_json::to_vec(&json!({
+                    "changes": [{"path":native, "before":"# managed", "after":"# original"}],
+                    "catalog": {"path":catalog_path, "before":before, "after":after}
+                }))
+                .unwrap(),
+            )
+            .unwrap();
+
+            let state = AppState::bootstrap(store.clone()).unwrap();
+            assert_eq!(state.config().settings.manage_mcp, !committed);
+            assert_eq!(store.load().unwrap().settings.manage_mcp, !committed);
+            assert_eq!(
+                std::fs::read_to_string(native).unwrap(),
+                if committed { "# original" } else { "# managed" }
+            );
+            assert!(!journal.exists());
+        }
+    }
+
+    #[test]
+    fn bootstrap_reconciles_mcp_state_without_overwriting_external_edits() {
+        use serde_json::json;
+        use skill_studio_mcp::management;
+
+        let temp = tempfile::tempdir().unwrap();
+        let store = Store::new(temp.path().join("studio"));
+        store.save(&AppConfig::default()).unwrap();
+        let dir = store.dir().join("mcp");
+        management::set_enabled(&dir, false).unwrap();
+        let path = temp.path().join("config.toml");
+        let external = "[mcp_servers.sample]\ncommand='edited-while-stopped'\n";
+        std::fs::write(&path, external).unwrap();
+        let mut catalog = management::read(&dir).unwrap();
+        catalog.entries.push(management::Entry {
+            id: "sample".into(),
+            name: "sample".into(),
+            mode: "direct".into(),
+            definition: json!({"type":"stdio","command":"managed"}),
+            oauth: false,
+            client_id: None,
+            scopes: vec![],
+            bindings: vec![management::Binding {
+                id: "binding".into(),
+                agent: "codex".into(),
+                path: path.clone(),
+                project: None,
+                key: "sample".into(),
+                original: Some(json!({"command":"original"})),
+                installed: json!({"command":"managed"}),
+            }],
+        });
+        std::fs::write(
+            dir.join("catalog.json"),
+            serde_json::to_vec(&catalog).unwrap(),
+        )
+        .unwrap();
+
+        let state = AppState::bootstrap(store).unwrap();
+        assert!(!state.config().settings.manage_mcp);
+        assert_eq!(std::fs::read_to_string(&path).unwrap(), external);
+        assert!(state.set_mcp_management(true).is_err());
+        assert!(!state.config().settings.manage_mcp);
+        assert_eq!(std::fs::read_to_string(&path).unwrap(), external);
+    }
 
     #[test]
     fn backup_validation_preserves_memory_and_disk_on_failure() {

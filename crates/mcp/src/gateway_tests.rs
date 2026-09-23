@@ -374,13 +374,33 @@ async fn gateway_reads_committed_catalog_and_stops_serving_direct_entries() {
     )
     .unwrap();
     let credential_path = dir.join("oauth-demo.json");
-    std::fs::write(&credential_path, "credential-sentinel").unwrap();
+    let credential = r#"{"client_id":"sentinel","token_response":null}"#;
+    std::fs::write(&credential_path, credential).unwrap();
     let connected = client(&dir, Some(&token)).await.unwrap();
     connected.cancel().await.unwrap();
     assert_eq!(
         std::fs::read_to_string(&credential_path).unwrap(),
-        "credential-sentinel"
+        credential
     );
+    crate::management::set_enabled(&dir, false).unwrap();
+    assert!(request(&dir, "list", Value::Null).await.unwrap()["servers"]
+        .as_array()
+        .unwrap()
+        .is_empty());
+    assert_eq!(config::read(&dir).unwrap().tokens["demo"], token);
+    assert_eq!(
+        std::fs::read_to_string(&credential_path).unwrap(),
+        credential
+    );
+    crate::management::set_enabled(&dir, true).unwrap();
+    assert_eq!(
+        request(&dir, "list", Value::Null).await.unwrap()["servers"]
+            .as_array()
+            .unwrap()
+            .len(),
+        1
+    );
+    assert_eq!(config::read(&dir).unwrap().tokens["demo"], token);
     std::fs::remove_file(credential_path).unwrap();
     let mut direct = renamed.clone();
     direct.mode = "direct".into();

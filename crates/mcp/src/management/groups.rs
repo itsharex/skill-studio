@@ -35,6 +35,7 @@ pub fn save_group(dir: &Path, mut group: Group, imports: Vec<Entry>) -> Result<(
     }
     let _lock = lock(dir)?;
     let mut catalog = read_unlocked(dir)?;
+    ensure_active(&catalog)?;
     if catalog
         .groups
         .iter()
@@ -100,6 +101,7 @@ pub fn remove_group(dir: &Path, agent_id: &str, id: &str) -> Result<()> {
     agent(agent_id)?;
     let _lock = lock(dir)?;
     let mut catalog = read_unlocked(dir)?;
+    ensure_active(&catalog)?;
     if catalog.active_groups.values().any(|g| g.group_id == id) {
         bail!("请先停用分组");
     }
@@ -117,6 +119,7 @@ pub fn reorder(dir: &Path, agent_id: &str, ids: &[String]) -> Result<()> {
     agent(agent_id)?;
     let _lock = lock(dir)?;
     let mut catalog = read_unlocked(dir)?;
+    ensure_active(&catalog)?;
     let own: HashSet<_> = catalog
         .groups
         .iter()
@@ -141,6 +144,7 @@ pub fn activate(
     agent(agent_id)?;
     let _lock = lock(dir)?;
     let mut catalog = read_unlocked(dir)?;
+    ensure_active(&catalog)?;
     let mut entries = vec![];
     if let Some(id) = id {
         let group = catalog

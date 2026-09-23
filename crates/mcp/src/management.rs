@@ -52,6 +52,9 @@ pub struct Target {
 #[derive(Default, Clone, Serialize, Deserialize)]
 pub struct Catalog {
     pub entries: Vec<Entry>,
+    /// Keep Hub records while native Agent connections are restored to their originals.
+    #[serde(default)]
+    pub suspended: bool,
     #[serde(default)]
     pub groups: Vec<groups::Group>,
     #[serde(default, rename = "activeGroups")]
@@ -88,6 +91,7 @@ fn catalog_state_hash(catalog: &Catalog) -> Result<String> {
 pub fn restore_backup(dir: &Path, id: &str) -> Result<()> {
     let _lock = lock(dir)?;
     let mut catalog = read_unlocked(dir)?;
+    ensure_active(&catalog)?;
     let backup = catalog
         .backups
         .iter()
@@ -102,6 +106,9 @@ pub fn restore_backup(dir: &Path, id: &str) -> Result<()> {
         bail!("托管状态备份已变化，停止恢复");
     }
     let old_catalog: Catalog = serde_json::from_str(&old_catalog)?;
+    if old_catalog.suspended {
+        bail!("此备份包含已关闭的 MCP 管理状态，请通过设置开关恢复接入");
+    }
     catalog.backups.retain(|b| b.id != id);
     catalog.entries = old_catalog.entries;
     catalog.groups = old_catalog.groups;
@@ -214,6 +221,95 @@ fn read_unlocked(dir: &Path) -> Result<Catalog> {
     })
 }
 
+fn ensure_active(catalog: &Catalog) -> Result<()> {
+    if catalog.suspended {
+        bail!("MCP 管理已关闭，请先在设置中开启");
+    }
+    Ok(())
+}
+
+/// Restore only Studio-owned native MCP entries. Hub metadata remains available
+/// for a later opt-in, and the existing journal rolls back every file together.
+pub fn set_enabled(dir: &Path, enabled: bool) -> Result<()> {
+    let _lock = lock(dir)?;
+    let mut catalog = read_unlocked(dir)?;
+    if catalog.suspended == !enabled {
+        return Ok(());
+    }
+    let mut files = BTreeMap::new();
+    if enabled {
+        for entry in &catalog.entries {
+            for binding in &entry.bindings {
+                stage_binding(
+                    &mut files,
+                    binding,
+                    &binding.original,
+                    &Some(binding.installed.clone()),
+                )?;
+            }
+        }
+        for group in catalog.active_groups.values() {
+            for binding in &group.bindings {
+                stage_binding(
+                    &mut files,
+                    binding,
+                    &binding.original,
+                    &Some(binding.installed.clone()),
+                )?;
+            }
+        }
+    } else {
+        for group in catalog.active_groups.values() {
+            for binding in &group.bindings {
+                stage_binding(
+                    &mut files,
+                    binding,
+                    &Some(binding.installed.clone()),
+                    &binding.original,
+                )?;
+            }
+        }
+        for entry in &catalog.entries {
+            for binding in &entry.bindings {
+                stage_binding(
+                    &mut files,
+                    binding,
+                    &Some(binding.installed.clone()),
+                    &binding.original,
+                )?;
+            }
+        }
+    }
+    catalog.suspended = !enabled;
+    commit(dir, files, &catalog)
+}
+
+fn stage_binding(
+    files: &mut BTreeMap<PathBuf, Change>,
+    binding: &Binding,
+    expected: &Option<Value>,
+    next: &Option<Value>,
+) -> Result<()> {
+    stage(
+        files,
+        &Target {
+            agent: binding.agent.clone(),
+            path: binding.path.clone(),
+            project: binding.project.clone(),
+            key: binding.key.clone(),
+            expected: None,
+        },
+        expected,
+        next,
+    )
+    .with_context(|| {
+        format!(
+            "{} 中的 MCP「{}」与托管记录不一致",
+            binding.path.display(),
+            binding.key
+        )
+    })
+}
 pub fn gateway_server(entry: &Entry) -> Result<Server> {
     let mut server =
         crate::discovery::normalize(&entry.name, &entry.id, &entry.definition, "claude")?;
@@ -270,19 +366,31 @@ pub fn direct_probe_server(entry: &Entry) -> Result<(Server, std::time::Duration
         .unwrap_or(30);
     Ok((server, std::time::Duration::from_secs(timeout)))
 }
-pub fn projection(dir: &Path) -> Result<Option<Vec<Server>>> {
+pub struct Projection {
+    pub servers: Vec<Server>,
+    pub suspended: bool,
+}
+
+pub fn projection(dir: &Path) -> Result<Option<Projection>> {
     // The catalog is the transaction's final write. Never inspect partial native writes.
     let Some(catalog): Option<Catalog> = atomic::read_json_file(&dir.join("catalog.json"))? else {
         return Ok(None);
     };
-    Ok(Some(
-        catalog
+    if catalog.suspended {
+        return Ok(Some(Projection {
+            servers: vec![],
+            suspended: true,
+        }));
+    }
+    Ok(Some(Projection {
+        servers: catalog
             .entries
             .iter()
             .filter(|e| e.mode == "gateway")
             .map(gateway_server)
             .collect::<Result<_>>()?,
-    ))
+        suspended: false,
+    }))
 }
 pub fn save(
     dir: &Path,
@@ -311,6 +419,7 @@ pub fn save(
         gateway_server(&entry)?;
     }
     let mut catalog = read_unlocked(dir)?;
+    ensure_active(&catalog)?;
     let old = catalog.entries.iter().find(|e| e.id == entry.id).cloned();
     if serde_json::to_value(&old)? != serde_json::to_value(expected_entry)? {
         bail!("MCP 已被其他操作修改，请关闭编辑器后重新打开");
@@ -417,6 +526,7 @@ pub fn save(
 pub fn remove(dir: &Path, id: &str, restore: bool) -> Result<()> {
     let _lock = lock(dir)?;
     let mut catalog = read_unlocked(dir)?;
+    ensure_active(&catalog)?;
     let entry = catalog
         .entries
         .iter()
@@ -452,6 +562,7 @@ pub fn remove(dir: &Path, id: &str, restore: bool) -> Result<()> {
 pub fn remove_project_bindings(dir: &Path, root: &Path) -> Result<usize> {
     let _lock = lock(dir)?;
     let mut catalog = read_unlocked(dir)?;
+    ensure_active(&catalog)?;
     let local_root = root.to_string_lossy();
     let project_files = [root.join(".mcp.json"), root.join(".codex/config.toml")];
     let bindings: Vec<Binding> = catalog
@@ -508,6 +619,7 @@ pub fn remove_project_bindings(dir: &Path, root: &Path) -> Result<usize> {
 pub fn remove_sources(dir: &Path, targets: Vec<Target>) -> Result<()> {
     let _lock = lock(dir)?;
     let catalog = read_unlocked(dir)?;
+    ensure_active(&catalog)?;
     if targets.is_empty() {
         bail!("请选择要删除的 MCP 来源");
     }

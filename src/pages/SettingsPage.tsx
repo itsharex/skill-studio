@@ -24,6 +24,7 @@ import {
   FolderCog,
   Settings2,
   Plug,
+  Power,
   Blocks,
   Eraser,
   Archive,
@@ -160,23 +161,39 @@ export function SettingsPage() {
             </SettingsSection>
             <SettingsSection title="MCP" icon={<Plug />}>
               <SettingCard
-                title={
-                  <label htmlFor="show-codex-builtin-mcp">
-                    显示 Codex App 内置 MCP
-                  </label>
-                }
-                description="在 MCP Hub 中显示 Codex App 内置服务。卡片置灰且只读，不支持托管、编辑或删除。"
-                icon={<Blocks />}
+                title={<label htmlFor="manage-mcp">启用 MCP 管理</label>}
+                description="关闭后隐藏 MCP Hub、Agent 分组和项目 MCP 入口，将当前托管的接入恢复为接管前的 Codex、Claude Code 配置。Hub 记录保留，重新开启时会尝试恢复接入；外部修改不会被覆盖。"
+                icon={<Power />}
               >
                 <Switch
-                  id="show-codex-builtin-mcp"
-                  checked={settings.showCodexBuiltinMcp ?? false}
+                  id="manage-mcp"
+                  checked={settings.manageMcp ?? true}
                   disabled={update.isPending}
                   onCheckedChange={(value) =>
-                    update.mutate({ showCodexBuiltinMcp: value })
+                    update.mutate({ manageMcp: value })
                   }
                 />
               </SettingCard>
+              {(settings.manageMcp ?? true) && (
+                <SettingCard
+                  title={
+                    <label htmlFor="show-codex-builtin-mcp">
+                      显示 Codex App 内置 MCP
+                    </label>
+                  }
+                  description="在 MCP Hub 中显示 Codex App 内置服务。卡片置灰且只读，不支持托管、编辑或删除。"
+                  icon={<Blocks />}
+                >
+                  <Switch
+                    id="show-codex-builtin-mcp"
+                    checked={settings.showCodexBuiltinMcp ?? false}
+                    disabled={update.isPending}
+                    onCheckedChange={(value) =>
+                      update.mutate({ showCodexBuiltinMcp: value })
+                    }
+                  />
+                </SettingCard>
+              )}
             </SettingsSection>
             <SettingsSection title="分组与安装" icon={<Package />}>
               <SettingCard

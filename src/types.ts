@@ -146,6 +146,7 @@ export interface ProjectBinding {
 
 export interface Settings {
   disabledAgents?: string[];
+  manageMcp?: boolean;
   showCodexBuiltinMcp?: boolean;
   defaultLinkMode: LinkMode;
   preserveManualSkills?: boolean;
@@ -204,6 +205,7 @@ export interface LinkReport {
 
 export interface SettingsPatch {
   disabledAgents?: string[];
+  manageMcp?: boolean;
   showCodexBuiltinMcp?: boolean;
   defaultLinkMode?: LinkMode;
   preserveManualSkills?: boolean;

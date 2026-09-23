@@ -69,6 +69,7 @@ function AppContent() {
   const requestNavigation = useNavigationGuard();
   const { data: allAgents = [] } = useAgents();
   const { data: settings } = useSettings();
+  const mcpEnabled = settings ? settings.manageMcp !== false : false;
   const agents = useMemo(
     () => allAgents.filter((a) => !settings?.disabledAgents?.includes(a.id)),
     [allAgents, settings?.disabledAgents],
@@ -98,6 +99,7 @@ function AppContent() {
           ? "mcp"
           : "skills",
   );
+  const activeResource = mcpEnabled ? resource : "skills";
   useEffect(() => {
     localStorage.setItem("skill-studio-resource", resource);
   }, [resource]);
@@ -107,12 +109,19 @@ function AppContent() {
   const [mcpEditor, setMcpEditor] = useState<McpEditorState | null>(null);
   useEffect(() => setMcpEditor(null), [target.id]);
   const activeMcpEditor =
-    view === "mcp" && target.id === "local" ? mcpEditor : null;
+    mcpEnabled && view === "mcp" && target.id === "local" ? mcpEditor : null;
   const isSettings = view === "settings";
   const isSubpage = isSettings || view === "install" || !!activeMcpEditor;
 
   // 设置页的返回目标 = 进入设置之前停留的那个视图
   const backTarget = useRef<ViewId>("library");
+  useEffect(() => {
+    if (settings?.manageMcp !== false) return;
+    setResource("skills");
+    setMcpEditor(null);
+    if (backTarget.current === "mcp") backTarget.current = "library";
+    if (view === "mcp") setView("library");
+  }, [settings?.manageMcp, view]);
   useEffect(() => {
     if (view !== "settings" && view !== "install") {
       backTarget.current = view;
@@ -124,12 +133,12 @@ function AppContent() {
     const disabledView = (id: ViewId) =>
       id.startsWith(AGENT_PREFIX) &&
       (settings?.disabledAgents?.includes(id.slice(AGENT_PREFIX.length)) ||
-        (resource === "mcp" &&
+        (activeResource === "mcp" &&
           !["claude-code", "codex"].includes(id.slice(AGENT_PREFIX.length))));
-    const hub = resource === "mcp" ? "mcp" : "library";
+    const hub = activeResource === "mcp" ? "mcp" : "library";
     if (disabledView(backTarget.current)) backTarget.current = hub;
     if (disabledView(view)) setView(hub);
-  }, [settings?.disabledAgents, view, resource]);
+  }, [settings?.disabledAgents, view, activeResource]);
 
   // 启动期错误（例如配置文件坏了）要让用户看见，而不是静默用默认值跑
   useEffect(() => {
@@ -156,7 +165,15 @@ function AppContent() {
             label: STATIC_TITLES.library,
             icon: <Layers className="h-5 w-5" />,
           },
-          { id: "mcp", label: "MCP Hub", icon: <Plug className="h-5 w-5" /> },
+          ...(mcpEnabled
+            ? [
+                {
+                  id: "mcp" as ViewId,
+                  label: "MCP Hub",
+                  icon: <Plug className="h-5 w-5" />,
+                },
+              ]
+            : []),
         ],
       },
       {
@@ -164,7 +181,8 @@ function AppContent() {
         items: agents
           .filter(
             (a) =>
-              resource === "skills" || ["claude-code", "codex"].includes(a.id),
+              activeResource === "skills" ||
+              ["claude-code", "codex"].includes(a.id),
           )
           .map((a) => ({
             id: `${AGENT_PREFIX}${a.id}` as ViewId,
@@ -184,7 +202,7 @@ function AppContent() {
         ],
       },
     ],
-    [agents, resource],
+    [agents, activeResource, mcpEnabled],
   );
 
   const refresh = () => {
@@ -193,7 +211,7 @@ function AppContent() {
 
   const content = () => {
     if (view.startsWith(AGENT_PREFIX)) {
-      return resource === "mcp" ? (
+      return activeResource === "mcp" ? (
         <AgentMcpGroups key={view} agentId={view.slice(AGENT_PREFIX.length)} />
       ) : (
         <AgentPage key={view} agentId={view.slice(AGENT_PREFIX.length)} />
@@ -201,9 +219,19 @@ function AppContent() {
     }
     switch (view) {
       case "mcp":
-        return <McpPage editor={mcpEditor} onEditorChange={setMcpEditor} />;
+        return mcpEnabled ? (
+          <McpPage editor={mcpEditor} onEditorChange={setMcpEditor} />
+        ) : (
+          <LibraryPage
+            onAdd={() => requestNavigation(() => setView("install"))}
+          />
+        );
       case "projects":
-        return resource === "mcp" ? <McpProjectsPage /> : <ProjectsPage />;
+        return activeResource === "mcp" ? (
+          <McpProjectsPage />
+        ) : (
+          <ProjectsPage />
+        );
       case "install":
         return <InstallSkillsPage />;
       case "settings":
@@ -330,12 +358,12 @@ function AppContent() {
                   <NavSwitcher
                     sections={sections}
                     active={view}
-                    selected={resource === "mcp" ? "mcp" : "library"}
+                    selected={activeResource === "mcp" ? "mcp" : "library"}
                     onSelect={(next) => {
                       if (next !== view)
                         requestNavigation(() => {
                           const nextResource =
-                            next === "mcp"
+                            next === "mcp" && mcpEnabled
                               ? "mcp"
                               : next === "library"
                                 ? "skills"
@@ -347,7 +375,10 @@ function AppContent() {
                                 : -14
                               : 0,
                           );
-                          if (next === "library" || next === "mcp")
+                          if (
+                            next === "library" ||
+                            (next === "mcp" && mcpEnabled)
+                          )
                             setResource(next === "mcp" ? "mcp" : "skills");
                           setView(next);
                         });
@@ -383,7 +414,9 @@ function AppContent() {
               >
                 <motion.div
                   key={
-                    view.startsWith(AGENT_PREFIX) ? `agent:${resource}` : view
+                    view.startsWith(AGENT_PREFIX)
+                      ? `agent:${activeResource}`
+                      : view
                   }
                   className="flex min-h-0 flex-1 flex-col overflow-hidden px-6"
                   initial={reduceMotion ? false : { opacity: 0, x: hubSlide }}

@@ -4318,6 +4318,7 @@ dependencies = [
  "serde_json",
  "serial_test",
  "skill-studio-core",
+ "skill-studio-mcp",
  "tempfile",
  "uuid",
 ]

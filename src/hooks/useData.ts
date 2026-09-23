@@ -214,8 +214,11 @@ export function useUpdateSettings() {
   const qc = useQueryClient();
   return useMutation({
     mutationFn: (patch: SettingsPatch) => settingsApi.update(patch),
-    onSuccess: (settings) => {
+    onSuccess: (settings, patch) => {
       qc.setQueryData(queryKeys.settings, settings);
+      if (patch.manageMcp !== undefined) {
+        void qc.invalidateQueries({ queryKey: ["mcp", "local"] });
+      }
       void qc.invalidateQueries({ queryKey: queryKeys.config });
       void qc.invalidateQueries({ queryKey: queryKeys.groups });
       // 目录覆盖会改变扫描位置

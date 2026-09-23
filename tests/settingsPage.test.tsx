@@ -108,3 +108,29 @@ it("defaults builtin MCP visibility off and saves the display preference", async
   await waitFor(() => expect(toggle).not.toBeChecked());
   expect(settings.showCodexBuiltinMcp).toBe(false);
 });
+
+it("switches MCP management independently and hides MCP-only preferences while off", async () => {
+  let settings = { ...defaultSettings(), manageMcp: true };
+  handlers.set("get_settings", () => settings);
+  handlers.set("update_settings", ({ patch }) => {
+    settings = { ...settings, ...patch };
+    return settings;
+  });
+  const user = userEvent.setup();
+  renderWithProviders(<SettingsPage />);
+  const toggle = await screen.findByRole("switch", { name: "启用 MCP 管理" });
+  expect(toggle).toBeChecked();
+  await user.click(toggle);
+  await waitFor(() => expect(toggle).not.toBeChecked());
+  expect(
+    screen.queryByRole("switch", { name: "显示 Codex App 内置 MCP" }),
+  ).not.toBeInTheDocument();
+  expect(
+    calls.find((call) => call.command === "update_settings")?.args,
+  ).toEqual({ patch: { manageMcp: false } });
+  await user.click(toggle);
+  await waitFor(() => expect(toggle).toBeChecked());
+  expect(
+    screen.getByRole("switch", { name: "显示 Codex App 内置 MCP" }),
+  ).toBeInTheDocument();
+});

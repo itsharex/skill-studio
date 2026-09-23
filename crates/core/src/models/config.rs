@@ -48,6 +48,9 @@ pub struct Settings {
     pub disabled_agents: Vec<String>,
     #[serde(default)]
     pub show_codex_builtin_mcp: bool,
+    /// Whether Studio manages MCP connections. Existing installations stay enabled.
+    #[serde(default = "default_manage_mcp")]
+    pub manage_mcp: bool,
     /// 新建注册时的默认链接方式
     #[serde(default)]
     pub default_link_mode: LinkMode,
@@ -75,6 +78,10 @@ fn default_preserve_manual_skills() -> bool {
     true
 }
 
+fn default_manage_mcp() -> bool {
+    true
+}
+
 fn default_language() -> String {
     "zh".to_string()
 }
@@ -92,6 +99,7 @@ impl Default for Settings {
         Self {
             disabled_agents: Vec::new(),
             show_codex_builtin_mcp: false,
+            manage_mcp: true,
             default_link_mode: LinkMode::default(),
             preserve_manual_skills: true,
             language: default_language(),

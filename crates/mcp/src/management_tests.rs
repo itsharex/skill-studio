@@ -2,6 +2,149 @@ use super::*;
 use crate::native;
 
 #[test]
+fn disabling_management_restores_both_agents_and_resumes_managed_group() {
+    let root = tempfile::tempdir().unwrap();
+    let dir = root.path().join("studio");
+    let claude = root.path().join("claude.json");
+    let codex = root.path().join("config.toml");
+    std::fs::write(
+        &claude,
+        r#"{"theme":"dark","mcpServers":{"sample":{"command":"claude-original"},"manual":{"command":"keep"}}}"#,
+    )
+    .unwrap();
+    std::fs::write(
+        &codex,
+        "model='keep'\n[mcp_servers.sample]\ncommand='codex-original'\n[mcp_servers.manual]\ncommand='keep'\n",
+    )
+    .unwrap();
+    let original_claude = native::entry(
+        &read_text(&claude).unwrap().unwrap(),
+        "claude",
+        None,
+        "sample",
+    )
+    .unwrap();
+    let original_codex = native::entry(
+        &read_text(&codex).unwrap().unwrap(),
+        "codex",
+        None,
+        "sample",
+    )
+    .unwrap();
+    save(
+        &dir,
+        entry(json!({"type":"stdio","command":"managed"}), "gateway"),
+        vec![
+            target(claude.clone(), "claude", "sample", original_claude.clone()),
+            target(codex.clone(), "codex", "sample", original_codex.clone()),
+        ],
+        Path::new("/app"),
+        None,
+    )
+    .unwrap();
+    groups::save_group(
+        &dir,
+        groups::Group {
+            id: "group".into(),
+            agent: "codex".into(),
+            name: "work".into(),
+            entry_ids: vec!["sample".into()],
+            references: vec![],
+            sort_order: 0,
+        },
+        vec![],
+    )
+    .unwrap();
+    groups::activate(&dir, "codex", Some("group"), &codex, Path::new("/app")).unwrap();
+    let managed_claude = read_text(&claude).unwrap().unwrap();
+    let managed_codex = read_text(&codex).unwrap().unwrap();
+
+    set_enabled(&dir, false).unwrap();
+    let catalog = read(&dir).unwrap();
+    assert!(catalog.suspended);
+    assert_eq!(catalog.entries.len(), 1);
+    assert_eq!(catalog.active_groups.len(), 1);
+    assert!(projection(&dir).unwrap().unwrap().servers.is_empty());
+    let restored_claude = read_text(&claude).unwrap().unwrap();
+    let restored_codex = read_text(&codex).unwrap().unwrap();
+    assert_eq!(
+        native::entry(&restored_claude, "claude", None, "sample").unwrap(),
+        original_claude
+    );
+    assert_eq!(
+        native::entry(&restored_codex, "codex", None, "sample").unwrap(),
+        original_codex
+    );
+    assert_eq!(
+        native::entry(&restored_claude, "claude", None, "manual")
+            .unwrap()
+            .unwrap()["command"],
+        "keep"
+    );
+    assert_eq!(
+        native::entry(&restored_codex, "codex", None, "manual")
+            .unwrap()
+            .unwrap()["command"],
+        "keep"
+    );
+    assert!(save(
+        &dir,
+        entry(json!({"type":"stdio","command":"new"}), "direct"),
+        vec![],
+        Path::new("/app"),
+        None
+    )
+    .is_err());
+
+    set_enabled(&dir, true).unwrap();
+    assert!(!read(&dir).unwrap().suspended);
+    assert_eq!(projection(&dir).unwrap().unwrap().servers.len(), 1);
+    assert_eq!(read_text(&claude).unwrap().unwrap(), managed_claude);
+    assert_eq!(read_text(&codex).unwrap().unwrap(), managed_codex);
+}
+
+#[test]
+fn disabling_or_resuming_never_overwrites_external_mcp_edits() {
+    let root = tempfile::tempdir().unwrap();
+    let dir = root.path().join("studio");
+    let codex = root.path().join("config.toml");
+    std::fs::write(&codex, "[mcp_servers.sample]\ncommand='original'\n").unwrap();
+    let original = native::entry(
+        &read_text(&codex).unwrap().unwrap(),
+        "codex",
+        None,
+        "sample",
+    )
+    .unwrap();
+    save(
+        &dir,
+        entry(json!({"type":"stdio","command":"managed"}), "direct"),
+        vec![target(codex.clone(), "codex", "sample", original)],
+        Path::new("/app"),
+        None,
+    )
+    .unwrap();
+    let managed = read_text(&codex).unwrap().unwrap();
+    std::fs::write(&codex, "[mcp_servers.sample]\ncommand='outside'\n").unwrap();
+    assert!(set_enabled(&dir, false).is_err());
+    assert!(!read(&dir).unwrap().suspended);
+    assert!(read_text(&codex).unwrap().unwrap().contains("outside"));
+    std::fs::write(&codex, managed).unwrap();
+    set_enabled(&dir, false).unwrap();
+    std::fs::write(
+        &codex,
+        "[mcp_servers.sample]\ncommand='changed-while-off'\n",
+    )
+    .unwrap();
+    let error = set_enabled(&dir, true).unwrap_err();
+    assert!(error.to_string().contains(codex.to_str().unwrap()));
+    assert!(read(&dir).unwrap().suspended);
+    assert!(read_text(&codex)
+        .unwrap()
+        .unwrap()
+        .contains("changed-while-off"));
+}
+#[test]
 fn backup_restore_requires_unchanged_target_and_preserves_other_entries() {
     let root = tempfile::tempdir().unwrap();
     let dir = root.path().join("studio");
@@ -328,7 +471,9 @@ fn migration_reuses_original_keys_and_restores_original_entries() {
         );
         assert!(!text.contains("studio-sample"));
     }
-    assert!(projection(&dir).unwrap().is_some_and(|s| s.len() == 1));
+    assert!(projection(&dir)
+        .unwrap()
+        .is_some_and(|state| state.servers.len() == 1));
     let mut direct = managed.clone();
     direct.mode = "direct".into();
     save(
@@ -339,7 +484,7 @@ fn migration_reuses_original_keys_and_restores_original_entries() {
         Some(managed),
     )
     .unwrap();
-    assert!(projection(&dir).unwrap().unwrap().is_empty());
+    assert!(projection(&dir).unwrap().unwrap().servers.is_empty());
     remove(&dir, "sample", true).unwrap();
     assert_eq!(
         native::entry(

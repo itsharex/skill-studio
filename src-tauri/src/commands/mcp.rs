@@ -56,6 +56,9 @@ pub async fn mcp_request(
     method: String,
     params: Value,
 ) -> Result<Value, String> {
+    if !state.config().settings.manage_mcp {
+        return Err("MCP 管理已关闭，请先在设置中开启".into());
+    }
     let mut params = params;
     let dir = dir(&state);
     if method == "gatewayCheck" {

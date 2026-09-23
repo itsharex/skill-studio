@@ -157,6 +157,7 @@ export function makeProject(
 
 export function defaultSettings(): Settings {
   return {
+    manageMcp: true,
     defaultLinkMode: "auto",
     language: "zh",
     theme: "system",
