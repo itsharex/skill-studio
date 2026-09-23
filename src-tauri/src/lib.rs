@@ -134,8 +134,39 @@ pub fn run() {
             }
             Ok(())
         })
-        .run(tauri::generate_context!())
-        .expect("启动 Skill Studio 失败");
+        .build(tauri::generate_context!())
+        .expect("构建 Skill Studio 失败")
+        .run(|app, event| match event {
+            #[cfg(target_os = "macos")]
+            tauri::RunEvent::Reopen {
+                has_visible_windows: false,
+                ..
+            } => {
+                if let Some(window) = app.get_webview_window("main") {
+                    let _ = window.show();
+                    let _ = window.set_focus();
+                }
+            }
+            tauri::RunEvent::ExitRequested { .. } => {
+                // Cmd+Q exits the desktop app and the separate gateway daemon.
+                // Bound shutdown time so an unavailable daemon cannot hold up quitting.
+                if let Some(state) = app.try_state::<AppState>() {
+                    let dir = state.studio().store().dir().join("mcp");
+                    tauri::async_runtime::block_on(async {
+                        let _ = tokio::time::timeout(
+                            std::time::Duration::from_secs(2),
+                            skill_studio_mcp::gateway::request(
+                                &dir,
+                                "stop",
+                                serde_json::Value::Null,
+                            ),
+                        )
+                        .await;
+                    });
+                }
+            }
+            _ => {}
+        });
 }
 
 /// 持有 watcher，保证监听在应用生命周期内不被回收

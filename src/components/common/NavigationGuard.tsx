@@ -12,6 +12,7 @@ import { getCurrentWindow } from "@tauri-apps/api/window";
 import { toast } from "sonner";
 import { ConfirmDialog } from "./ConfirmDialog";
 import { getPending } from "@/lib/api/transport";
+import { isMac } from "@/lib/platform";
 
 type Blocker = () => { dirty: boolean; busy: boolean };
 const Context = createContext<{
@@ -51,7 +52,14 @@ function GuardProvider({ children }: { children: React.ReactNode }) {
       void win
         .onCloseRequested((event) => {
           const state = blocker.current?.();
-          if (state?.dirty || state?.busy || getPending()) {
+          if (isMac()) {
+            // Keep the app (and its MCP gateway) active in the Dock on Cmd+W.
+            // Closing with unsaved work still goes through the discard dialog.
+            event.preventDefault();
+            request(() => {
+              void win.hide().catch((e) => toast.error(String(e)));
+            });
+          } else if (state?.dirty || state?.busy || getPending()) {
             event.preventDefault();
             request(() => {
               void win.destroy().catch((e) => toast.error(String(e)));

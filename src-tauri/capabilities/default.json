@@ -17,6 +17,7 @@
     "core:window:allow-close",
     "core:window:allow-destroy",
     "core:window:allow-show",
+    "core:window:allow-hide",
     "core:window:allow-set-decorations",
     "core:window:allow-set-theme"
   ]
