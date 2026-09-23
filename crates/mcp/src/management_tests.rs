@@ -89,6 +89,35 @@ fn direct_save_preserves_extensions_for_both_agents_without_a_gateway() {
     assert_eq!(read(&dir).unwrap().entries[0].bindings.len(), 2);
 }
 #[test]
+fn direct_probe_accepts_agent_extensions_and_startup_timeout() {
+    let e = entry(
+        json!({"type":"stdio","command":"demo","startup_timeout_sec":120,"tool_timeout_sec":45}),
+        "direct",
+    );
+    let (server, timeout) = direct_probe_server(&e).unwrap();
+    assert_eq!(timeout.as_secs(), 120);
+    assert!(matches!(
+        server.connection,
+        config::Connection::Stdio { .. }
+    ));
+    assert!(gateway_server(&e).is_err());
+}
+#[test]
+fn direct_probe_does_not_convert_sse_to_streamable_http() {
+    let e = entry(
+        json!({"type":"sse","url":"https://example.com/sse"}),
+        "direct",
+    );
+    // SSE is valid for Claude, but Studio's probe has no SSE transport.
+    assert!(native::for_agent(&e.definition, "claude").is_ok());
+    let result = direct_probe_server(&e);
+    assert!(
+        result.is_err(),
+        "SSE must not become a Streamable HTTP probe"
+    );
+    assert!(result.err().unwrap().to_string().contains("请在 Agent 中"));
+}
+#[test]
 fn migration_reuses_original_keys_and_restores_original_entries() {
     let root = tempfile::tempdir().unwrap();
     let dir = root.path().join("studio");

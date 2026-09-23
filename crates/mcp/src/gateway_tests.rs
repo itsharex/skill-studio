@@ -65,6 +65,41 @@ async fn client(dir: &Path, token: Option<&str>) -> Result<Upstream> {
     .await
 }
 #[tokio::test]
+async fn direct_probe_distinguishes_login_from_rejected_authorization_header() {
+    let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let url = format!("http://{}/mcp", listener.local_addr().unwrap());
+    let mock = tokio::spawn(async move {
+        axum::serve(
+            listener,
+            Router::new().route(
+                "/mcp",
+                axum::routing::any(|| async {
+                    (StatusCode::UNAUTHORIZED, [("www-authenticate", "Bearer")])
+                }),
+            ),
+        )
+        .await
+        .unwrap();
+    });
+    let timeout = Duration::from_secs(2);
+    assert_eq!(
+        probe_direct(definition(url.clone(), false), timeout)
+            .await
+            .unwrap(),
+        json!({"authRequired":true})
+    );
+    let mut with_token = definition(url, false);
+    if let Connection::Http { headers, .. } = &mut with_token.connection {
+        headers.insert("authorization".into(), "Bearer invalid".into());
+    }
+    assert!(probe_direct(with_token, timeout)
+        .await
+        .unwrap_err()
+        .to_string()
+        .contains("Token"));
+    mock.abort();
+}
+#[tokio::test]
 async fn http_gateway_isolates_sessions_and_requires_service_credentials() {
     let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
     let port = listener.local_addr().unwrap().port();

@@ -112,7 +112,17 @@ function LocalMcpPage({
     { name: string; description?: string }[] | null
   >(null);
   const [authRequired, setAuthRequired] = useState<string[]>([]);
+  const [lastTest, setLastTest] = useState<
+    Record<
+      string,
+      { status: "ok" | "auth" | "error"; at: number; signature: string }
+    >
+  >({});
+  const signature = (entry: ManagedMcp) =>
+    JSON.stringify({ mode: entry.mode, definition: entry.definition });
   const detail = catalog.find((r) => r.entry.id === detailId);
+  const detailUsesSse =
+    detail?.entry.mode === "direct" && detail.entry.definition.type === "sse";
   const hasAgent = (row: McpRow, agent: string) =>
     row.entry.bindings.some((b) => b.agent === agent) ||
     row.sources.some((s) => s.agent === agent);
@@ -151,17 +161,47 @@ function LocalMcpPage({
     }
   }
   async function runtime(entry: ManagedMcp, method: string) {
-    if (!running) await mcpRequest("start");
+    if (entry.mode === "gateway" && !running) await mcpRequest("start");
     if (method === "test") {
       setTools(null);
-      const result = await mcpRequest<
-        { name: string; description?: string }[] | { authRequired: true }
-      >("test", { id: entry.id });
+      let result:
+        { name: string; description?: string }[] | { authRequired: true };
+      try {
+        result = await mcpRequest<
+          { name: string; description?: string }[] | { authRequired: true }
+        >("test", { id: entry.id });
+      } catch (error) {
+        setLastTest((tests) => ({
+          ...tests,
+          [entry.id]: {
+            status: "error",
+            at: Date.now(),
+            signature: signature(entry),
+          },
+        }));
+        throw error;
+      }
       if (!Array.isArray(result)) {
+        setLastTest((tests) => ({
+          ...tests,
+          [entry.id]: {
+            status: "auth",
+            at: Date.now(),
+            signature: signature(entry),
+          },
+        }));
         setAuthRequired((ids) => [...new Set([...ids, entry.id])]);
         toast.info("此服务需要登录，请点击登录授权后重新测试连接");
       } else {
         setAuthRequired((ids) => ids.filter((id) => id !== entry.id));
+        setLastTest((tests) => ({
+          ...tests,
+          [entry.id]: {
+            status: "ok",
+            at: Date.now(),
+            signature: signature(entry),
+          },
+        }));
         setTools(result);
       }
     } else {
@@ -177,6 +217,45 @@ function LocalMcpPage({
       } else {
         toast.warning("当前网关版本不支持自动返回，请关闭再开启网关后重新授权");
       }
+    }
+  }
+  async function testDirect(entry: ManagedMcp) {
+    setTools(null);
+    try {
+      const result = await mcpRequest<
+        { name: string; description?: string }[] | { authRequired: true }
+      >("testDirect", { id: entry.id });
+      if (!Array.isArray(result)) {
+        setLastTest((tests) => ({
+          ...tests,
+          [entry.id]: {
+            status: "auth",
+            at: Date.now(),
+            signature: signature(entry),
+          },
+        }));
+        toast.info("服务需要认证，请在 Agent 中完成登录后验证");
+        return;
+      }
+      setLastTest((tests) => ({
+        ...tests,
+        [entry.id]: {
+          status: "ok",
+          at: Date.now(),
+          signature: signature(entry),
+        },
+      }));
+      setTools(result);
+    } catch (error) {
+      setLastTest((tests) => ({
+        ...tests,
+        [entry.id]: {
+          status: "error",
+          at: Date.now(),
+          signature: signature(entry),
+        },
+      }));
+      throw error;
     }
   }
   useEffect(() => {
@@ -407,6 +486,23 @@ function LocalMcpPage({
                       托管中
                     </Badge>
                   )}
+                  {lastTest[row.entry.id]?.signature ===
+                    signature(row.entry) && (
+                    <Badge
+                      title={`本次启动后的测试：${new Date(lastTest[row.entry.id].at).toLocaleString()}`}
+                      variant={
+                        lastTest[row.entry.id].status === "ok"
+                          ? "success"
+                          : "warning"
+                      }
+                    >
+                      {lastTest[row.entry.id].status === "ok"
+                        ? "本机连接已验证"
+                        : lastTest[row.entry.id].status === "auth"
+                          ? "需要登录"
+                          : "最近测试失败"}
+                    </Badge>
+                  )}
                   {row.entry.mode === "gateway" &&
                     (row.authorized ||
                       row.authRequired ||
@@ -580,49 +676,68 @@ function LocalMcpPage({
                   ? "由 Studio 网关连接服务，授权由 Studio 管理。"
                   : "由 Agent 直接连接服务，登录和运行状态由各 Agent 管理。"}
               </p>
-              {detail.managed && detail.entry.mode === "gateway" && (
+              {detail.managed && (
                 <div className="flex flex-wrap gap-2">
                   <Button
                     variant="outline"
-                    disabled={busy}
+                    disabled={busy || detailUsesSse}
                     onClick={() =>
-                      void run(() => runtime(detail.entry, "test"))
+                      void run(() =>
+                        detail.entry.mode === "gateway"
+                          ? runtime(detail.entry, "test")
+                          : testDirect(detail.entry),
+                      )
                     }
                   >
                     <Play className="h-4 w-4" />
-                    {running ? "测试连接" : "启动并测试"}
+                    {detail.entry.mode === "direct" || running
+                      ? "测试连接"
+                      : "启动并测试"}
                   </Button>
-                  {detail.entry.definition.type !== "stdio" &&
-                    (detail.authorized ||
-                      detail.authRequired ||
-                      authRequired.includes(detail.entry.id)) && (
-                      <Button
-                        variant="outline"
-                        disabled={busy}
-                        onClick={() =>
-                          void run(() => runtime(detail.entry, "login"))
-                        }
-                      >
-                        <LogIn className="h-4 w-4" />
-                        {running ? "登录授权" : "启动并授权"}
-                      </Button>
-                    )}
-                  {detail.authorized && (
-                    <Button
-                      variant="ghost"
-                      disabled={busy || !running}
-                      onClick={() =>
-                        void run(async () => {
-                          await mcpRequest("logout", { id: detail.entry.id });
-                          toast.success("已清除本地授权");
-                        })
-                      }
-                    >
-                      <LogOut className="h-4 w-4" />
-                      清除授权
-                    </Button>
+                  {detail.entry.mode === "gateway" && (
+                    <>
+                      {detail.entry.definition.type !== "stdio" &&
+                        (detail.authorized ||
+                          detail.authRequired ||
+                          authRequired.includes(detail.entry.id)) && (
+                          <Button
+                            variant="outline"
+                            disabled={busy}
+                            onClick={() =>
+                              void run(() => runtime(detail.entry, "login"))
+                            }
+                          >
+                            <LogIn className="h-4 w-4" />
+                            {running ? "登录授权" : "启动并授权"}
+                          </Button>
+                        )}
+                      {detail.authorized && (
+                        <Button
+                          variant="ghost"
+                          disabled={busy || !running}
+                          onClick={() =>
+                            void run(async () => {
+                              await mcpRequest("logout", {
+                                id: detail.entry.id,
+                              });
+                              toast.success("已清除本地授权");
+                            })
+                          }
+                        >
+                          <LogOut className="h-4 w-4" />
+                          清除授权
+                        </Button>
+                      )}
+                    </>
                   )}
                 </div>
+              )}
+              {detail.entry.mode === "direct" && (
+                <p className="text-xs text-muted-foreground">
+                  {detailUsesSse
+                    ? "SSE 服务请在 Agent 中测试连接，Studio 暂不支持此类型的本机测试。"
+                    : "本机测试只验证服务握手和工具列表；Agent 是否已重新加载及其登录状态仍需在 Agent 中确认。"}
+                </p>
               )}
               {!!detail.entry.bindings.length && (
                 <div className="space-y-2">

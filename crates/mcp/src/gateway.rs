@@ -119,6 +119,9 @@ fn requires_authorization(error: &anyhow::Error) -> bool {
     false
 }
 async fn connect(runtime: &Runtime) -> Result<Upstream> {
+    connect_with_timeout(runtime, Duration::from_secs(30)).await
+}
+async fn connect_with_timeout(runtime: &Runtime, timeout: Duration) -> Result<Upstream> {
     let info = ClientConfig::default();
     let future = async {
         match &runtime.server.connection {
@@ -155,7 +158,7 @@ async fn connect(runtime: &Runtime) -> Result<Upstream> {
             }
         }
     };
-    let result = tokio::time::timeout(Duration::from_secs(30), future)
+    let result = tokio::time::timeout(timeout, future)
         .await
         .context("MCP 握手超时")?;
     let mut needed = runtime.auth_required.lock().await;
@@ -173,6 +176,31 @@ async fn connect(runtime: &Runtime) -> Result<Upstream> {
         _ => {}
     }
     result
+}
+/// A one-shot check for an Agent-direct definition. This does not imply that an
+/// Agent has reloaded its own config or completed its own login.
+pub async fn probe_direct(server: Server, startup_timeout: Duration) -> Result<Value> {
+    config::validate(&server)?;
+    let runtime = Runtime {
+        server,
+        auth: None,
+        auth_required: Arc::new(Mutex::new(HashSet::new())),
+    };
+    let up = match connect_with_timeout(&runtime, startup_timeout).await {
+        Ok(up) => up,
+        Err(error) if requires_authorization(&error) => {
+            if matches!(&runtime.server.connection, Connection::Http { headers, .. }
+                if headers.keys().any(|k| k.eq_ignore_ascii_case("authorization")))
+            {
+                bail!("服务拒绝了 Authorization 请求头，请检查 Token 是否有效");
+            }
+            return Ok(json!({"authRequired": true}));
+        }
+        Err(error) => return Err(error),
+    };
+    let result = tokio::time::timeout(Duration::from_secs(30), up.list_all_tools()).await;
+    let _ = up.cancel().await;
+    Ok(serde_json::to_value(result.context("列出工具超时")??)?)
 }
 impl Bridge {
     async fn forward<T: serde::de::DeserializeOwned>(

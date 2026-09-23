@@ -74,6 +74,26 @@ pub async fn mcp_request(
             .await
             .map_err(|e| e.to_string())?));
     }
+    if method == "testDirect" {
+        let id = params["id"].as_str().ok_or("缺少 MCP ID")?.to_owned();
+        let catalog_dir = dir.clone();
+        let entry = tokio::task::spawn_blocking(move || -> anyhow::Result<_> {
+            let catalog = management::read(&catalog_dir)?;
+            let entry = catalog
+                .entries
+                .into_iter()
+                .find(|e| e.id == id)
+                .ok_or_else(|| anyhow::anyhow!("MCP 不存在"))?;
+            anyhow::ensure!(entry.mode == "direct", "此服务不是 Agent 直连");
+            management::direct_probe_server(&entry)
+        })
+        .await
+        .map_err(|e| e.to_string())?
+        .map_err(|e| e.to_string())?;
+        return gateway::probe_direct(entry.0, entry.1)
+            .await
+            .map_err(|e| e.to_string());
+    }
     if matches!(
         method.as_str(),
         "saveGroup" | "removeGroup" | "activateGroup" | "reorderGroups"

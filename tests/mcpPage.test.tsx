@@ -229,6 +229,38 @@ it("toggles the gateway directly from the list", async () => {
   expect(screen.queryByRole("dialog")).toBeNull();
 });
 
+it("explains that SSE must be tested in the Agent without marking it failed", async () => {
+  handlers.set("mcp_request", ({ method }) =>
+    method === "list"
+      ? {
+          ...empty,
+          entries: [
+            {
+              id: "sse",
+              name: "SSE service",
+              mode: "direct",
+              definition: { type: "sse", url: "https://example.com/sse" },
+              bindings: [],
+              oauth: false,
+              clientId: null,
+              scopes: [],
+            },
+          ],
+        }
+      : null,
+  );
+  renderWithProviders(<McpPage />);
+  fireEvent.click(
+    await screen.findByRole("button", { name: "查看 SSE service 的来源" }),
+  );
+  const test = screen.getByRole("button", { name: "测试连接" });
+  expect(test).toBeDisabled();
+  expect(screen.getByText(/SSE 服务请在 Agent 中测试连接/)).toBeVisible();
+  fireEvent.click(test);
+  expect(methods()).not.toContain("testDirect");
+  expect(screen.queryByText("最近测试失败")).not.toBeInTheDocument();
+});
+
 it("uses the app subpage header and preserves Hub search when returning", async () => {
   localStorage.setItem("skill-studio-view", "mcp");
   renderWithProviders(<App />);

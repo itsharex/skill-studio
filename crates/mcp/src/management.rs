@@ -137,6 +137,53 @@ pub fn gateway_server(entry: &Entry) -> Result<Server> {
     config::validate(&server)?;
     Ok(server)
 }
+/// Build a one-shot Studio probe from an Agent-owned definition. Agent-specific
+/// extensions stay in the catalog and native config, but are not gateway fields.
+pub fn direct_probe_server(entry: &Entry) -> Result<(Server, std::time::Duration)> {
+    native::validate(&entry.definition)?;
+    let input = entry.definition.as_object().unwrap();
+    if input.get("type").and_then(Value::as_str) == Some("sse") {
+        bail!("Studio 暂不支持 SSE 连接测试，请在 Agent 中测试此服务");
+    }
+    let mut definition = serde_json::Map::new();
+    let http = input.get("type").and_then(Value::as_str) != Some("stdio");
+    let fields: &[&str] = if http {
+        &["type", "url", "headers", "http_headers"]
+    } else {
+        &["type", "command", "args", "env", "cwd"]
+    };
+    for field in fields {
+        if let Some(value) = input.get(*field) {
+            definition.insert((*field).into(), value.clone());
+        }
+    }
+    if let Some(headers) = definition.remove("http_headers") {
+        definition.insert("headers".into(), headers);
+    }
+    let mut value = Value::Object(definition);
+    let map = value.as_object_mut().unwrap();
+    map.remove("type");
+    map.insert("id".into(), json!(entry.id));
+    map.insert("name".into(), json!(entry.name));
+    map.insert(
+        "transport".into(),
+        json!(if http { "http" } else { "stdio" }),
+    );
+    let server: Server = serde_json::from_value(value)
+        .map_err(|_| anyhow::anyhow!("连接配置字段类型无效，请检查 Agent 配置"))?;
+    config::validate(&server)?;
+    if let config::Connection::Stdio { cwd: Some(cwd), .. } = &server.connection {
+        if !cwd.is_absolute() {
+            bail!("相对工作目录依赖 Agent 的启动位置，请在 Agent 中测试此服务");
+        }
+    }
+    let timeout = input
+        .get("startup_timeout_sec")
+        .and_then(Value::as_u64)
+        .filter(|seconds| *seconds > 0)
+        .unwrap_or(30);
+    Ok((server, std::time::Duration::from_secs(timeout)))
+}
 pub fn projection(dir: &Path) -> Result<Option<Vec<Server>>> {
     // The catalog is the transaction's final write. Never inspect partial native writes.
     let Some(catalog): Option<Catalog> = atomic::read_json_file(&dir.join("catalog.json"))? else {
