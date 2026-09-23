@@ -6,3 +6,4 @@ pub mod integration;
 pub mod management;
 pub mod native;
 pub mod oauth;
+pub mod registry;

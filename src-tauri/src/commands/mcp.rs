@@ -3,7 +3,7 @@ use serde_json::{json, Value};
 use skill_studio_mcp::{
     config,
     discovery::{self, ScanFile},
-    gateway, management, native,
+    gateway, management, native, registry,
 };
 use std::{path::PathBuf, process::Stdio, time::Duration};
 use tauri::{Manager, State};
@@ -66,6 +66,13 @@ pub async fn mcp_request(
     if method == "parse" {
         let text = params["text"].as_str().ok_or("请粘贴配置")?;
         return native::parse_definition(text).map_err(|e| e.to_string());
+    }
+    if method == "searchRegistry" {
+        let query = params["query"].as_str().ok_or("请输入搜索词")?;
+        let cursor = params["cursor"].as_str();
+        return Ok(json!(registry::search(query, cursor)
+            .await
+            .map_err(|e| e.to_string())?));
     }
     if matches!(
         method.as_str(),

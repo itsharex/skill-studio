@@ -145,3 +145,112 @@ it("invalidates a previous preview immediately when the input changes", async ()
   expect(screen.getByRole("button", { name: "添加到 Hub" })).toBeDisabled();
   expect(methods()).not.toContain("saveEntry");
 });
+it("prefills a reviewed Registry result without installing or starting it", async () => {
+  handlers.set("mcp_request", ({ method, params }) => {
+    if (method === "list") return status;
+    if (method === "searchRegistry") {
+      expect(params.query).toBe("example");
+      return {
+        items: [
+          {
+            name: "Example Remote",
+            description: "Remote service",
+            version: "1.0.0",
+            source: "HTTP",
+            definition: { type: "http", url: "https://example.com/mcp" },
+          },
+          {
+            name: "Needs Key",
+            description: "Requires setup",
+            version: "2.0.0",
+            source: "需手动配置",
+            definition: null,
+          },
+        ],
+        nextCursor: null,
+      };
+    }
+    if (method === "saveEntry") status = { ...status, entries: [params.entry] };
+    return null;
+  });
+  renderWithProviders(<McpPage />);
+  fireEvent.click(screen.getByRole("button", { name: "添加 MCP" }));
+  fireEvent.click(screen.getByRole("button", { name: "官方目录" }));
+  fireEvent.change(screen.getByLabelText("搜索官方 MCP 目录"), {
+    target: { value: "example" },
+  });
+  fireEvent.click(screen.getByRole("button", { name: "搜索" }));
+  await screen.findByText("Example Remote");
+  expect(screen.getByRole("button", { name: "需手动配置" })).toBeDisabled();
+  fireEvent.click(screen.getByRole("button", { name: "填入" }));
+  expect(screen.getByLabelText("MCP 地址")).toHaveValue(
+    "https://example.com/mcp",
+  );
+  fireEvent.click(screen.getByRole("button", { name: "添加到 Hub" }));
+  await waitFor(() => expect(save()).toBeDefined());
+  expect(save()).toMatchObject({
+    params: {
+      entry: {
+        name: "Example Remote",
+        definition: { type: "http", url: "https://example.com/mcp" },
+      },
+      agents: [],
+    },
+  });
+  expect(methods()).not.toContain("start");
+});
+it("loads additional Registry pages and can choose a later result", async () => {
+  handlers.set("mcp_request", ({ method, params }) => {
+    if (method === "list") return status;
+    if (method === "searchRegistry") {
+      if (params.cursor === "page-2") {
+        return {
+          items: [
+            {
+              name: "Second Page",
+              description: "",
+              version: "2",
+              source: "HTTP",
+              definition: { type: "http", url: "https://second.example/mcp" },
+            },
+          ],
+          nextCursor: null,
+        };
+      }
+      return {
+        items: [
+          {
+            name: "First Page",
+            description: "",
+            version: "1",
+            source: "HTTP",
+            definition: { type: "http", url: "https://first.example/mcp" },
+          },
+        ],
+        nextCursor: "page-2",
+      };
+    }
+    return null;
+  });
+  renderWithProviders(<McpPage />);
+  fireEvent.click(screen.getByRole("button", { name: "添加 MCP" }));
+  fireEvent.click(screen.getByRole("button", { name: "官方目录" }));
+  fireEvent.change(screen.getByLabelText("搜索官方 MCP 目录"), {
+    target: { value: "example" },
+  });
+  fireEvent.click(screen.getByRole("button", { name: "搜索" }));
+  await screen.findByText("First Page");
+  fireEvent.click(screen.getByRole("button", { name: "加载更多" }));
+  await screen.findByText("Second Page");
+  expect(screen.getByText("First Page")).toBeInTheDocument();
+  expect(
+    screen.queryByRole("button", { name: "加载更多" }),
+  ).not.toBeInTheDocument();
+  const second = screen
+    .getByText("Second Page")
+    .closest("div.flex.items-start");
+  fireEvent.click(second!.querySelector("button")!);
+  expect(screen.getByLabelText("MCP 地址")).toHaveValue(
+    "https://second.example/mcp",
+  );
+});

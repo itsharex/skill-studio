@@ -1,7 +1,9 @@
 import { SettingCard, SettingsSection } from "@/components/common/SettingCard";
 import {
   ClipboardPaste,
+  Compass,
   Route,
+  Search,
   Settings2,
   Tag,
   WandSparkles,
@@ -42,6 +44,21 @@ export function McpQuickInstall({
   onSaved: (entry: ManagedMcp, result?: McpInstallResult) => void;
 }) {
   const [text, setText] = useState("");
+  const [source, setSource] = useState<"manual" | "registry">("manual");
+  const [registryQuery, setRegistryQuery] = useState("");
+  const [registryItems, setRegistryItems] = useState<
+    {
+      name: string;
+      description: string;
+      version: string;
+      definition: Record<string, unknown> | null;
+      source: string;
+    }[]
+  >([]);
+  const [registrySearched, setRegistrySearched] = useState(false);
+  const [registryCursor, setRegistryCursor] = useState<string | null>(null);
+  const [registryBusy, setRegistryBusy] = useState(false);
+  const [registryError, setRegistryError] = useState<string | null>(null);
   const [items, setItems] = useState<ParsedMcp[]>([]);
   const [entry, setEntry] = useState<ManagedMcp | null>(() => emptyEntry());
   const [raw, setRaw] = useState('{"type":"http","url":""}');
@@ -64,6 +81,34 @@ export function McpQuickInstall({
       scopes: [],
       bindings: [],
     });
+  }
+  async function searchRegistry(cursor?: string) {
+    if (registryQuery.trim().length < 2 || registryBusy) return;
+    setRegistryBusy(true);
+    setRegistryError(null);
+    if (!cursor) {
+      setRegistrySearched(false);
+      setRegistryItems([]);
+      setRegistryCursor(null);
+    }
+    try {
+      const page = await mcpRequest<{
+        items: typeof registryItems;
+        nextCursor: string | null;
+      }>("searchRegistry", {
+        query: registryQuery.trim(),
+        cursor,
+      });
+      setRegistryItems((items) =>
+        cursor ? [...items, ...page.items] : page.items,
+      );
+      setRegistryCursor(page.nextCursor);
+      setRegistrySearched(true);
+    } catch (error) {
+      setRegistryError(String(error));
+    } finally {
+      setRegistryBusy(false);
+    }
   }
   useEffect(() => {
     let cancelled = false;
@@ -149,57 +194,178 @@ export function McpQuickInstall({
     >
       <div className="-mx-1 min-h-0 flex-1 overflow-y-auto px-1">
         <fieldset disabled={busy} className="min-w-0 space-y-3 py-3">
-          <SettingsSection title="快速填写" icon={<WandSparkles />}>
-            <SettingCard
-              compact
-              icon={<ClipboardPaste />}
-              title={
-                <Label htmlFor="mcp-install-input">
-                  粘贴安装命令、网址或配置
-                </Label>
-              }
-              description="支持 Codex／Claude 安装命令、HTTP 网址、JSON 和 TOML，粘贴后自动填入下方。"
-              details={
+          <div className="flex gap-2" role="group" aria-label="MCP 来源">
+            <Button
+              type="button"
+              size="sm"
+              variant={source === "manual" ? "default" : "outline"}
+              onClick={() => setSource("manual")}
+            >
+              粘贴配置
+            </Button>
+            <Button
+              type="button"
+              size="sm"
+              variant={source === "registry" ? "default" : "outline"}
+              onClick={() => setSource("registry")}
+            >
+              官方目录
+            </Button>
+          </div>
+          {source === "manual" ? (
+            <SettingsSection title="快速填写" icon={<WandSparkles />}>
+              <SettingCard
+                compact
+                icon={<ClipboardPaste />}
+                title={
+                  <Label htmlFor="mcp-install-input">
+                    粘贴安装命令、网址或配置
+                  </Label>
+                }
+                description="支持 Codex／Claude 安装命令、HTTP 网址、JSON 和 TOML，粘贴后自动填入下方。"
+                details={
+                  <div className="space-y-3">
+                    <textarea
+                      id="mcp-install-input"
+                      className="min-h-20 w-full rounded-lg border border-border-default bg-background p-3 font-mono text-sm outline-none focus:border-border-active focus:ring-2 focus:ring-blue-500/20"
+                      autoCorrect="off"
+                      autoCapitalize="off"
+                      spellCheck={false}
+                      value={text}
+                      onChange={(e) => setText(e.target.value)}
+                      placeholder={
+                        'codex mcp add hf-mcp-server --url "https://huggingface.co/mcp?login"'
+                      }
+                    />
+                    {parsing && (
+                      <p
+                        role="status"
+                        className="text-sm text-muted-foreground"
+                      >
+                        正在识别…
+                      </p>
+                    )}
+                    {items.length > 1 && (
+                      <div
+                        className="flex flex-wrap gap-2"
+                        role="group"
+                        aria-label="选择要安装的 MCP"
+                      >
+                        {items.map((item, i) => (
+                          <Button
+                            type="button"
+                            variant="outline"
+                            key={i}
+                            onClick={() => choose(item)}
+                          >
+                            {item.name || `服务 ${i + 1}`}
+                          </Button>
+                        ))}
+                      </div>
+                    )}
+                  </div>
+                }
+              />
+            </SettingsSection>
+          ) : (
+            <SettingsSection title="查找 MCP" icon={<Compass />}>
+              <SettingCard
+                compact
+                icon={<Search />}
+                title="官方 MCP 目录"
+                description="按服务名称搜索；选中后仅填入配置，请核对服务地址、权限及登录要求。"
+              >
                 <div className="space-y-3">
-                  <textarea
-                    id="mcp-install-input"
-                    className="min-h-20 w-full rounded-lg border border-border-default bg-background p-3 font-mono text-sm outline-none focus:border-border-active focus:ring-2 focus:ring-blue-500/20"
-                    autoCorrect="off"
-                    autoCapitalize="off"
-                    spellCheck={false}
-                    value={text}
-                    onChange={(e) => setText(e.target.value)}
-                    placeholder={
-                      'codex mcp add hf-mcp-server --url "https://huggingface.co/mcp?login"'
-                    }
-                  />
-                  {parsing && (
-                    <p role="status" className="text-sm text-muted-foreground">
-                      正在识别…
+                  <div className="flex gap-2">
+                    <Input
+                      aria-label="搜索官方 MCP 目录"
+                      value={registryQuery}
+                      disabled={registryBusy}
+                      onChange={(event) => {
+                        setRegistryQuery(event.target.value);
+                        setRegistryItems([]);
+                        setRegistrySearched(false);
+                        setRegistryCursor(null);
+                      }}
+                      placeholder="例如 github"
+                      onKeyDown={(event) => {
+                        if (event.key === "Enter") {
+                          event.preventDefault();
+                          void searchRegistry();
+                        }
+                      }}
+                    />
+                    <Button
+                      type="button"
+                      variant="outline"
+                      disabled={registryBusy || registryQuery.trim().length < 2}
+                      onClick={() => void searchRegistry()}
+                    >
+                      {registryBusy ? "搜索中…" : "搜索"}
+                    </Button>
+                  </div>
+                  {registryError && (
+                    <p role="alert" className="text-sm text-destructive">
+                      {registryError}
                     </p>
                   )}
-                  {items.length > 1 && (
+                  {registrySearched && !registryItems.length && (
+                    <p className="text-sm text-muted-foreground">
+                      没有匹配的服务，请尝试服务名称中的英文关键词。
+                    </p>
+                  )}
+                  {registryItems.map((item, index) => (
                     <div
-                      className="flex flex-wrap gap-2"
-                      role="group"
-                      aria-label="选择要安装的 MCP"
+                      key={`${item.name}-${index}`}
+                      className="flex items-start justify-between gap-3 rounded-lg border border-border-default p-3"
                     >
-                      {items.map((item, i) => (
-                        <Button
-                          type="button"
-                          variant="outline"
-                          key={i}
-                          onClick={() => choose(item)}
-                        >
-                          {item.name || `服务 ${i + 1}`}
-                        </Button>
-                      ))}
+                      <div className="min-w-0 space-y-1">
+                        <p className="text-sm font-medium">
+                          {item.name}{" "}
+                          <span className="text-xs font-normal text-muted-foreground">
+                            {item.version} · {item.source}
+                          </span>
+                        </p>
+                        <p className="line-clamp-2 text-xs text-muted-foreground">
+                          {item.description}
+                        </p>
+                      </div>
+                      <Button
+                        type="button"
+                        size="sm"
+                        variant="outline"
+                        disabled={!item.definition}
+                        title={
+                          !item.definition
+                            ? "此服务需要额外参数或凭据，请参考发布者说明手动配置"
+                            : undefined
+                        }
+                        onClick={() => {
+                          if (item.definition)
+                            choose({
+                              name: item.name,
+                              definition: item.definition,
+                            });
+                        }}
+                      >
+                        {item.definition ? "填入" : "需手动配置"}
+                      </Button>
                     </div>
+                  ))}
+                  {registryCursor && (
+                    <Button
+                      type="button"
+                      variant="outline"
+                      disabled={registryBusy}
+                      onClick={() => void searchRegistry(registryCursor)}
+                    >
+                      {registryBusy ? "加载中…" : "加载更多"}
+                    </Button>
                   )}
                 </div>
-              }
-            />
-          </SettingsSection>
+              </SettingCard>
+            </SettingsSection>
+          )}
           {entry && (
             <>
               <SettingsSection title="服务配置" icon={<Settings2 />}>
