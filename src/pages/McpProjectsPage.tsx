@@ -27,7 +27,12 @@ import {
 } from "@/components/ui/dialog";
 import { useProjects, useCreateProject } from "@/hooks/useData";
 import { projectsApi, systemApi } from "@/lib/api";
-import { managementApi, rows } from "@/lib/api/mcpManagement";
+import {
+  managementApi,
+  rows,
+  MCP_STATUS_STALE_TIME,
+  MCP_STATUS_POLL_INTERVAL,
+} from "@/lib/api/mcpManagement";
 
 export function McpProjectsPage() {
   const target = useTarget();
@@ -50,8 +55,8 @@ function McpProjectsContent() {
     queryKey: ["mcp", "local"],
     queryFn: managementApi.list,
     // Keep polling in the background without fetching again on every Agent switch.
-    staleTime: 4_000,
-    refetchInterval: 4000,
+    staleTime: MCP_STATUS_STALE_TIME,
+    refetchInterval: MCP_STATUS_POLL_INTERVAL,
   });
   const create = useCreateProject();
   const [query, setQuery] = useState("");

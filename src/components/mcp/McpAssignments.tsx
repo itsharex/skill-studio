@@ -18,6 +18,8 @@ import { useTarget } from "@/components/targets/TargetProvider";
 import { useProjects } from "@/hooks/useData";
 import {
   managementApi,
+  MCP_STATUS_STALE_TIME,
+  MCP_STATUS_POLL_INTERVAL,
   rows,
   type ManagedBinding,
   type McpRow,
@@ -63,8 +65,8 @@ function LocalAssignments({
     queryKey: ["mcp", "local"],
     queryFn: managementApi.list,
     // Keep polling in the background without fetching again on every Agent switch.
-    staleTime: 4_000,
-    refetchInterval: 4000,
+    staleTime: MCP_STATUS_STALE_TIME,
+    refetchInterval: MCP_STATUS_POLL_INTERVAL,
   });
   const projects = useProjects();
   const [localOpen, setLocalOpen] = useState(false);

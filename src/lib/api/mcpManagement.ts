@@ -5,6 +5,8 @@ import {
   type DiscoveredMcp,
 } from "./mcp";
 export type Definition = Record<string, unknown>;
+export const MCP_STATUS_STALE_TIME = 30_000;
+export const MCP_STATUS_POLL_INTERVAL = 30_000;
 export interface ParsedMcp {
   name: string;
   definition: Definition;
