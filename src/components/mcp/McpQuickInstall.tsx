@@ -1,5 +1,11 @@
 import { SettingCard, SettingsSection } from "@/components/common/SettingCard";
-import { ClipboardPaste, Settings2 } from "lucide-react";
+import {
+  ClipboardPaste,
+  Route,
+  Settings2,
+  Tag,
+  WandSparkles,
+} from "lucide-react";
 import { McpChoiceCards } from "./McpChoiceCards";
 import { McpDefinitionFields, readDefinition } from "./McpDefinitionFields";
 import { useEffect, useState } from "react";
@@ -143,7 +149,7 @@ export function McpQuickInstall({
     >
       <div className="-mx-1 min-h-0 flex-1 overflow-y-auto px-1">
         <fieldset disabled={busy} className="min-w-0 space-y-3 py-3">
-          <SettingsSection title="快速填写" icon={<ClipboardPaste />}>
+          <SettingsSection title="快速填写" icon={<WandSparkles />}>
             <SettingCard
               compact
               icon={<ClipboardPaste />}
@@ -199,7 +205,7 @@ export function McpQuickInstall({
               <SettingsSection title="服务配置" icon={<Settings2 />}>
                 <SettingCard
                   compact
-                  icon={<Settings2 />}
+                  icon={<Tag />}
                   title={<Label htmlFor="mcp-install-name">名称</Label>}
                   description="用于在 Hub 和 Agent 中识别此 MCP。"
                 >
@@ -218,6 +224,7 @@ export function McpQuickInstall({
               <div className="space-y-3">
                 <McpChoiceCards
                   label="连接方式"
+                  icon={<Route />}
                   value={entry.mode}
                   onChange={(mode) => setEntry({ ...entry, mode })}
                   options={[

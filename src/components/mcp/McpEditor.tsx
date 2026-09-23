@@ -1,5 +1,5 @@
 import { SettingCard, SettingsSection } from "@/components/common/SettingCard";
-import { Settings2 } from "lucide-react";
+import { Route, Settings2, Tag } from "lucide-react";
 import { McpChoiceCards } from "./McpChoiceCards";
 import { McpDefinitionFields, readDefinition } from "./McpDefinitionFields";
 import { McpQuickInstall } from "./McpQuickInstall";
@@ -95,7 +95,7 @@ function McpExistingEditor({ row, onClose, onSaved }: EditorProps) {
           <SettingsSection title="服务配置" icon={<Settings2 />}>
             <SettingCard
               compact
-              icon={<Settings2 />}
+              icon={<Tag />}
               title={<Label htmlFor="mcp-name">名称</Label>}
               description="用于在 Hub 和 Agent 中识别此 MCP。"
             >
@@ -111,6 +111,7 @@ function McpExistingEditor({ row, onClose, onSaved }: EditorProps) {
           <McpDefinitionFields raw={raw} setRaw={setRaw} />
           <McpChoiceCards
             label="连接方式"
+            icon={<Route />}
             value={entry.mode}
             onChange={(mode) => setEntry({ ...entry, mode })}
             options={[

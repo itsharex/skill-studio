@@ -12,15 +12,18 @@ import {
   Settings2,
 } from "lucide-react";
 import { useId } from "react";
+import type { ReactNode } from "react";
 
 export function McpChoiceCards<T extends string>({
   label,
+  icon,
   value,
   options,
   disabled,
   onChange,
 }: {
   label: string;
+  icon: ReactNode;
   value: T;
   options: { value: T; title: string; description: string }[];
   disabled?: boolean;
@@ -44,7 +47,7 @@ export function McpChoiceCards<T extends string>({
       disabled={disabled}
       className="min-w-0 space-y-3"
     >
-      <SettingsSection title={label} icon={<Settings2 />}>
+      <SettingsSection title={label} icon={icon}>
         <div className="flex flex-wrap gap-2 rounded-xl border border-border-default bg-card p-2">
           {options.map((option) => {
             const Icon = icons[option.value] ?? Settings2;

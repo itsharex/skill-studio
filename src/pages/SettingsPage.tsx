@@ -15,13 +15,18 @@ import {
   History,
   Sparkles,
   Palette,
+  SunMoon,
   Layers,
   HardDrive,
   Package,
+  BookmarkCheck,
   Link2,
   FolderCog,
   Settings2,
-  ShieldCheck,
+  Plug,
+  Blocks,
+  Eraser,
+  Archive,
   Info,
 } from "lucide-react";
 import { Badge } from "@/components/ui/badge";
@@ -148,12 +153,12 @@ export function SettingsPage() {
               <SettingCard
                 title="主题模式"
                 description="选择浅色、深色，或跟随系统外观。"
-                icon={<Palette />}
+                icon={<SunMoon />}
               >
                 <ThemeToggle />
               </SettingCard>
             </SettingsSection>
-            <SettingsSection title="MCP" icon={<ShieldCheck />}>
+            <SettingsSection title="MCP" icon={<Plug />}>
               <SettingCard
                 title={
                   <label htmlFor="show-codex-builtin-mcp">
@@ -161,7 +166,7 @@ export function SettingsPage() {
                   </label>
                 }
                 description="在 MCP Hub 中显示 Codex App 内置服务。卡片置灰且只读，不支持托管、编辑或删除。"
-                icon={<ShieldCheck />}
+                icon={<Blocks />}
               >
                 <Switch
                   id="show-codex-builtin-mcp"
@@ -181,7 +186,7 @@ export function SettingsPage() {
                   </label>
                 }
                 description="开启后保留手动安装的 skill；关闭后仅当前启用分组中的 skill 生效，组外 skill 暂时停用，文件保留。没有启用分组时同样生效。重新开启只恢复由此策略停用的 skill；退出应用管理时恢复原状态。"
-                icon={<ShieldCheck />}
+                icon={<BookmarkCheck />}
               >
                 <Switch
                   id="preserve-manual"
@@ -345,7 +350,7 @@ export function SettingsPage() {
             <SettingsSection title="数据维护" icon={<Sparkles />}>
               <SettingCard
                 title="清理失效引用"
-                icon={<Sparkles />}
+                icon={<Eraser />}
                 description="清理已不存在的 skill 在分组和注册记录中留下的引用。"
               >
                 <Button
@@ -361,7 +366,7 @@ export function SettingsPage() {
             <SettingsSection title="配置备份" icon={<History />}>
               <SettingCard
                 title="配置备份保留份数"
-                icon={<ShieldCheck />}
+                icon={<Archive />}
                 description="写入配置前自动备份，超过保留数量时清理最旧的备份。"
               >
                 <Input

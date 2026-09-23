@@ -4,6 +4,8 @@ import {
   Link2,
   Terminal,
   List,
+  ListOrdered,
+  Cable,
   SlidersHorizontal,
   ChevronDown,
 } from "lucide-react";
@@ -52,6 +54,7 @@ export function McpDefinitionFields({
     <>
       <McpChoiceCards
         label="服务类型"
+        icon={<Cable />}
         value={String(definition.type ?? "stdio")}
         disabled={!!error}
         options={[
@@ -121,7 +124,7 @@ export function McpDefinitionFields({
       {local && (
         <SettingCard
           compact
-          icon={<Terminal />}
+          icon={<ListOrdered />}
           title="启动参数"
           description="每项参数单独一行，按顺序传给启动命令。"
           details={

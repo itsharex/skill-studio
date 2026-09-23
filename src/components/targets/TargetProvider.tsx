@@ -22,6 +22,7 @@ import {
   Pencil,
   Plus,
   Server,
+  ServerCog,
   Trash2,
   Unplug,
 } from "lucide-react";
@@ -871,7 +872,7 @@ export function ServerSettings() {
   return (
     <SettingsSection
       title="服务器设置"
-      icon={<Server />}
+      icon={<ServerCog />}
       action={
         <Button onClick={() => ctx.edit()}>
           <Plus className="mr-2 h-4 w-4" />
