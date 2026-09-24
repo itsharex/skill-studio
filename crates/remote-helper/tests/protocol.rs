@@ -80,8 +80,12 @@ fn snapshot(root: &std::path::Path) -> std::collections::BTreeMap<std::path::Pat
         let path = entry.unwrap().path();
         if path.is_dir() {
             files.extend(snapshot(&path));
+        } else if path.extension().is_some_and(|ext| ext == "lock") {
+            // Windows denies reads of files held by fs2 locks. These lock
+            // sentinels are not configuration state; compare the journals.
+            continue;
         } else {
-            files.insert(path.clone(), std::fs::read(path).unwrap());
+            files.insert(path.clone(), std::fs::read(&path).unwrap());
         }
     }
     files
