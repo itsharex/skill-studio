@@ -241,6 +241,76 @@ fn external_conflict_aborts_all_agents_and_preserves_jsonc_comments() {
 }
 
 #[test]
+fn activating_groups_enables_new_direct_bindings_without_changing_hub_definitions() {
+    for agent in ["codex", "opencode", "pi", "grok"] {
+        for definition in [
+            json!({"type":"stdio","command":"managed","args":["argument with spaces"],"env":{"SAFE":"value"},"enabled":false}),
+            json!({"type":"http","url":"https://example.com/mcp","headers":{"X-Test":"value"},"enabled":false}),
+        ] {
+            let temp = tempfile::tempdir().unwrap();
+            let dir = temp.path().join("studio");
+            let path = temp.path().join("config");
+            let mut saved = entry("direct");
+            saved.definition = definition.clone();
+            management::save(&dir, saved, vec![], Path::new("/studio"), None).unwrap();
+            groups::save_group(
+                &dir,
+                groups::Group {
+                    id: "group".into(),
+                    agent: agent.into(),
+                    name: "work".into(),
+                    entry_ids: vec!["sample".into()],
+                    references: vec![],
+                    sort_order: 0,
+                },
+                vec![],
+            )
+            .unwrap();
+            // Re-applying must retain enabled native state and the original rollback target.
+            for _ in 0..2 {
+                groups::activate(&dir, agent, Some("group"), &path, Path::new("/studio")).unwrap();
+                let installed = read(&path, agent, "sample").unwrap();
+                assert!(native::enabled(&installed, agent), "{agent}: {installed}");
+                let mut expected = definition.clone();
+                expected["enabled"] = json!(true);
+                assert_eq!(native::canonical(&installed, agent), expected);
+                let catalog = management::read(&dir).unwrap();
+                assert_eq!(catalog.entries[0].definition, definition);
+                assert_eq!(
+                    catalog.active_groups[agent].entries[0].definition,
+                    definition
+                );
+                assert!(groups::issues(&catalog).is_empty());
+                let scan = discovery::scan(
+                    &[ScanFile {
+                        agent: agent.into(),
+                        path: path.clone(),
+                        scope: "用户全局".into(),
+                    }],
+                    &[],
+                    &dir,
+                );
+                assert!(scan.discovered[0].sources[0].enabled);
+            }
+            management::set_enabled(&dir, false).unwrap();
+            assert!(read(&path, agent, "sample").is_none());
+            management::set_enabled(&dir, true).unwrap();
+            assert!(native::enabled(
+                &read(&path, agent, "sample").unwrap(),
+                agent
+            ));
+            groups::activate(&dir, agent, None, &path, Path::new("/studio")).unwrap();
+            assert!(read(&path, agent, "sample").is_none());
+            assert!(management::read(&dir).unwrap().active_groups.is_empty());
+            assert_eq!(
+                management::read(&dir).unwrap().entries[0].definition,
+                definition
+            );
+        }
+    }
+}
+
+#[test]
 fn disabled_entries_and_variable_references_remain_agent_owned() {
     for agent in IDS {
         let temp = tempfile::tempdir().unwrap();
@@ -280,12 +350,15 @@ fn disabled_entries_and_variable_references_remain_agent_owned() {
             vec![],
         )
         .unwrap();
+        let before = fs::read(&path).unwrap();
         assert!(
             groups::activate(&dir, agent, Some("group"), &path, Path::new("/studio"))
                 .unwrap_err()
                 .to_string()
                 .contains("手动停用")
         );
+        assert_eq!(fs::read(&path).unwrap(), before);
+        assert!(management::read(&dir).unwrap().active_groups.is_empty());
     }
     let def = json!({"type":"remote","url":"https://example.com/mcp","headers":{"Authorization":"{env:TOKEN}"}});
     assert!(discovery::normalize("x", "x", &def, "opencode")

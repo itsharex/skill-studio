@@ -258,8 +258,12 @@ pub fn activate(
         } else {
             native::for_agent(&entry.definition, agent_id)?
         };
-        if agent_id == "codex" {
-            installed["enabled"] = json!(true);
+        // Group activation enables its new bindings, not the Hub template. The
+        // checks above still reject an existing manually disabled target.
+        match agent_id {
+            "codex" | "grok" => installed["enabled"] = json!(true),
+            "opencode" | "pi" => installed["disabled"] = json!(false),
+            _ => {}
         }
         let target = Target {
             agent: agent_id.into(),
