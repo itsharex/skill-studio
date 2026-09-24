@@ -84,6 +84,15 @@ impl Helper {
         if request.version != PROTOCOL_VERSION {
             return Err("协议版本不兼容".into());
         }
+        if request.method == "scan_mcp" {
+            return serde_json::to_value(skill_studio_service::mcp::scan_inventory(
+                self.studio.store(),
+            )?)
+            .map_err(|e| e.to_string());
+        }
+        if request.method == "mcp_request" {
+            return Err("远程 MCP 仅支持只读展示".into());
+        }
         if request.method == "list_directory" {
             let path = request
                 .params
@@ -200,7 +209,7 @@ impl Helper {
                 "home": paths::home_dir(),
                 "writable": self.writable,
                 "desktopServices": 1,
-                "methods": ["hello", "list_agents", "scan_skills", "set_skill_enabled"]
+                "methods": ["hello", "list_agents", "scan_skills", "scan_mcp", "set_skill_enabled"]
             })),
             "list_agents" => {
                 let config = self.config()?;
@@ -284,6 +293,15 @@ fn run() -> Result<(), String> {
                 std::env::set_var(paths::TEST_HOME_ENV, path);
                 std::env::remove_var("CODEX_HOME");
                 std::env::remove_var("CLAUDE_CONFIG_DIR");
+                for key in [
+                    "XDG_CONFIG_HOME",
+                    "OPENCODE_CONFIG_DIR",
+                    "OPENCODE_CONFIG",
+                    "PI_CODING_AGENT_DIR",
+                    "GROK_HOME",
+                ] {
+                    std::env::remove_var(key);
+                }
             }
             _ => return Err(format!("未知参数: {arg}")),
         }

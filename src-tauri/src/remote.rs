@@ -676,6 +676,88 @@ mod tests {
     #[cfg(unix)]
     #[test]
     #[ignore = "requires SKILL_STUDIO_LIVE_HOST and SKILL_STUDIO_LIVE_BINARY"]
+    fn live_desktop_ssh_mcp_inventory_is_read_only() {
+        let app = tauri::test::mock_builder()
+            .manage(RemoteState::default())
+            .build(tauri::test::mock_context(tauri::test::noop_assets()))
+            .unwrap();
+        let mut profile = ServerProfile {
+            id: uuid::Uuid::new_v4().to_string(),
+            name: "MCP inventory fixture".into(),
+            host: std::env::var("SKILL_STUDIO_LIVE_HOST").expect("live host"),
+            user: None,
+            port: None,
+            identity_file: None,
+            jump_host: None,
+            password_auth: false,
+            helper_binary: Some(std::env::var("SKILL_STUDIO_LIVE_BINARY").expect("Linux helper")),
+            sandbox_home: None,
+        };
+        let ask = AskPass::new(app.handle().clone(), profile.id.clone()).unwrap();
+        let mut setup = ssh(&profile, &ask).unwrap();
+        setup.arg("python3 -");
+        let script = br#"import json, pathlib, tempfile
+p=pathlib.Path(tempfile.mkdtemp(prefix='skill-studio-mcp-live-', dir='/tmp'))
+(p/'.codex').mkdir()
+(p/'.claude.json').write_text(json.dumps({'mcpServers':{'shared':{'url':'https://fixture.invalid/mcp','headers':{'Authorization':'fixture-private-token'}}}}))
+(p/'.codex/config.toml').write_text("[mcp_servers.shared]\nurl='https://fixture.invalid/mcp'\nhttp_headers={Authorization='fixture-private-token'}\n")
+print(p, end='')
+"#;
+        let fixture = String::from_utf8(
+            captured(setup, Some(script.to_vec()), Duration::from_secs(60)).unwrap(),
+        )
+        .unwrap();
+        assert!(fixture.starts_with("/tmp/skill-studio-mcp-live-"));
+        profile.sandbox_home = Some(fixture.clone());
+        let fingerprints = || {
+            let mut command = ssh(&profile, &ask).unwrap();
+            command.arg(format!(
+                "sha256sum -- {} {}",
+                shell_quote(&format!("{fixture}/.claude.json")),
+                shell_quote(&format!("{fixture}/.codex/config.toml"))
+            ));
+            captured(command, None, Duration::from_secs(60)).unwrap()
+        };
+        let before = fingerprints();
+        let hello = connect(app.handle(), profile.clone()).unwrap();
+        assert!(hello["methods"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .any(|m| m == "scan_mcp"));
+        let state = app.state::<RemoteState>();
+        let inventory = request(&state, &profile.id, "scan_mcp", json!({})).unwrap();
+        assert_eq!(inventory["servers"].as_array().unwrap().len(), 1);
+        assert_eq!(inventory["servers"][0]["name"], "shared");
+        assert_eq!(
+            inventory["servers"][0]["agents"],
+            json!(["claude", "codex"])
+        );
+        assert!(!inventory.to_string().contains("fixture-private-token"));
+        assert!(request(
+            &state,
+            &profile.id,
+            "mcp_request",
+            json!({"method":"start"})
+        )
+        .unwrap_err()
+        .contains("只读"));
+        assert_eq!(
+            request(&state, &profile.id, "scan_mcp", json!({})).unwrap(),
+            inventory
+        );
+        disconnect(&state, &profile.id).unwrap();
+        assert_eq!(fingerprints(), before);
+        assert!(request(&state, &profile.id, "scan_mcp", json!({}))
+            .unwrap_err()
+            .starts_with("REMOTE_DISCONNECTED:"));
+        println!("Read-only MCP desktop SSH integration passed. Isolated fixture: {fixture}");
+    }
+
+    /// Explicit opt-in live test. Only the generated /tmp fixture is managed.
+    #[cfg(unix)]
+    #[test]
+    #[ignore = "requires SKILL_STUDIO_LIVE_HOST and SKILL_STUDIO_LIVE_BINARY"]
     fn live_desktop_ssh_deploy_and_project_roundtrip() {
         let host = std::env::var("SKILL_STUDIO_LIVE_HOST").expect("live host");
         let binary = std::env::var("SKILL_STUDIO_LIVE_BINARY").expect("Linux helper");

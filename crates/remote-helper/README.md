@@ -21,6 +21,11 @@
 目录选择器浏览，Skill 也可从本机上传。市场下载由桌面完成后上传，适用于
 服务器不能访问外网的场景。连接失败不会回退到本机操作。
 
+MCP Hub 通过 `scan_mcp` 只读展示服务器的 MCP 名称及所属 Agent，不提供远程
+托管、分组、网关或授权操作。响应仅含 `servers: [{id, name, agents}]` 与
+`warnings`；原始连接配置、凭据和启动参数不会返回桌面。即使在可写 Skill
+会话中，这个接口也不会进行配置恢复或启动第三方进程。
+
 ## 构建
 
 在相应 Linux 环境执行：
@@ -44,6 +49,7 @@ cargo build --locked --release -p skill-studio-remote
 {"id":"1","version":1,"method":"hello"}
 {"id":"2","version":1,"method":"list_agents"}
 {"id":"3","version":1,"method":"scan_skills"}
+{"id":"4","version":1,"method":"scan_mcp"}
 ```
 
 响应为 `{"id":"...","result":...}` 或 `{"id":"...","error":{"message":"..."}}`。
@@ -53,11 +59,11 @@ cargo build --locked --release -p skill-studio-remote
 上传分块最多 64 KiB，拒绝绝对路径和父目录穿越，安装复用核心校验。
 
 手动启动默认只读，仅允许握手、扫描、Agent 探测和目录浏览，不执行配置迁移、
-事务恢复或第三方 Agent CLI。`--allow-writes` 开启完整管理。
+事务恢复或第三方 Agent CLI。`--allow-writes` 开启 Skill 管理，MCP 始终只读。
 写入会话持有进程锁，EOF 后退出。超时不会自动重试写入，需重连后确认结果。
 
 `--sandbox-home /absolute/fixture/home` 为测试指定 HOME，并清除继承的
-`CODEX_HOME` / `CLAUDE_CONFIG_DIR`。它不是安全沙箱：测试配置中的绝对路径
+各 Agent 的配置目录环境变量。它不是安全沙箱：测试配置中的绝对路径
 和链接也必须自行指向测试目录。
 
 ## 验证
@@ -73,3 +79,7 @@ cargo test -p skill-studio --lib live_desktop_ssh_deploy_and_project_roundtrip -
 
 实机测试使用实际桌面 SSH 后端部署组件，并在远程 `/tmp` 独立配置中验证
 启停、Hub、分组、项目、备份、上传和重连。
+
+只验证远程 MCP 展示时，将上述测试名替换为
+`live_desktop_ssh_mcp_inventory_is_read_only`。此测试仅在生成的临时 HOME 中
+创建 MCP 样例，验证只读扫描、操作拒绝及配置文件哈希不变。

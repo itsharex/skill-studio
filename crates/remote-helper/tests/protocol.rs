@@ -68,6 +68,194 @@ fn fixture() -> tempfile::TempDir {
     home
 }
 
+fn write_fixture(home: &std::path::Path, path: &str, contents: &str) {
+    let path = home.join(path);
+    std::fs::create_dir_all(path.parent().unwrap()).unwrap();
+    std::fs::write(path, contents).unwrap();
+}
+
+fn snapshot(root: &std::path::Path) -> std::collections::BTreeMap<std::path::PathBuf, Vec<u8>> {
+    let mut files = std::collections::BTreeMap::new();
+    for entry in std::fs::read_dir(root).unwrap() {
+        let path = entry.unwrap().path();
+        if path.is_dir() {
+            files.extend(snapshot(&path));
+        } else {
+            files.insert(path.clone(), std::fs::read(path).unwrap());
+        }
+    }
+    files
+}
+
+#[test]
+fn mcp_inventory_is_metadata_only_and_never_recovers_or_executes_in_either_session_mode() {
+    use skill_studio_core::models::{config::AppConfig, project::ProjectBinding};
+    for writable in [false, true] {
+        let home = fixture();
+        let root = home.path();
+        let project = root.join("project");
+        let mut config = AppConfig::default();
+        config.projects.push(ProjectBinding::new(
+            "project".into(),
+            "Project".into(),
+            project.clone(),
+        ));
+        config
+            .settings
+            .agent_dir_overrides
+            .insert("opencode".into(), root.join("custom-open"));
+        write_fixture(
+            root,
+            ".skill-studio/config.json",
+            &serde_json::to_string(&config).unwrap(),
+        );
+        // A bootstrapped service would attempt recovery and fail on these journals.
+        write_fixture(
+            root,
+            ".skill-studio/registration.json",
+            "unfinished-skill-transaction",
+        );
+        write_fixture(
+            root,
+            ".skill-studio/mcp/management-transaction.json",
+            "unfinished-mcp-transaction",
+        );
+        write_fixture(root, ".claude.json", &json!({
+            "mcpServers": {"shared": {"url":"https://service.invalid/mcp", "headers":{"Authorization":"Bearer private-header"}}},
+            "projects": {project.to_string_lossy().as_ref(): {"mcpServers":{"claude-project":{"command":"claude-project-tool"}}}}
+        }).to_string());
+        write_fixture(root, ".codex/config.toml", "[mcp_servers.shared]\nurl='https://service.invalid/mcp'\nhttp_headers={Authorization='Bearer private-header'}\n[mcp_servers.disabled]\ncommand='disabled-tool'\nenabled=false\n[mcp_servers.node_repl]\ncommand='/Applications/Codex.app/Contents/Resources/cua_node/bin/node_repl'\n");
+        write_fixture(root, "custom-open/opencode.jsonc", &json!({"mcp":{"servers":{"open":{"command":["sh", "-c", format!("touch {}/must-not-run", root.display())],"environment":{"TOKEN":"private-env"}}}}}).to_string());
+        write_fixture(
+            root,
+            ".pi/agent/mcp.json",
+            "{\"mcpServers\":{\"pi\":{\"command\":\"pi-tool\"}}}",
+        );
+        write_fixture(
+            root,
+            ".grok/config.toml",
+            "[mcp_servers.grok]\ncommand='grok-tool'\n",
+        );
+        write_fixture(
+            root,
+            "project/.pi/mcp.json",
+            "{\"mcpServers\":{\"pi-project\":{\"command\":\"project-pi-tool\"}}}",
+        );
+        // An invalid file must not hide the other valid sources or echo its contents.
+        write_fixture(
+            root,
+            "project/.codex/config.toml",
+            "private-broken-token = [",
+        );
+        let mut session = Session::start(root, writable);
+        let hello = session.call("hello", Value::Null);
+        assert!(hello["result"]["methods"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .any(|m| m == "scan_mcp"));
+        let before = snapshot(root);
+        let response = session.call("scan_mcp", Value::Null);
+        assert!(response.get("error").is_none(), "{response}");
+        let servers = response["result"]["servers"].as_array().unwrap();
+        assert_eq!(servers.len(), 7, "{response}");
+        let shared = servers.iter().find(|s| s["name"] == "shared").unwrap();
+        assert_eq!(shared["agents"], json!(["claude", "codex"]));
+        for name in [
+            "open",
+            "pi",
+            "grok",
+            "disabled",
+            "claude-project",
+            "pi-project",
+        ] {
+            assert!(servers.iter().any(|s| s["name"] == name), "missing {name}");
+        }
+        assert_eq!(response["result"]["warnings"].as_array().unwrap().len(), 1);
+        for entry in servers {
+            assert_eq!(
+                entry
+                    .as_object()
+                    .unwrap()
+                    .keys()
+                    .map(String::as_str)
+                    .collect::<std::collections::BTreeSet<_>>(),
+                ["agents", "id", "name"].into_iter().collect()
+            );
+        }
+        for private in [
+            "private-header",
+            "private-env",
+            "private-broken-token",
+            "must-not-run",
+            "https://service.invalid",
+        ] {
+            assert!(!response.to_string().contains(private), "leaked {private}");
+        }
+        for method in [
+            "start",
+            "saveEntry",
+            "removeEntry",
+            "activateGroup",
+            "login",
+        ] {
+            assert!(
+                session.call("mcp_request", json!({"method":method}))["error"]["message"]
+                    .as_str()
+                    .unwrap()
+                    .contains("只读")
+            );
+        }
+        assert_eq!(snapshot(root), before);
+        assert!(!root.join("must-not-run").exists());
+        // Visibility takes effect on the next read, retaining shared entries.
+        config.settings.disabled_agents = vec!["opencode".into(), "claude-code".into()];
+        config.settings.show_codex_builtin_mcp = true;
+        write_fixture(
+            root,
+            ".skill-studio/config.json",
+            &serde_json::to_string(&config).unwrap(),
+        );
+        let response = session.call("scan_mcp", Value::Null);
+        let servers = response["result"]["servers"].as_array().unwrap();
+        assert!(!servers
+            .iter()
+            .any(|s| s["name"] == "open" || s["name"] == "claude-project"));
+        assert_eq!(
+            servers.iter().find(|s| s["name"] == "shared").unwrap()["agents"],
+            json!(["codex"])
+        );
+        assert!(servers.iter().any(|s| s["name"] == "node_repl"));
+    }
+}
+
+#[test]
+fn mcp_inventory_empty_home_stays_empty_and_distinct_connections_do_not_merge_by_name() {
+    let home = tempfile::tempdir().unwrap();
+    let mut session = Session::start(home.path(), false);
+    assert_eq!(
+        session.call("scan_mcp", Value::Null)["result"],
+        json!({"servers":[],"warnings":[]})
+    );
+    assert!(!home.path().join(".skill-studio").exists());
+    write_fixture(
+        home.path(),
+        ".claude.json",
+        "{\"mcpServers\":{\"shared\":{\"url\":\"https://one.invalid/mcp\"}}}",
+    );
+    write_fixture(
+        home.path(),
+        ".codex/config.toml",
+        "[mcp_servers.shared]\nurl='https://two.invalid/mcp'\n",
+    );
+    let before = snapshot(home.path());
+    let response = session.call("scan_mcp", Value::Null);
+    let servers = response["result"]["servers"].as_array().unwrap();
+    assert_eq!(servers.len(), 2);
+    assert_ne!(servers[0]["id"], servers[1]["id"]);
+    assert_eq!(snapshot(home.path()), before);
+}
+
 #[test]
 fn readonly_session_rejects_mutation_and_keeps_protocol_usable() {
     let home = fixture();
