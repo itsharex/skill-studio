@@ -273,16 +273,23 @@ export function AgentPage({ agentId }: { agentId: string }) {
               <Badge
                 variant="outline"
                 className="px-3 py-1 text-sm font-medium"
-                title="文件在位、且没被 agent 的原生开关停用的 skill。目录里有痕迹但用不上的（外来占位、悬空链接）不计。"
+                title={
+                  agent?.supportsNativeToggle
+                    ? "文件在位、且没被 agent 的原生开关停用的 skill。目录里有痕迹但用不上的（外来占位、悬空链接）不计。"
+                    : "按标准目录中的 Skill 文件统计；实际加载状态由 Agent 自身配置决定。"
+                }
               >
-                已启用 {enabledSkills.length} 个 skill
+                {agent?.supportsNativeToggle ? "已启用" : "已安装"}{" "}
+                {enabledSkills.length} 个 skill
               </Badge>
               <Badge
                 variant="outline"
                 className="px-3 py-1 text-sm font-medium"
                 title={tokenTitle(
                   enabledTokens,
-                  "当前已启用的 skill",
+                  agent?.supportsNativeToggle
+                    ? "当前已启用的 skill"
+                    : "当前已安装的 skill",
                   driftedCount,
                 )}
               >
@@ -291,6 +298,14 @@ export function AgentPage({ agentId }: { agentId: string }) {
             </div>
           )}
         </div>
+        {agent && !agent.supportsNativeToggle && (
+          <p className="mb-4 text-xs leading-relaxed text-muted-foreground">
+            {agent.displayName} 本版支持 Skill
+            安装、托管和分组部署，暂不读取或修改原生启停配置。 分组停用只撤回
+            Studio 部署的副本，手动安装的 Skill 始终保留。修改后请在 Agent
+            中重新加载 Skill 或重启会话。
+          </p>
+        )}
         <TabsContent
           value="groups"
           className="min-h-0 flex-1 overflow-y-auto pb-6"

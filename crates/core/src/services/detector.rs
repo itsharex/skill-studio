@@ -34,6 +34,8 @@ fn extra_search_dirs() -> Vec<PathBuf> {
     let home = paths::home_dir();
     let mut dirs = vec![
         home.join(".local/bin"),
+        home.join(".opencode/bin"),
+        home.join(".grok/bin"),
         home.join(".npm-global/bin"),
         home.join(".volta/bin"),
         home.join("n/bin"),
@@ -147,8 +149,17 @@ pub fn describe_agent(
     let config_dir = agent.resolved_config_dir(overrides);
     let global_skill_dirs = agent.resolved_global_roots(overrides);
 
-    // 配置目录存在，或任一 skill 根已存在，都算装过
-    let detected = config_dir.is_dir() || global_skill_dirs.iter().any(|d| d.is_dir());
+    // Shared skills are consumable by several Agents, but do not prove any one is installed.
+    let detected = config_dir.is_dir()
+        || agent
+            .global_roots
+            .iter()
+            .zip(&global_skill_dirs)
+            .any(|(root, path)| !root.shared && path.is_dir())
+        || global_skill_dirs
+            .iter()
+            .skip(agent.global_roots.len())
+            .any(|path| path.is_dir());
 
     let probe = if skip_cli_probe {
         CliProbe::NotFound
@@ -159,7 +170,7 @@ pub fn describe_agent(
     AgentInfo {
         id: agent.id.to_string(),
         display_name: agent.display_name.to_string(),
-        detected,
+        detected: detected || !matches!(probe, CliProbe::NotFound),
         cli_available: matches!(probe, CliProbe::Found(_)),
         cli_broken: matches!(probe, CliProbe::FoundButBroken),
         cli_version: match probe {
@@ -169,6 +180,7 @@ pub fn describe_agent(
         config_dir,
         global_skill_dirs,
         supports_project_skills: agent.project_skill_dir.is_some(),
+        project_skill_dir: agent.project_skill_dir.map(str::to_string),
         supports_native_toggle: !matches!(agent.toggle, ToggleMechanism::None),
     }
 }
@@ -230,7 +242,7 @@ mod tests {
 
     #[test]
     #[serial]
-    fn detected_when_only_the_skills_root_exists() {
+    fn shared_skills_do_not_imply_an_agent_is_installed() {
         let dir = tempfile::tempdir().unwrap();
         std::env::set_var(paths::TEST_HOME_ENV, dir.path());
         std::env::remove_var("CODEX_HOME");
@@ -239,7 +251,7 @@ mod tests {
 
         let codex = find_agent("codex").unwrap();
         let info = describe_agent(codex, &HashMap::new(), true);
-        assert!(info.detected, "存在任一 skill 根就应算装过");
+        assert!(!info.detected, "共享根不能用来判断 Agent 已安装");
         assert_eq!(info.global_skill_dirs.len(), 2);
 
         std::env::remove_var(paths::TEST_HOME_ENV);

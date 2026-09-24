@@ -97,6 +97,21 @@ export const codexAgent = makeAgent({
   globalSkillDirs: ["/home/u/.codex/skills", "/home/u/.agents/skills"],
 });
 
+export const skillOnlyAgents: AgentInfo[] = [
+  ["opencode", "OpenCode", ".config/opencode", ".opencode/skills"],
+  ["pi", "Pi", ".pi/agent", ".pi/skills"],
+  ["grok", "Grok Build", ".grok", ".grok/skills"],
+].map(([id, displayName, configDir, projectSkillDir]) =>
+  makeAgent({
+    id,
+    displayName,
+    configDir: `/home/u/${configDir}`,
+    globalSkillDirs: [`/home/u/${configDir}/skills`, "/home/u/.agents/skills"],
+    projectSkillDir,
+    supportsNativeToggle: false,
+  }),
+);
+
 export function makeSkill(over: Partial<SkillView> = {}): SkillView {
   return {
     id: "s1",

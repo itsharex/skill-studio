@@ -29,6 +29,14 @@ impl Env {
         std::env::set_var(paths::TEST_HOME_ENV, home.path());
         std::env::remove_var("CLAUDE_CONFIG_DIR");
         std::env::remove_var("CODEX_HOME");
+        for var in [
+            "XDG_CONFIG_HOME",
+            "OPENCODE_CONFIG_DIR",
+            "PI_CODING_AGENT_DIR",
+            "GROK_HOME",
+        ] {
+            std::env::remove_var(var);
+        }
         Self { home }
     }
 

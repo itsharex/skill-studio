@@ -99,7 +99,7 @@ export interface SkillView extends Skill {
 export interface AgentInfo {
   id: string;
   displayName: string;
-  /** 配置目录或任一 skill 根存在 */
+  /** 专属配置或 Skill 目录存在，或检测到 CLI */
   detected: boolean;
   cliAvailable: boolean;
   /** 找到可执行文件但 --version 失败：装了却跑不起来 */
@@ -108,6 +108,7 @@ export interface AgentInfo {
   configDir: string;
   globalSkillDirs: string[];
   supportsProjectSkills: boolean;
+  projectSkillDir?: string | null;
   supportsNativeToggle: boolean;
 }
 

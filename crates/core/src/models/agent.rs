@@ -20,7 +20,7 @@ pub enum ToggleMechanism {
     ClaudeSettingsJson,
     /// `~/.codex/config.toml` 的 `[[skills.config]] name/enabled`
     CodexConfigToml,
-    /// 该 agent 没有原生启停机制
+    /// 尚未接入该 agent 的原生启停机制；分组仅撤回 Studio 自己部署的文件
     None,
 }
 
@@ -44,6 +44,10 @@ pub struct AgentDescriptor {
     pub home_env: Option<&'static str>,
     /// 配置目录名（相对 home），如 `.claude`
     pub config_dir: &'static str,
+    /// 遵循 XDG_CONFIG_HOME 的配置子目录。
+    pub xdg_config_subdir: Option<&'static str>,
+    /// Agent 支持的附加配置目录环境变量（只扫描，不替代默认写入目录）。
+    pub extra_config_env: Option<&'static str>,
     /// 全局 skill 根，可以多个。**第一个是写入目标**，其余只参与扫描。
     pub global_roots: &'static [SkillRoot],
     /// 项目级 skill 目录（相对项目根）。`None` = 该 agent 不支持项目级。
@@ -71,6 +75,11 @@ impl AgentDescriptor {
         if let Some(env) = self.home_env.and_then(paths::env_dir_override) {
             return env;
         }
+        if let Some(subdir) = self.xdg_config_subdir {
+            if let Some(base) = paths::env_dir_override("XDG_CONFIG_HOME") {
+                return base.join(subdir);
+            }
+        }
         paths::home_dir().join(self.config_dir)
     }
 
@@ -78,27 +87,30 @@ impl AgentDescriptor {
     pub fn resolved_global_roots(&self, overrides: &HashMap<String, PathBuf>) -> Vec<PathBuf> {
         let config_dir = self.resolved_config_dir(overrides);
         let home = paths::home_dir();
-        self.global_roots
+        let mut roots: Vec<_> = self
+            .global_roots
             .iter()
             .map(|root| {
                 if root.follows_config_dir {
-                    // home_relative 形如 ".claude/skills"，配置目录覆盖后只保留末段
-                    let tail = root
-                        .home_relative
-                        .split('/')
-                        .skip(1)
-                        .collect::<Vec<_>>()
-                        .join("/");
-                    if tail.is_empty() {
-                        config_dir.clone()
-                    } else {
-                        config_dir.join(tail)
-                    }
+                    // Strip the entire config prefix: Pi and OpenCode use multi-level paths.
+                    let tail = std::path::Path::new(root.home_relative)
+                        .strip_prefix(self.config_dir)
+                        .expect("agent skill root must be below its config directory");
+                    config_dir.join(tail)
                 } else {
                     home.join(root.home_relative)
                 }
             })
-            .collect()
+            .collect();
+        if !overrides.contains_key(self.id) {
+            if let Some(extra) = self.extra_config_env.and_then(paths::env_dir_override) {
+                let root = extra.join("skills");
+                if !roots.contains(&root) {
+                    roots.push(root);
+                }
+            }
+        }
+        roots
     }
 
     /// 注册新 skill 时写入的目标根（`global_roots` 的第一个）。
@@ -144,6 +156,8 @@ const CLAUDE_CODE: AgentDescriptor = AgentDescriptor {
     display_name: "Claude Code",
     home_env: Some("CLAUDE_CONFIG_DIR"),
     config_dir: ".claude",
+    xdg_config_subdir: None,
+    extra_config_env: None,
     global_roots: &[SkillRoot {
         home_relative: ".claude/skills",
         follows_config_dir: true,
@@ -169,6 +183,8 @@ const CODEX: AgentDescriptor = AgentDescriptor {
     display_name: "Codex",
     home_env: Some("CODEX_HOME"),
     config_dir: ".codex",
+    xdg_config_subdir: None,
+    extra_config_env: None,
     global_roots: &[
         SkillRoot {
             home_relative: ".codex/skills",
@@ -188,8 +204,81 @@ const CODEX: AgentDescriptor = AgentDescriptor {
     reserved_dir_names: &[],
 };
 
-/// 支持的 agent。加一个 agent 只需要往这里加一条。
-pub static AGENTS: &[AgentDescriptor] = &[CLAUDE_CODE, CODEX];
+/// OpenCode: opencode.ai/docs/skills. OPENCODE_CONFIG_DIR is additive;
+/// XDG_CONFIG_HOME relocates the standard global configuration directory.
+const OPENCODE: AgentDescriptor = AgentDescriptor {
+    id: "opencode",
+    display_name: "OpenCode",
+    home_env: None,
+    config_dir: ".config/opencode",
+    xdg_config_subdir: Some("opencode"),
+    extra_config_env: Some("OPENCODE_CONFIG_DIR"),
+    global_roots: &[
+        SkillRoot {
+            home_relative: ".config/opencode/skills",
+            follows_config_dir: true,
+            shared: false,
+        },
+        SHARED_SKILLS,
+    ],
+    project_skill_dir: Some(".opencode/skills"),
+    cli_command: "opencode",
+    toggle: ToggleMechanism::None,
+    reserved_dir_names: &[],
+};
+
+/// Pi: badlogic/pi-mono, packages/coding-agent/src/config.ts and docs/skills.md.
+const PI: AgentDescriptor = AgentDescriptor {
+    id: "pi",
+    display_name: "Pi",
+    home_env: Some("PI_CODING_AGENT_DIR"),
+    config_dir: ".pi/agent",
+    xdg_config_subdir: None,
+    extra_config_env: None,
+    global_roots: &[
+        SkillRoot {
+            home_relative: ".pi/agent/skills",
+            follows_config_dir: true,
+            shared: false,
+        },
+        SHARED_SKILLS,
+    ],
+    project_skill_dir: Some(".pi/skills"),
+    cli_command: "pi",
+    toggle: ToggleMechanism::None,
+    reserved_dir_names: &[],
+};
+
+/// Grok Build: xai-org/grok-build, user-guide/08-skills.md.
+const GROK: AgentDescriptor = AgentDescriptor {
+    id: "grok",
+    display_name: "Grok Build",
+    home_env: Some("GROK_HOME"),
+    config_dir: ".grok",
+    xdg_config_subdir: None,
+    extra_config_env: None,
+    global_roots: &[
+        SkillRoot {
+            home_relative: ".grok/skills",
+            follows_config_dir: true,
+            shared: false,
+        },
+        SHARED_SKILLS,
+    ],
+    project_skill_dir: Some(".grok/skills"),
+    cli_command: "grok",
+    toggle: ToggleMechanism::None,
+    reserved_dir_names: &[],
+};
+
+const SHARED_SKILLS: SkillRoot = SkillRoot {
+    home_relative: ".agents/skills",
+    follows_config_dir: false,
+    shared: true,
+};
+
+/// 支持 Skill 管理的 Agent；MCP 使用自己的能力白名单。
+pub static AGENTS: &[AgentDescriptor] = &[CLAUDE_CODE, CODEX, OPENCODE, PI, GROK];
 
 pub fn find_agent(id: &str) -> Option<&'static AgentDescriptor> {
     AGENTS.iter().find(|a| a.id == id)
@@ -221,6 +310,9 @@ pub struct AgentInfo {
     pub config_dir: PathBuf,
     pub global_skill_dirs: Vec<PathBuf>,
     pub supports_project_skills: bool,
+    /// 相对项目根的写入目录；旧远程后端可缺省。
+    #[serde(default)]
+    pub project_skill_dir: Option<String>,
     pub supports_native_toggle: bool,
 }
 
@@ -234,8 +326,11 @@ mod tests {
     }
 
     #[test]
-    fn registry_has_both_first_class_agents() {
-        assert_eq!(AGENTS.len(), 2);
+    fn registry_has_all_skill_agents() {
+        assert_eq!(AGENTS.len(), 5);
+        for id in ["opencode", "pi", "grok"] {
+            assert!(find_agent(id).is_some());
+        }
         assert!(find_agent("claude-code").is_some());
         assert!(find_agent("codex").is_some());
         assert!(find_agent("nope").is_none());

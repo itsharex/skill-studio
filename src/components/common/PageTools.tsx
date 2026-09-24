@@ -24,7 +24,7 @@ export function PageTools({
 }) {
   const hosts = useContext(PageToolsContext);
   const search = (
-    <div className="relative w-56 max-w-full">
+    <div className={`relative min-w-0 ${hosts ? "w-full" : "w-52 max-w-full"}`}>
       <Search className="pointer-events-none absolute left-2.5 top-1/2 h-4 w-4 -translate-y-1/2 text-muted-foreground" />
       <Input
         aria-label={placeholder}

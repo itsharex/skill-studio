@@ -51,10 +51,76 @@ function OpenAIMark({ className }: MarkProps) {
   );
 }
 
+/**
+ * OpenCode、Pi、Grok 的路径与 viewBox 取自 farion1231/cc-switch
+ * `src/icons/extracted/index.ts`，来源版本和许可见 THIRD_PARTY_NOTICES.md。
+ * OpenCode 省略覆盖整个画布的 mask/clipPath，避免重复渲染产生同名 SVG id；
+ * 浅色保留原始双色填充，深色仅调整明暗以保持可见。
+ */
+function OpenCodeMark({ className }: MarkProps) {
+  return (
+    <svg
+      viewBox="0 0 240 300"
+      className={className}
+      aria-hidden="true"
+      focusable="false"
+    >
+      <path
+        d="M180 240H60V120H180V240Z"
+        fill="#CFCECD"
+        className="dark:fill-zinc-600"
+      />
+      <path
+        d="M180 60H60V240H180V60ZM240 300H0V0H240V300Z"
+        fill="#211E1E"
+        className="dark:fill-zinc-100"
+      />
+    </svg>
+  );
+}
+
+/** CC Switch 的 grokbuild 使用 grok 标记。 */
+function GrokMark({ className }: MarkProps) {
+  return (
+    <svg
+      viewBox="0 0 24 24"
+      className={className}
+      aria-hidden="true"
+      focusable="false"
+      fill="currentColor"
+      fillRule="evenodd"
+    >
+      <path d="M9.27 15.29l7.978-5.897c.391-.29.95-.177 1.137.272.98 2.369.542 5.215-1.41 7.169-1.951 1.954-4.667 2.382-7.149 1.406l-2.711 1.257c3.889 2.661 8.611 2.003 11.562-.953 2.341-2.344 3.066-5.539 2.388-8.42l.006.007c-.983-4.232.242-5.924 2.75-9.383.06-.082.12-.164.179-.248l-3.301 3.305v-.01L9.267 15.292M7.623 16.723c-2.792-2.67-2.31-6.801.071-9.184 1.761-1.763 4.647-2.483 7.166-1.425l2.705-1.25a7.808 7.808 0 00-1.829-1A8.975 8.975 0 005.984 5.83c-2.533 2.536-3.33 6.436-1.962 9.764 1.022 2.487-.653 4.246-2.34 6.022-.599.63-1.199 1.259-1.682 1.925l7.62-6.815" />
+    </svg>
+  );
+}
+
+/** CC Switch 的 Pi 像素标记，保留原始 viewBox 与留白比例。 */
+function PiMark({ className }: MarkProps) {
+  return (
+    <svg
+      viewBox="0 0 800 800"
+      className={className}
+      aria-hidden="true"
+      focusable="false"
+    >
+      <path
+        fill="currentColor"
+        fillRule="evenodd"
+        d="M165.29 165.29H517.36V400H400V517.36H282.65V634.72H165.29ZM282.65 282.65V400H400V282.65Z"
+      />
+      <path fill="currentColor" d="M517.36 400H634.72V634.72H517.36Z" />
+    </svg>
+  );
+}
+
 /** agent id → 品牌标记。没有登记的 agent 回落到通用图标，不报错。 */
 const MARKS: Record<string, ComponentType<MarkProps>> = {
   "claude-code": ClaudeMark,
   codex: OpenAIMark,
+  opencode: OpenCodeMark,
+  pi: PiMark,
+  grok: GrokMark,
 };
 
 /**
@@ -66,7 +132,7 @@ export function agentIcon(agentId: string): ComponentType<MarkProps> {
   return MARKS[agentId] ?? Boxes;
 }
 
-/** 按 agent 渲染品牌标记。尺寸与颜色一律由 className 决定。 */
+/** 按 agent 渲染品牌标记。尺寸由 className 决定，单色标记跟随文字色。 */
 export function AgentIcon({
   agentId,
   className,

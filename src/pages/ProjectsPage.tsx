@@ -1,3 +1,4 @@
+import { agentSourceColor, projectSkillDirectory } from "@/lib/agents";
 import { useSkillPreview } from "@/components/common/SkillPreview";
 import { SkillBackups } from "@/components/common/SkillBackups";
 import { PageTools } from "@/components/common/PageTools";
@@ -223,7 +224,7 @@ function ProjectsContent() {
                 key={a.id}
                 type="button"
                 title={`筛选 ${a.displayName} 已启用的项目`}
-                className={`inline-flex items-center gap-1.5 rounded-full px-2.5 py-1 text-xs font-medium transition-colors hover:brightness-95 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring ${a.id === "claude-code" ? "bg-orange-500/10 text-orange-600 dark:text-orange-300" : "bg-emerald-500/10 text-emerald-600 dark:text-emerald-300"} ${sourceFilter === a.id ? "ring-2 ring-current" : ""}`}
+                className={`inline-flex items-center gap-1.5 rounded-full px-2.5 py-1 text-xs font-medium transition-colors hover:brightness-95 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring ${agentSourceColor(a.id)} ${sourceFilter === a.id ? "ring-2 ring-current" : ""}`}
                 aria-pressed={sourceFilter === a.id}
                 onClick={() =>
                   setSourceFilter(sourceFilter === a.id ? null : a.id)
@@ -864,7 +865,7 @@ function ProjectDetail({
                   {a.displayName}
                 </span>
                 <span className="font-mono text-[11px] text-muted-foreground">
-                  {a.id === "codex" ? ".agents/skills" : ".claude/skills"}
+                  {projectSkillDirectory(a) ?? "由 Agent 提供"}
                 </span>
               </ListItemRow>
             ))}

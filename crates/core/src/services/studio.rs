@@ -415,7 +415,8 @@ impl Studio {
                 AgentSkillState {
                     status,
                     target_path,
-                    policy_blocked: !config.settings.preserve_manual_skills
+                    policy_blocked: agent.toggle_config_path(overrides).is_some()
+                        && !config.settings.preserve_manual_skills
                         && !config
                             .settings
                             .disabled_agents

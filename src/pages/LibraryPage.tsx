@@ -1,3 +1,4 @@
+import { agentSourceColor } from "@/lib/agents";
 import { useSkillPreview } from "@/components/common/SkillPreview";
 import {
   SkillBackups,
@@ -124,10 +125,7 @@ export function LibraryPage({ onAdd }: { onAdd?: () => void } = {}) {
     ...agents.map((a) => ({
       id: a.id,
       label: a.displayName,
-      color:
-        a.id === "claude-code"
-          ? "bg-orange-500/10 text-orange-600 dark:text-orange-300"
-          : "bg-emerald-500/10 text-emerald-600 dark:text-emerald-300",
+      color: agentSourceColor(a.id),
     })),
     {
       id: "studio",
@@ -152,7 +150,7 @@ export function LibraryPage({ onAdd }: { onAdd?: () => void } = {}) {
       });
   }
   const summary = (
-    <div className="my-4 flex flex-wrap items-center justify-between gap-3 rounded-xl border border-border-default px-5 py-4">
+    <div className="my-4 flex shrink-0 flex-col gap-3 rounded-xl border border-border-default px-5 py-4">
       <div
         role="group"
         aria-label="按来源筛选"
@@ -173,7 +171,7 @@ export function LibraryPage({ onAdd }: { onAdd?: () => void } = {}) {
                   ? "共享 Agent 目录（~/.agents/skills）"
                   : `筛选 ${label} 来源`
               }
-              className={`inline-flex items-center gap-1.5 rounded-full px-2.5 py-1 text-xs font-medium transition-colors hover:brightness-95 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring ${color} ${sourceFilter === id ? "ring-2 ring-current" : ""}`}
+              className={`inline-flex shrink-0 items-center gap-1.5 whitespace-nowrap rounded-full px-2.5 py-1 text-xs font-medium transition-colors hover:brightness-95 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring ${color} ${sourceFilter === id ? "ring-2 ring-current" : ""}`}
             >
               {id === "studio" ? (
                 <SkillStudioIcon className="h-4 w-4" />
@@ -189,7 +187,7 @@ export function LibraryPage({ onAdd }: { onAdd?: () => void } = {}) {
           );
         })}
       </div>
-      <div className="ml-auto flex flex-wrap items-center gap-2">
+      <div className="flex flex-wrap items-center gap-2 border-t border-border-default pt-3">
         {/*
           这两枚是筛选器（有 aria-pressed），所以保留 button；但边框必须走主题
           token —— 裸 `border` 会吃到 preflight 推出的 #e4e4e7，深色下是一枚

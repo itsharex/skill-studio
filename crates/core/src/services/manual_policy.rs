@@ -22,6 +22,14 @@ pub(crate) fn plan(
     views: &[SkillView],
 ) -> Result<(Vec<GroupEntry>, Vec<Toggle>)> {
     let agent = require_agent(agent_id)?;
+    // Never move shared/manual directories or write another tool's config as a
+    // substitute for a native toggle. Group-owned copies still reconcile normally.
+    if agent
+        .toggle_config_path(&config.settings.agent_dir_overrides)
+        .is_none()
+    {
+        return Ok((Vec::new(), Vec::new()));
+    }
     let active = config.active_groups.get(agent_id);
     let owned = active.map(|g| g.entries.as_slice()).unwrap_or_default();
     let previously_suspended: Vec<_> = config

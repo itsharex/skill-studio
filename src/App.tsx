@@ -263,10 +263,14 @@ function AppContent() {
 
           <header
             data-tauri-drag-region
-            className="z-50 flex shrink-0 flex-wrap items-start justify-between gap-x-6 gap-y-3 bg-background px-6 pb-4 pt-5"
+            className={`z-50 shrink-0 gap-y-3 bg-background px-6 pb-4 pt-5 ${
+              isSubpage
+                ? "flex items-start justify-between gap-x-6"
+                : "grid grid-cols-[auto_minmax(8rem,1fr)_auto_auto] items-center gap-x-3"
+            }`}
           >
             <div
-              className={`flex min-h-11 items-center gap-3 ${isSettings ? "min-w-0 flex-1" : "shrink-0"}`}
+              className={`flex min-h-11 min-w-0 items-center gap-3 ${isSettings ? "flex-1" : "col-start-1 row-start-1"}`}
               data-tauri-no-drag
             >
               {isSubpage && (
@@ -345,14 +349,15 @@ function AppContent() {
               )}
             </div>
             {!isSubpage && (
-              <div
-                className="ml-auto flex max-w-full flex-wrap items-center justify-end gap-3"
-                data-tauri-no-drag
-              >
-                <div ref={setSearchHost} />
+              <>
+                <div
+                  ref={setSearchHost}
+                  className="col-start-2 row-start-1 w-full min-w-0 max-w-52 justify-self-end"
+                  data-tauri-no-drag
+                />
                 <nav
                   aria-label="主导航"
-                  className="ml-auto max-w-full"
+                  className="col-start-3 row-start-1 min-w-0"
                   data-tauri-no-drag
                 >
                   <NavSwitcher
@@ -385,8 +390,12 @@ function AppContent() {
                     }}
                   />
                 </nav>
-                <div ref={setAddHost} />
-              </div>
+                <div
+                  ref={setAddHost}
+                  className="col-start-4 row-start-1 justify-self-end"
+                  data-tauri-no-drag
+                />
+              </>
             )}
           </header>
 

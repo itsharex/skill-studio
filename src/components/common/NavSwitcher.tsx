@@ -37,7 +37,7 @@ export function NavSwitcher<T extends string>({
   const reduceMotion = useReducedMotion();
   return (
     <LayoutGroup id={layoutId}>
-      <div className="flex flex-wrap items-center justify-end gap-2">
+      <div className="flex w-max items-center gap-2">
         {sections
           .filter((section) => section.items.length > 0)
           .map((section, i) => (
