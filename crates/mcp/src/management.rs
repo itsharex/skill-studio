@@ -467,12 +467,18 @@ pub fn save(
             installed.push(prior.clone());
             continue;
         }
+        native::check_activation(
+            &read_text(&target.path)?.unwrap_or_default(),
+            &target.agent,
+            &target.key,
+        )?;
         let value = if entry.mode == "gateway" {
-            let mut value = json!({"command":executable,"args":["--mcp-client",entry.id,dir]});
-            if target.agent == "claude" {
-                value["type"] = json!("stdio");
+            let mut adapter =
+                json!({"type":"stdio","command":executable,"args":["--mcp-client",entry.id,dir]});
+            if entry.definition["enabled"].as_bool() == Some(false) && target.agent != "claude" {
+                adapter["enabled"] = json!(false);
             }
-            value
+            native::for_agent(&adapter, &target.agent)?
         } else {
             native::for_agent(&entry.definition, &target.agent)?
         };
@@ -564,7 +570,10 @@ pub fn remove_project_bindings(dir: &Path, root: &Path) -> Result<usize> {
     let mut catalog = read_unlocked(dir)?;
     ensure_active(&catalog)?;
     let local_root = root.to_string_lossy();
-    let project_files = [root.join(".mcp.json"), root.join(".codex/config.toml")];
+    let project_files: Vec<_> = crate::agents::PROJECT_FILES
+        .iter()
+        .map(|p| root.join(p))
+        .collect();
     let bindings: Vec<Binding> = catalog
         .entries
         .iter()

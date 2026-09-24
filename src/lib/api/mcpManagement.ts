@@ -84,7 +84,28 @@ export function canonical(
     value.headers = value.http_headers;
     delete value.http_headers;
   }
+  if (
+    (agent === "pi" || agent === "opencode") &&
+    typeof value.disabled === "boolean"
+  ) {
+    value.enabled = !value.disabled;
+    delete value.disabled;
+  }
+  if (agent === "opencode") {
+    if (Array.isArray(value.command) && value.command.length) {
+      const [command, ...args] = value.command;
+      value.command = command;
+      value.args = args;
+    }
+    if ("environment" in value) {
+      value.env = value.environment;
+      delete value.environment;
+    }
+    if (value.type === "local") value.type = "stdio";
+    else if (value.type === "remote") value.type = "http";
+  }
   value.type ??= value.url ? "http" : "stdio";
+  if (value.type === "streamable-http") value.type = "http";
   return value;
 }
 function stable(value: unknown): string {

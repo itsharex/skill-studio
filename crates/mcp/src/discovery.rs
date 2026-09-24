@@ -12,6 +12,34 @@ pub struct ScanFile {
     pub path: PathBuf,
     pub scope: String,
 }
+
+/// Shared native paths for desktop management and the remote read-only inventory.
+pub fn scan_files(
+    config: &skill_studio_core::models::config::AppConfig,
+) -> (Vec<ScanFile>, Vec<String>) {
+    let mut files = Vec::new();
+    let mut warnings = Vec::new();
+    for agent in crate::agents::IDS {
+        match crate::agents::global_files(agent, &config.settings.agent_dir_overrides) {
+            Ok(paths) => files.extend(paths.into_iter().map(|path| ScanFile {
+                agent: (*agent).into(),
+                path,
+                scope: "用户全局".into(),
+            })),
+            Err(e) => warnings.push(e.to_string()),
+        }
+        for project in &config.projects {
+            if let Ok(paths) = crate::agents::project_files(agent, &project.root) {
+                files.extend(paths.into_iter().map(|path| ScanFile {
+                    agent: (*agent).into(),
+                    path,
+                    scope: format!("项目 · {}", project.name),
+                }));
+            }
+        }
+    }
+    (files, warnings)
+}
 #[derive(Clone, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct Source {
@@ -67,6 +95,7 @@ pub struct ScanResult {
 pub fn scan(files: &[ScanFile], managed: &[Server], studio_dir: &Path) -> ScanResult {
     let mut result = ScanResult::default();
     let mut seen = std::collections::HashSet::new();
+    let mut grok_disabled = std::collections::HashSet::new();
     for file in files {
         if !seen.insert((file.agent.clone(), file.path.clone(), file.scope.clone())) {
             continue;
@@ -81,39 +110,29 @@ pub fn scan(files: &[ScanFile], managed: &[Server], studio_dir: &Path) -> ScanRe
                 continue;
             }
         };
-        let doc: Value = if file.agent == "codex" {
-            match toml_edit::de::from_str(&text) {
-                Ok(doc) => doc,
-                Err(_) => {
-                    result
-                        .warnings
-                        .push(format!("{} 的 TOML 格式无效", file.path.display()));
-                    continue;
-                }
-            }
-        } else {
-            match serde_json::from_str(&text) {
-                Ok(doc) => doc,
-                Err(_) => {
-                    result
-                        .warnings
-                        .push(format!("{} 的 JSON 格式无效", file.path.display()));
-                    continue;
-                }
+        let doc = match crate::native::document(&text, &file.agent) {
+            Ok(doc) => doc,
+            Err(e) => {
+                result
+                    .warnings
+                    .push(format!("{}：{e}", file.path.display()));
+                continue;
             }
         };
-        if !doc.is_object() {
-            result
+        match crate::native::entries(&doc, &file.agent) {
+            Ok(Some(entries)) => {
+                read_entries(&mut result, file, &json!(entries), managed, studio_dir)
+            }
+            Ok(None) => {}
+            Err(e) => result
                 .warnings
-                .push(format!("{} 的配置必须为对象", file.path.display()));
-            continue;
+                .push(format!("{}：{e}", file.path.display())),
         }
-        let table = if file.agent == "codex" {
-            "mcp_servers"
-        } else {
-            "mcpServers"
-        };
-        read_entries(&mut result, file, &doc[table], managed, studio_dir);
+        if file.agent == "grok" && file.scope == "用户全局" {
+            if let Some(names) = doc["disabled_mcp_servers"].as_array() {
+                grok_disabled.extend(names.iter().filter_map(Value::as_str).map(str::to_owned));
+            }
+        }
         // Claude stores local-scope definitions inside its user config, keyed by project path.
         if file.agent == "claude" {
             if let Some(projects) = doc.get("projects").and_then(Value::as_object) {
@@ -131,6 +150,16 @@ pub fn scan(files: &[ScanFile], managed: &[Server], studio_dir: &Path) -> ScanRe
                     );
                 }
             }
+        }
+    }
+    for discovered in &mut result.discovered {
+        for source in &mut discovered.sources {
+            if source.agent == "grok" && grok_disabled.contains(&source.key) {
+                source.enabled = false;
+            }
+        }
+        if let Some(server) = &mut discovered.server {
+            server.enabled = discovered.sources.iter().any(|s| s.enabled);
         }
     }
     result
@@ -168,13 +197,14 @@ fn read_entries(
         }
         let identity = json!([file.agent, file.path, file.scope, key]).to_string();
         let id = format!("discovered-{:x}", Sha256::digest(identity.as_bytes()));
-        let gateway = entry["args"]
+        let canonical = crate::native::canonical(entry, &file.agent);
+        let gateway = canonical["args"]
             .as_array()
             .is_some_and(|args| args.first().and_then(Value::as_str) == Some("--mcp-client"));
-        let own = if gateway && entry["args"][2].as_str().map(Path::new) == Some(studio_dir) {
+        let own = if gateway && canonical["args"][2].as_str().map(Path::new) == Some(studio_dir) {
             managed
                 .iter()
-                .find(|s| Some(s.id.as_str()) == entry["args"][1].as_str())
+                .find(|s| Some(s.id.as_str()) == canonical["args"][1].as_str())
         } else {
             None
         };
@@ -197,7 +227,7 @@ fn read_entries(
             path: file.path.clone(),
             scope: file.scope.clone(),
             key: key.clone(),
-            enabled: entry["enabled"].as_bool().unwrap_or(true),
+            enabled: crate::native::enabled(entry, &file.agent),
             gateway,
             project: file.scope.strip_prefix("项目本地 · ").map(str::to_owned),
             definition: entry.clone(),
@@ -244,7 +274,7 @@ fn read_entries(
 // Preserve unknown fields when comparing read-only entries. Do not turn a partial
 // parse into a definition that can be adopted with missing client behavior.
 fn comparison_key(value: &Value, file: &ScanFile) -> Value {
-    let mut result = value.clone();
+    let mut result = crate::native::canonical(value, &file.agent);
     if let Some(object) = result.as_object_mut() {
         object.remove("enabled");
         if file.agent == "codex" {
@@ -276,6 +306,7 @@ fn comparison_key(value: &Value, file: &ScanFile) -> Value {
 }
 
 pub fn normalize(name: &str, id: &str, value: &Value, agent: &str) -> Result<Server> {
+    let value = crate::native::canonical(value, agent);
     let input = value.as_object().context("服务配置必须为对象")?;
     if input.get("type").is_some_and(|value| !value.is_string()) {
         bail!("传输类型必须为字符串");
@@ -296,11 +327,7 @@ pub fn normalize(name: &str, id: &str, value: &Value, agent: &str) -> Result<Ser
         bail!("连接类型与地址或命令冲突");
     }
     let allowed = if http {
-        if agent == "codex" {
-            vec!["type", "url", "http_headers", "enabled"]
-        } else {
-            vec!["type", "url", "headers", "enabled"]
-        }
+        vec!["type", "url", "headers", "enabled"]
     } else {
         vec!["type", "command", "args", "env", "cwd", "enabled"]
     };
@@ -315,7 +342,7 @@ pub fn normalize(name: &str, id: &str, value: &Value, agent: &str) -> Result<Ser
             unknown.join("、")
         );
     }
-    if contains_expansion(value) {
+    if contains_expansion(&value) {
         bail!("配置包含变量引用，暂不自动托管；仍由原 Agent 解析");
     }
     let mut normalized = value.clone();
@@ -344,7 +371,7 @@ pub fn normalize(name: &str, id: &str, value: &Value, agent: &str) -> Result<Ser
 }
 fn contains_expansion(value: &Value) -> bool {
     match value {
-        Value::String(s) => s.contains("${"),
+        Value::String(s) => s.contains("${") || s.contains("{env:") || s.contains("{file:"),
         Value::Array(a) => a.iter().any(contains_expansion),
         Value::Object(o) => o.values().any(contains_expansion),
         _ => false,

@@ -22,10 +22,7 @@ pub struct ActiveGroup {
     pub bindings: Vec<Binding>,
 }
 fn agent(agent: &str) -> Result<()> {
-    if !matches!(agent, "claude" | "codex") {
-        bail!("此 Agent 暂不支持 MCP 分组");
-    }
-    Ok(())
+    crate::agents::validate(agent)
 }
 pub fn save_group(dir: &Path, mut group: Group, imports: Vec<Entry>) -> Result<()> {
     agent(&group.agent)?;
@@ -226,9 +223,10 @@ pub fn activate(
             Some(c) => c.after.clone().unwrap_or_default(),
             None => read_text(path)?.unwrap_or_default(),
         };
+        native::check_activation(&text, agent_id, &key)?;
         let original = native::entry(&text, agent_id, None, &key)?;
         if let Some(value) = &original {
-            if value["enabled"].as_bool() == Some(false) {
+            if !native::enabled(value, agent_id) {
                 bail!("MCP「{key}」已被手动停用，请先恢复启用");
             }
             // Match Skill groups: existing usable content remains externally owned.
@@ -253,11 +251,10 @@ pub fn activate(
         }
         let mut installed = if entry.mode == "gateway" {
             gateway_server(entry)?;
-            let mut value = json!({"command":executable,"args":["--mcp-client",entry.id,dir]});
-            if agent_id == "claude" {
-                value["type"] = json!("stdio");
-            }
-            value
+            native::for_agent(
+                &json!({"type":"stdio","command":executable,"args":["--mcp-client",entry.id,dir]}),
+                agent_id,
+            )?
         } else {
             native::for_agent(&entry.definition, agent_id)?
         };

@@ -115,6 +115,23 @@ fn render(
             entries.insert(&key, Item::Table(entry));
         }
         Ok(doc.to_string())
+    } else if matches!(agent, "opencode" | "pi" | "grok") {
+        let existing = crate::native::entry(old, agent, None, &key)?;
+        let desired = crate::native::for_agent(
+            &json!({"type":"stdio","command":command,"args":args}),
+            agent,
+        )?;
+        if existing.as_ref().is_some_and(|v| v != &desired) {
+            bail!("同名 MCP 已存在或被修改，已保留：{key}");
+        }
+        crate::native::patch(
+            old,
+            agent,
+            None,
+            &key,
+            &existing,
+            &if remove { None } else { Some(desired) },
+        )
     } else {
         bail!("不支持的 Agent")
     }

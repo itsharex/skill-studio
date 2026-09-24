@@ -1,7 +1,7 @@
 use crate::AppState;
 use serde_json::{json, Value};
 use skill_studio_mcp::{
-    config,
+    agents as mcp_agents, config,
     discovery::{self, ScanFile},
     gateway, management, native, registry,
 };
@@ -368,39 +368,23 @@ pub async fn mcp_request(
     if method == "apply" {
         let agent = params["agent"].as_str().ok_or("缺少 Agent")?;
         let config = state.config();
-        let path = if let Some(id) = params["projectId"].as_str().filter(|s| !s.is_empty()) {
-            let project = config
-                .projects
-                .iter()
-                .find(|p| p.id == id)
-                .ok_or("项目不存在")?;
-            match agent {
-                "claude" => project.root.join(".mcp.json"),
-                "codex" => project.root.join(".codex/config.toml"),
-                _ => return Err("不支持的 Agent".into()),
-            }
-        } else {
-            match agent {
-                "claude" => {
-                    if config
-                        .settings
-                        .agent_dir_overrides
-                        .contains_key("claude-code")
-                        || std::env::var_os("CLAUDE_CONFIG_DIR").is_some()
-                    {
-                        return Err("自定义 Claude 配置目录暂不自动写入，请选择项目作用域".into());
-                    }
-                    skill_studio_core::fs::paths::home_dir().join(".claude.json")
-                }
-                "codex" => skill_studio_core::models::agent::AGENTS
+        let project = params["projectId"]
+            .as_str()
+            .filter(|s| !s.is_empty())
+            .map(|id| {
+                config
+                    .projects
                     .iter()
-                    .find(|a| a.id == "codex")
-                    .unwrap()
-                    .resolved_config_dir(&config.settings.agent_dir_overrides)
-                    .join("config.toml"),
-                _ => return Err("不支持的 Agent".into()),
-            }
-        };
+                    .find(|p| p.id == id)
+                    .ok_or("项目不存在")
+            })
+            .transpose()?;
+        let path = mcp_agents::write_path(
+            agent,
+            &config.settings.agent_dir_overrides,
+            project.map(|p| p.root.as_path()),
+        )
+        .map_err(|e| e.to_string())?;
         params["path"] = json!(path);
     }
     let result = gateway::request(&dir, &method, params)
@@ -423,41 +407,7 @@ pub async fn mcp_request(
 }
 
 fn scan_files(state: &AppState) -> (Vec<ScanFile>, Vec<String>) {
-    let config = state.config();
-    let overrides = &config.settings.agent_dir_overrides;
-    let mut files = Vec::new();
-    let mut warnings = Vec::new();
-    if overrides.contains_key("claude-code") || std::env::var_os("CLAUDE_CONFIG_DIR").is_some() {
-        warnings.push("检测到自定义 Claude 配置目录，暂不扫描其全局 MCP；项目配置仍会扫描".into());
-    } else {
-        files.push(ScanFile {
-            agent: "claude".into(),
-            path: skill_studio_core::fs::paths::home_dir().join(".claude.json"),
-            scope: "用户全局".into(),
-        });
-    }
-    let codex = skill_studio_core::models::agent::AGENTS
-        .iter()
-        .find(|a| a.id == "codex")
-        .unwrap();
-    files.push(ScanFile {
-        agent: "codex".into(),
-        path: codex.resolved_config_dir(overrides).join("config.toml"),
-        scope: "用户全局".into(),
-    });
-    for project in &config.projects {
-        files.push(ScanFile {
-            agent: "claude".into(),
-            path: project.root.join(".mcp.json"),
-            scope: format!("项目 · {}", project.name),
-        });
-        files.push(ScanFile {
-            agent: "codex".into(),
-            path: project.root.join(".codex/config.toml"),
-            scope: format!("项目 · {}", project.name),
-        });
-    }
-    (files, warnings)
+    discovery::scan_files(&state.config())
 }
 
 fn resolve_targets(
@@ -533,48 +483,23 @@ fn resolve_targets(
                     .iter()
                     .find(|p| p.id == id)
                     .context("项目不存在")?;
-                match agent {
-                    "claude" if scope == "local" => {
-                        if config
-                            .settings
-                            .agent_dir_overrides
-                            .contains_key("claude-code")
-                            || std::env::var_os("CLAUDE_CONFIG_DIR").is_some()
-                        {
-                            bail!("自定义 Claude 配置目录暂不支持项目本地接入，请选择项目配置");
-                        }
-                        target_project = Some(project.root.to_string_lossy().to_string());
-                        skill_studio_core::fs::paths::home_dir().join(".claude.json")
+                if scope == "local" {
+                    if agent != "claude" {
+                        bail!("项目本地作用域仅支持 Claude Code，请选择全局或项目配置");
                     }
-                    "claude" => project.root.join(".mcp.json"),
-                    "codex" if scope == "local" => {
-                        bail!("项目本地作用域仅支持 Claude Code，请选择全局或项目配置")
-                    }
-                    "codex" => project.root.join(".codex/config.toml"),
-                    _ => bail!("不支持的 Agent"),
+                    target_project = Some(project.root.to_string_lossy().to_string());
+                    mcp_agents::write_path(agent, &config.settings.agent_dir_overrides, None)?
+                } else {
+                    mcp_agents::write_path(
+                        agent,
+                        &config.settings.agent_dir_overrides,
+                        Some(&project.root),
+                    )?
                 }
             } else {
-                match agent {
-                    "claude" => {
-                        if config
-                            .settings
-                            .agent_dir_overrides
-                            .contains_key("claude-code")
-                            || std::env::var_os("CLAUDE_CONFIG_DIR").is_some()
-                        {
-                            bail!("自定义 Claude 目录请先选择项目作用域");
-                        }
-                        skill_studio_core::fs::paths::home_dir().join(".claude.json")
-                    }
-                    "codex" => skill_studio_core::models::agent::AGENTS
-                        .iter()
-                        .find(|a| a.id == "codex")
-                        .unwrap()
-                        .resolved_config_dir(&config.settings.agent_dir_overrides)
-                        .join("config.toml"),
-                    _ => bail!("不支持的 Agent"),
-                }
+                mcp_agents::write_path(agent, &config.settings.agent_dir_overrides, None)?
             };
+
             if !targets
                 .iter()
                 .any(|t| t.agent == agent && t.path == path && t.project == target_project)
@@ -587,6 +512,17 @@ fn resolve_targets(
                     expected: None,
                 });
             }
+        }
+    }
+    if targets.iter().any(|target| target.agent == "grok") {
+        let path = mcp_agents::write_path("grok", &config.settings.agent_dir_overrides, None)?;
+        let text = match std::fs::read_to_string(&path) {
+            Ok(text) => text,
+            Err(e) if e.kind() == std::io::ErrorKind::NotFound => String::new(),
+            Err(e) => return Err(e).context("无法检查 Grok 全局停用状态"),
+        };
+        for target in targets.iter().filter(|target| target.agent == "grok") {
+            native::check_activation(&text, "grok", &target.key)?;
         }
     }
     Ok(targets)
