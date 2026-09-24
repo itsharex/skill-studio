@@ -1,3 +1,4 @@
+import { cn } from "@/lib/utils";
 import { queryKeys, NAVIGATION_STALE_TIME } from "@/lib/queryKeys";
 import { useState } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
@@ -21,7 +22,13 @@ interface Backup {
   originalPath: string;
   deletedAt: number;
 }
-export function SkillBackups({ scope }: { scope: string }) {
+export function SkillBackups({
+  scope,
+  className,
+}: {
+  scope: string;
+  className?: string;
+}) {
   const [open, setOpen] = useState(false);
   const [purging, setPurging] = useState<Backup | null>(null);
   const qc = useQueryClient();
@@ -50,7 +57,10 @@ export function SkillBackups({ scope }: { scope: string }) {
   return (
     <>
       <button
-        className="rounded-full border border-border-default px-3 py-1 text-sm font-medium hover:bg-muted"
+        className={cn(
+          "rounded-full border border-border-default px-3 py-1 text-sm font-medium hover:bg-muted",
+          className,
+        )}
         onClick={() => setOpen(true)}
       >
         已备份 {backups.length} 个 skill

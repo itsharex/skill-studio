@@ -1,15 +1,15 @@
 # MCP Hub
 
-MCP Hub 自动发现并管理 Claude Code／Codex 的 MCP 配置。配置管理与后台网关独立：网关关闭时仍可扫描、编辑、保存和同步直连配置。
+MCP Hub 自动发现并管理 Claude Code、Codex、OpenCode v2、Pi（需 pi-mcp-adapter）和 Grok Build 的 MCP 配置。配置管理与后台网关独立：网关关闭时仍可扫描、编辑、保存和同步直连配置。
 
 ## 添加与接入
 
 点击右上角 **添加 MCP**，打开统一安装页：
 
-1. 粘贴 `codex mcp add …`、`claude mcp add …`、HTTP 网址、JSON 或 TOML，自动识别名称、地址／命令和目标 Agent。包含多个服务时选择本次要安装的一项。
-2. 勾选需要使用它的 Agent。直连为默认；选择 **Studio 代理** 时可勾选“此服务需要网页登录”。包含 `?login` 的地址会预选该项，用户仍可调整。
-3. 点击 **安装**；代理模式显示 **安装并开启代理** 或 **安装并登录**，依次完成保存、启动和连接检查／打开登录页面。不选择 Agent 时仅 **添加到 Hub**，不启动代理。
-4. 在 Agent 中重新加载 MCP。直连的登录由 Agent 引导；代理的登录由 Studio 管理，授权页面打开不等于登录已经完成。
+1. 粘贴 `codex mcp add …`、`claude mcp add …`、HTTP 网址、JSON／JSONC 或 TOML，识别名称、地址或命令；也可直接填写连接字段。OpenCode 配置只接受 v2 的 `mcp.servers` 格式。
+2. 保存到 Hub，选择 **Agent 直连** 或 **Studio 代理**。服务需要登录时，在连接详情中进行授权。
+3. 在对应 Agent 的 MCP 页面添加全局接入、启用 MCP 分组，或在项目页选择 Agent 添加项目接入。
+4. 在 Agent 中重新加载 MCP。直连的登录由 Agent 引导；代理需要启动 Studio 网关，并由 Studio 管理授权。保存配置不等于已完成连接或登录。
 
 例如可以直接粘贴：
 
@@ -17,26 +17,32 @@ MCP Hub 自动发现并管理 Claude Code／Codex 的 MCP 配置。配置管理�
 codex mcp add hf-mcp-server --url "https://huggingface.co/mcp?login"
 ```
 
-这会自动填好名称、HTTP 地址并选中 Codex；切换到 Studio 代理后可以直接点击“安装并登录”。Markdown 格式的 HTTP 链接也可识别。
+这会自动填好名称与 HTTP 地址。安装命令只作为配置数据解析，不交给 Shell 执行；推断出的 Agent／作用域不会自动创建接入。多个服务可选择其中一项。完整 JSON 与工作目录收在折叠区，并保留客户端扩展字段。
 
-安装命令只作为配置数据解析，不交给 Shell 执行。支持常用连接、请求头与环境变量选项；不支持的选项、管道或命令替换会明确报错，不静默忽略。Claude 命令的 local／project 作用域会要求选择已登记项目；local 写入用户配置的项目条目，project 写入项目配置文件，不会悄悄改为全局。
+### 配置位置
 
-安装命令、网址、JSON 和 TOML 共用顶部粘贴入口，识别结果直接填入当前页面的配置字段。也可不粘贴，直接填写名称、服务类型、地址或启动命令、参数、请求头和环境变量。完整 JSON 与工作目录收在页内折叠区，保留扩展字段；代理的 Client ID／Scopes 在可选授权设置中填写。不再提供独立高级页面、重复粘贴入口或常用模板。已有条目的“保存并应用”只保存配置，安装按钮按文字执行代理启动和授权。
+| Agent               | 全局配置                              | 项目配置                                         |
+| ------------------- | ------------------------------------- | ------------------------------------------------ |
+| Claude Code         | `~/.claude.json`                      | `.mcp.json`，或全局文件中的项目本地条目          |
+| Codex               | `~/.codex/config.toml`                | `.codex/config.toml`                             |
+| OpenCode v2         | `~/.config/opencode/opencode.json(c)` | `opencode.json(c)`、`.opencode/opencode.json(c)` |
+| Pi + pi-mcp-adapter | `~/.pi/agent/mcp.json`                | `.pi/mcp.json`                                   |
+| Grok Build          | `~/.grok/config.toml`                 | `.grok/config.toml`                              |
 
-代理启动、连接检查或登录失败时，已安装的配置会保留，返回该条目详情重试；不会再次创建相同条目。
+沿用设置中的 Agent 目录覆盖和 Agent 环境变量。OpenCode 同时扫描 `OPENCODE_CONFIG_DIR`、`OPENCODE_CONFIG`；写入优先选择已有配置，避免新建同级竞争文件。仅支持 OpenCode v2，v1 配置需先迁移。修改 JSONC 时保留其他属性与注释。
 
-模板预填 Context7、Memory 或 Fetch 的启动配置，不安装 Node／Python 等运行环境。服务首次使用时由 npx／uvx 解析并启动软件包。GUI 的 PATH 可能与终端不同；找不到命令时可填写其绝对路径。
+Pi 通过第三方 [pi-mcp-adapter](https://github.com/nicobailon/pi-mcp-adapter) 接入，需先运行 `pi install npm:pi-mcp-adapter` 并重启 Pi。Studio 只管理上述 Pi 专属文件，不会安装扩展、不改写 Pi 的包设置或其他 Agent 的共享配置；未安装扩展时，保存的 MCP 配置不会在 Pi 中生效。适配器的共享输入、导入与插件设置仍由适配器管理。
 
-| 连接方式 | 运行与登录 | 网关关闭时 |
-| --- | --- | --- |
-| Agent 直连 | Agent 直接启动或连接 MCP，各自管理登录 | 可继续使用 |
+| 连接方式    | 运行与登录                                          | 网关关闭时           |
+| ----------- | --------------------------------------------------- | -------------------- |
+| Agent 直连  | Agent 直接启动或连接 MCP，各自管理登录              | 可继续使用           |
 | Studio 网关 | Studio 连接上游并管理共享 OAuth，Agent 连接本机网关 | 暂时无法使用这些工具 |
 
-列表右侧按钮直接启停网关；快捷安装中的 **安装并开启代理**／**安装并登录**，以及详情中的 **启动并测试**／**启动并授权**会按按钮文字执行。普通保存和移出管理不会自动打开浏览器。
+列表右侧按钮启停网关，详情中可测试连接或登录授权。普通保存和移出管理不会自动打开浏览器。
 
 ## Agent MCP 分组
 
-在 Claude Code／Codex 页面切换到 **MCP 分组**，操作与 Skill 分组一致：新建组合、从 MCP Hub 勾选服务、保存后点击 **启用**。每个 Agent 同时启用一个 MCP 分组，Skill 分组独立保留。支持搜索、编辑和拖动排序；使用中的组需要先停用才能删除。
+在 Claude Code、Codex、OpenCode v2、Pi（需 pi-mcp-adapter）和 Grok Build 页面切换到 **MCP 分组**，操作与 Skill 分组一致：新建组合、从 MCP Hub 勾选服务、保存后点击 **启用**。每个 Agent 同时启用一个 MCP 分组，Skill 分组独立保留。支持搜索、编辑和拖动排序；使用中的组需要先停用才能删除。
 
 同一个 MCP 可被多个组引用。保存组不会立即写入 Agent 配置；使用中的成员配置或成员列表改变后显示 **有待应用修改**，点击 **应用修改** 更新。缺失成员会保留提示，需要移除或补齐后才能启用。
 
@@ -46,7 +52,7 @@ codex mcp add hf-mcp-server --url "https://huggingface.co/mcp?login"
 
 ## 已有 MCP 与迁移
 
-打开页面自动读取 Claude Code 的 `~/.claude.json`（包括其中项目本地作用域的 MCP）、Codex 的 `config.toml`，以及 Studio 已登记项目的 `.mcp.json`／`.codex/config.toml`。Codex 沿用 Studio 的目录覆盖、`CODEX_HOME`、默认目录优先级。页面每 4 秒刷新一次。
+打开页面读取上述全局文件和 Studio 已登记项目的原生配置，Claude 还读取项目本地作用域。页面每 30 秒刷新，切换 Agent 复用缓存。Grok 的全局停用列表会反映在来源状态中，分组不会擅自解除原生停用设置。
 
 相同连接合并显示来源，同名但配置不同的保留独立记录。来源图标表示配置存在，不表示连接测试成功。扫描不启动程序、不修改原文件，也不导入 Agent 的登录缓存。
 
@@ -76,10 +82,20 @@ Gateway 模式的 Agent 配置仅包含 Studio 启动命令和服务标识，不
 
 ## 当前范围
 
-- 本机 Claude Code／Codex；不包含插件在运行时注入的 MCP，也不遍历未登记的项目目录。
+### 远程服务器只读展示
+
+切换到 Linux 服务器后，MCP Hub 展示该服务器上五个 Agent 的已有 MCP 卡片，名称后标注所属 Agent。扫描全局配置、已登记项目配置及 Claude 用户配置中的项目本地条目，遵循 Agent 目录覆盖与展示偏好。相同连接合并来源；仅名称相同但连接不同的配置保留为不同卡片。已停用但仍在配置中的 MCP 也会显示，展示不代表连接可用。
+
+远程卡片无点击、托管、编辑、删除、启停、登录或测试连接操作。远程 MCP 模式保留原有 Agent、项目导航及右上角「+」按钮，暂不支持的入口置灰并提供说明，切换 Hub 时布局保持一致。搜索与顶部重新扫描可用。切回 Skill Hub 后 Agent、项目和新增入口恢复可用；本机 MCP 的管理方式不变。
+
+远程接口只返回名称与 Agent 归属，不回传原始定义、URL、命令参数、环境变量或请求头，不读取授权缓存，不启动 MCP 或恢复配置事务。读取失败会保留其他可读来源并显示提示。升级应用后重连服务器会按现有部署流程加载新辅助程序；自定义旧版组件需一并更新。
+
+### 本机管理
+
+- 本机 Claude Code、Codex、OpenCode v2、Pi（需 pi-mcp-adapter）和 Grok Build；不包含插件在运行时注入的 MCP，也不遍历未登记的项目目录。
 - 自定义 Claude 配置目录暂不扫描或写入其全局 MCP，界面会提示；可使用项目作用域。
 - 直连可保留扩展字段和相对工作目录。分发到其他位置后，相对路径的含义由目标 Agent 的工作目录决定。
-- SSE 可以作为 Claude 直连配置管理；Codex 原生接入及 Studio 网关不支持 SSE。
+- SSE 可以作为 Claude 直连配置管理；Codex、OpenCode v2、Pi、Grok 的本次 Studio 接入及 Studio 网关仅支持 stdio 和 Streamable HTTP。
 - 网关不支持客户端专有扩展字段、变量引用、相对工作目录、OAuth confidential client／client secret、资源订阅、动态列表通知、sampling、elicitation、tasks。选择网关时会提示已知不兼容的配置。
 - 连接测试确认 Studio 能访问上游，不代表 Agent 已重载配置。真实服务商 OAuth 仍需逐个验证；自动测试使用本机模拟服务。
 
@@ -93,3 +109,5 @@ cargo clippy -p skill-studio-mcp -p skill-studio --all-targets -- -D warnings
 ```
 
 协议与认证采用 [官方 Rust SDK](https://github.com/modelcontextprotocol/rust-sdk)。配置格式参考 [Claude Code MCP](https://code.claude.com/docs/en/mcp) 和 [Codex MCP](https://developers.openai.com/codex/mcp)。新增流程参考 [CC Switch 的 MCP 表单](https://github.com/farion1231/cc-switch/blob/06082e189d65e6d6dbadc35dacdac1ce6c79d89a/src/components/mcp/McpFormModal.tsx)。
+
+新增 Agent 格式依据：[OpenCode v2 MCP](https://opencode.ai/v2/docs/mcp-servers)、[Pi 适配器](https://github.com/nicobailon/pi-mcp-adapter)、[Grok Build MCP](https://github.com/xai-org/grok-build/blob/main/crates/codegen/xai-grok-pager/docs/user-guide/07-mcp-servers.md)。

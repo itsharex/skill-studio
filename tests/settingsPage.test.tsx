@@ -1,4 +1,4 @@
-import { fireEvent, screen, waitFor } from "@testing-library/react";
+import { act, fireEvent, screen, waitFor } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { it, expect } from "vitest";
 import { SettingsPage } from "@/pages/SettingsPage";
@@ -80,11 +80,12 @@ it("persists application toggles and allows all applications to be hidden and re
   expect(claude).toHaveAttribute("aria-pressed", "true");
   await user.click(claude);
   await waitFor(() => expect(claude).toHaveAttribute("aria-pressed", "false"));
+  await waitFor(() => expect(codex).toHaveAttribute("aria-disabled", "false"));
   await user.click(codex);
   await waitFor(() =>
     expect(settings.disabledAgents).toEqual(["claude-code", "codex"]),
   );
-  await waitFor(() => expect(codex).toBeEnabled());
+  await waitFor(() => expect(codex).toHaveAttribute("aria-disabled", "false"));
   await user.click(codex);
   await waitFor(() => expect(settings.disabledAgents).toEqual(["claude-code"]));
 });
@@ -133,4 +134,33 @@ it("switches MCP management independently and hides MCP-only preferences while o
   expect(
     screen.getByRole("switch", { name: "显示 Codex App 内置 MCP" }),
   ).toBeInTheDocument();
+});
+
+it("keeps Agent buttons and focus stable while saving and rolls back failed changes", async () => {
+  handlers.set("list_agents", () => [claudeAgent, codexAgent]);
+  let rejectSave: (error: Error) => void = () => {};
+  handlers.set(
+    "update_settings",
+    () =>
+      new Promise((_, reject) => {
+        rejectSave = reject;
+      }),
+  );
+  renderWithProviders(<SettingsPage />);
+  const button = await screen.findByRole("button", { name: "Codex" });
+  button.focus();
+  fireEvent.click(button);
+  await waitFor(() => expect(button).toHaveAttribute("aria-pressed", "false"));
+  expect(screen.getByRole("button", { name: "Codex" })).toBe(button);
+  expect(button).toHaveFocus();
+  expect(button).not.toBeDisabled();
+  expect(button).toHaveAttribute("aria-disabled", "true");
+  expect(
+    screen.getByRole("switch", { name: "是否保留手动安装的 skill" }),
+  ).toBeEnabled();
+  await act(async () => rejectSave(new Error("disk full")));
+  await waitFor(() => expect(button).toHaveAttribute("aria-pressed", "true"));
+  expect(button).toHaveFocus();
+  expect(calls.filter((c) => c.command === "list_agents")).toHaveLength(1);
+  expect(calls.filter((c) => c.command === "get_config_dir")).toHaveLength(1);
 });

@@ -1,3 +1,9 @@
+import {
+  SummaryBar,
+  SummaryStart,
+  SummaryEnd,
+  summaryPillClass,
+} from "@/components/common/SummaryBar";
 import { agentSourceColor } from "@/lib/agents";
 import { useSkillPreview } from "@/components/common/SkillPreview";
 import {
@@ -9,7 +15,7 @@ import { InstallSkillsPage } from "@/pages/InstallSkillsPage";
 import { useMutation, useQueryClient } from "@tanstack/react-query";
 import { toast } from "sonner";
 import { PageTools } from "@/components/common/PageTools";
-import { useMemo, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import {
   FolderOpen,
   PackagePlus,
@@ -22,6 +28,7 @@ import {
 import { AgentIcon } from "@/components/common/AgentIcon";
 import {
   hubCatalog,
+  isSkillVisible,
   hubSourceIds,
   sourceAgentIds,
   type HubCard,
@@ -47,7 +54,12 @@ import {
   ListItemRow,
   RowActions,
 } from "@/components/common/ListItemRow";
-import { useAdoptToHub, useAgents, useSkills } from "@/hooks/useData";
+import {
+  useAdoptToHub,
+  useAgents,
+  useSkills,
+  useSettings,
+} from "@/hooks/useData";
 import { skillsApi, systemApi } from "@/lib/api";
 import type { SkillView } from "@/types";
 import { formatTokens, sumTokens, tokenIndex, tokenTitle } from "@/lib/tokens";
@@ -55,10 +67,22 @@ import { formatTokens, sumTokens, tokenIndex, tokenTitle } from "@/lib/tokens";
 export function LibraryPage({ onAdd }: { onAdd?: () => void } = {}) {
   const { data: skills = [], isLoading } = useSkills();
   const { data: agents = [] } = useAgents();
+  const { data: settings } = useSettings();
+  const visibleAgents = agents.filter(
+    (a) => !settings?.disabledAgents?.includes(a.id),
+  );
   const client = useQueryClient();
   const { previewSkill, previewDialog } = useSkillPreview();
   const [releaseTarget, setReleaseTarget] = useState<SkillView | null>(null);
   const [sourceFilter, setSourceFilter] = useState<string | null>(null);
+  const activeSourceFilter =
+    sourceFilter && !settings?.disabledAgents?.includes(sourceFilter)
+      ? sourceFilter
+      : null;
+  useEffect(() => {
+    if (sourceFilter && settings?.disabledAgents?.includes(sourceFilter))
+      setSourceFilter(null);
+  }, [sourceFilter, settings?.disabledAgents]);
   const [hubOnly, setHubOnly] = useState(false);
   const [adding, setAdding] = useState(false);
   const [query, setQuery] = useState("");
@@ -89,7 +113,15 @@ export function LibraryPage({ onAdd }: { onAdd?: () => void } = {}) {
     // 认不出已托管内容的原始来源），所以只清来源筛选。失败了就别动用户的筛选
     adopt.mutate(skillId, { onSuccess: () => setSourceFilter(null) });
 
-  const catalog = useMemo(() => hubCatalog(skills), [skills]);
+  const catalog = useMemo(
+    () =>
+      hubCatalog(
+        skills.filter((skill) =>
+          isSkillVisible(skill, settings?.disabledAgents),
+        ),
+      ),
+    [skills, settings?.disabledAgents],
+  );
   const selectedSourceCard = sourceCard
     ? (catalog.find((c) => c.key === sourceCard.key) ?? null)
     : null;
@@ -115,14 +147,15 @@ export function LibraryPage({ onAdd }: { onAdd?: () => void } = {}) {
   const counted = hubOnly ? hubManaged : available;
   const filtered = counted.filter(
     (c) =>
-      matches(c) && (!sourceFilter || hubSourceIds(c).includes(sourceFilter)),
+      matches(c) &&
+      (!activeSourceFilter || hubSourceIds(c).includes(activeSourceFilter)),
   );
   const invalid = catalog.filter(
     (c) => c.unavailable && matches(c) && (!hubOnly || isHubManaged(c)),
   );
 
   const sourceOptions = [
-    ...agents.map((a) => ({
+    ...visibleAgents.map((a) => ({
       id: a.id,
       label: a.displayName,
       color: agentSourceColor(a.id),
@@ -142,7 +175,10 @@ export function LibraryPage({ onAdd }: { onAdd?: () => void } = {}) {
     ["unknown", "来源待确认"],
     ["external", "外部来源"],
   ]) {
-    if (catalog.some((c) => hubSourceIds(c).includes(id)))
+    if (
+      activeSourceFilter === id ||
+      counted.some((c) => hubSourceIds(c).includes(id))
+    )
       sourceOptions.push({
         id,
         label,
@@ -150,12 +186,8 @@ export function LibraryPage({ onAdd }: { onAdd?: () => void } = {}) {
       });
   }
   const summary = (
-    <div className="my-4 flex shrink-0 flex-col gap-3 rounded-xl border border-border-default px-5 py-4">
-      <div
-        role="group"
-        aria-label="按来源筛选"
-        className="flex flex-wrap items-center gap-2"
-      >
+    <SummaryBar>
+      <SummaryStart role="group" aria-label="按来源筛选">
         {sourceOptions.map(({ id, label, color }) => {
           const count = counted.filter((c) =>
             hubSourceIds(c).includes(id),
@@ -164,14 +196,14 @@ export function LibraryPage({ onAdd }: { onAdd?: () => void } = {}) {
             <button
               key={id}
               type="button"
-              aria-pressed={sourceFilter === id}
+              aria-pressed={activeSourceFilter === id}
               onClick={() => setSourceFilter(sourceFilter === id ? null : id)}
               title={
                 id === "agent"
                   ? "共享 Agent 目录（~/.agents/skills）"
                   : `筛选 ${label} 来源`
               }
-              className={`inline-flex shrink-0 items-center gap-1.5 whitespace-nowrap rounded-full px-2.5 py-1 text-xs font-medium transition-colors hover:brightness-95 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring ${color} ${sourceFilter === id ? "ring-2 ring-current" : ""}`}
+              className={`${summaryPillClass} border-transparent transition-colors hover:brightness-95 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring ${color} ${activeSourceFilter === id ? "ring-2 ring-current" : ""}`}
             >
               {id === "studio" ? (
                 <SkillStudioIcon className="h-4 w-4" />
@@ -180,14 +212,14 @@ export function LibraryPage({ onAdd }: { onAdd?: () => void } = {}) {
               ) : id === "unknown" || id === "external" ? (
                 <CircleHelp className="h-4 w-4" />
               ) : (
-                <AgentIcon agentId={id} className="h-4 w-4" />
+                <AgentIcon agentId={id} size="sm" />
               )}
-              {label}: {count}
+              {`${label}:`} {count}
             </button>
           );
         })}
-      </div>
-      <div className="flex flex-wrap items-center gap-2 border-t border-border-default pt-3">
+      </SummaryStart>
+      <SummaryEnd>
         {/*
           这两枚是筛选器（有 aria-pressed），所以保留 button；但边框必须走主题
           token —— 裸 `border` 会吃到 preflight 推出的 #e4e4e7，深色下是一枚
@@ -195,13 +227,13 @@ export function LibraryPage({ onAdd }: { onAdd?: () => void } = {}) {
         */}
         <button
           type="button"
-          aria-pressed={!sourceFilter && !hubOnly}
+          aria-pressed={!activeSourceFilter && !hubOnly}
           onClick={() => {
             setSourceFilter(null);
             setHubOnly(false);
           }}
           title={`清除来源与「已托管」筛选，显示全部 ${available.length} 个已安装 skill`}
-          className="rounded-full border border-border-default px-3 py-1 text-sm font-medium transition-colors hover:bg-muted focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
+          className={`${summaryPillClass} border-border-default transition-colors hover:bg-muted focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring`}
         >
           已安装 {available.length} 个
         </button>
@@ -210,22 +242,25 @@ export function LibraryPage({ onAdd }: { onAdd?: () => void } = {}) {
           aria-pressed={hubOnly}
           onClick={() => setHubOnly((v) => !v)}
           title={`真身已搬进 Hub 目录集中托管的 skill，共 ${hubManaged.length} 个（其余仍在各 agent 原处）。点击只看这些。`}
-          className={`rounded-full border border-border-default px-3 py-1 text-sm font-medium transition-colors hover:bg-muted focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring ${
+          className={`${summaryPillClass} border-border-default transition-colors hover:bg-muted focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring ${
             hubOnly ? "bg-muted text-foreground ring-2 ring-current" : ""
           }`}
         >
           已托管 {hubManaged.length} 个
         </button>
-        <SkillBackups scope="hub" />
+        <SkillBackups scope="hub" className={summaryPillClass} />
         <Badge
           variant="outline"
-          className="px-3 py-1 text-sm font-medium"
-          title={tokenTitle(totalTokens, "全部已安装 skill（多来源去重）")}
+          className={summaryPillClass}
+          title={tokenTitle(
+            totalTokens,
+            "当前显示的已安装 skill（多来源去重）",
+          )}
         >
           合计 ≈ {formatTokens(totalTokens.total)} tokens
         </Badge>
-      </div>
-    </div>
+      </SummaryEnd>
+    </SummaryBar>
   );
 
   const tools = (
@@ -280,7 +315,9 @@ export function LibraryPage({ onAdd }: { onAdd?: () => void } = {}) {
         <ListContainer cards>
           {filtered.map((card) => {
             const skill = card.skill;
-            const origins = hubSourceIds(card);
+            const origins = hubSourceIds(card).filter(
+              (id) => !settings?.disabledAgents?.includes(id),
+            );
             const rowTokens = sumTokens(tokens, [skill.id]);
             return (
               <ListItemRow
@@ -298,8 +335,8 @@ export function LibraryPage({ onAdd }: { onAdd?: () => void } = {}) {
                       <span
                         key={id}
                         role="img"
-                        aria-label={`来源：${sourceOptions.find((o) => o.id === id)?.label ?? id}`}
-                        title={`${sourceOptions.find((o) => o.id === id)?.label ?? id}\n${card.sources
+                        aria-label={`来源：${sourceOptions.find((o) => o.id === id)?.label ?? agentName(agents, id)}`}
+                        title={`${sourceOptions.find((o) => o.id === id)?.label ?? agentName(agents, id)}\n${card.sources
                           .filter((s) =>
                             hubSourceIds({ ...card, sources: [s] }).includes(
                               id,
@@ -315,7 +352,7 @@ export function LibraryPage({ onAdd }: { onAdd?: () => void } = {}) {
                         ) : id === "unknown" || id === "external" ? (
                           <CircleHelp className="h-4 w-4 text-muted-foreground" />
                         ) : (
-                          <AgentIcon agentId={id} className="h-4 w-4" />
+                          <AgentIcon agentId={id} size="sm" />
                         )}
                       </span>
                     ))}
@@ -333,7 +370,7 @@ export function LibraryPage({ onAdd }: { onAdd?: () => void } = {}) {
                         托管中
                       </Badge>
                     )}
-                    {!origins.length && !isHubManaged(card) && (
+                    {!hubSourceIds(card).length && !isHubManaged(card) && (
                       <Badge variant="outline">外部来源</Badge>
                     )}
                     {card.sources.length > 1 && (
@@ -472,9 +509,11 @@ export function LibraryPage({ onAdd }: { onAdd?: () => void } = {}) {
         </ListContainer>
         {!filtered.length && (
           <p className="py-6 text-center text-sm text-muted-foreground">
-            {query || sourceFilter || hubOnly
+            {query || activeSourceFilter || hubOnly
               ? "没有匹配的可用 skill"
-              : "暂无可用 skill"}
+              : !catalog.length && skills.length
+                ? "当前 Agent 选择下没有可显示的 skill，可在设置中开启其他 Agent。"
+                : "暂无可用 skill"}
           </p>
         )}
         {invalid.length > 0 && (
@@ -496,16 +535,18 @@ export function LibraryPage({ onAdd }: { onAdd?: () => void } = {}) {
                       <span className="text-sm font-medium">
                         {card.skill.name}
                       </span>
-                      {sourceAgentIds(card.skill).map((id) => (
-                        <span
-                          key={id}
-                          role="img"
-                          aria-label={`来源：${agentName(agents, id)}`}
-                          title={agentName(agents, id)}
-                        >
-                          <AgentIcon agentId={id} className="h-4 w-4" />
-                        </span>
-                      ))}
+                      {sourceAgentIds(card.skill)
+                        .filter((id) => !settings?.disabledAgents?.includes(id))
+                        .map((id) => (
+                          <span
+                            key={id}
+                            role="img"
+                            aria-label={`来源：${agentName(agents, id)}`}
+                            title={agentName(agents, id)}
+                          >
+                            <AgentIcon agentId={id} size="sm" />
+                          </span>
+                        ))}
                     </div>
                     <p className="mt-1 text-xs text-amber-700 dark:text-amber-400">
                       {card.skill.diagnostics?.join("；")}
@@ -550,7 +591,7 @@ export function LibraryPage({ onAdd }: { onAdd?: () => void } = {}) {
                       key={id}
                       className="inline-flex items-center gap-1 text-xs"
                     >
-                      <AgentIcon agentId={id} className="h-4 w-4" />
+                      <AgentIcon agentId={id} size="sm" />
                       {agentName(agents, id)}
                     </span>
                   ))}

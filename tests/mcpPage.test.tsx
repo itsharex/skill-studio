@@ -212,10 +212,13 @@ it("saves OAuth gateway configuration without starting or logging in automatical
   expect(methods()).not.toContain("start");
   expect(methods()).not.toContain("login");
 });
-it("does not read local MCPs while viewing a remote machine", () => {
+it("reads only the remote inventory while viewing a remote machine", async () => {
   setTarget({ id: "remote", name: "远程", connected: true });
+  handlers.set("remote_request", ({ method }) =>
+    method === "scan_mcp" ? { servers: [], warnings: [] } : defaultSettings(),
+  );
   renderWithProviders(<McpPage />);
-  expect(screen.getByText(/MCP Hub 当前支持本机/)).toBeVisible();
+  expect(await screen.findByText("未发现远程 MCP 配置")).toBeVisible();
   expect(methods()).toEqual([]);
 });
 it("toggles the gateway directly from the list", async () => {

@@ -3,6 +3,12 @@ import { createPortal } from "react-dom";
 import { Plus, Search, X } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
+import {
+  Tooltip,
+  TooltipContent,
+  TooltipTrigger,
+} from "@/components/ui/tooltip";
+import { cn } from "@/lib/utils";
 
 export const PageToolsContext = createContext<{
   search: HTMLElement | null;
@@ -15,12 +21,14 @@ export function PageTools({
   placeholder,
   createLabel,
   onCreate,
+  createDisabledReason,
 }: {
   query: string;
   onQueryChange: (value: string) => void;
   placeholder: string;
-  createLabel: string;
-  onCreate: () => void;
+  createLabel?: string;
+  onCreate?: () => void;
+  createDisabledReason?: string;
 }) {
   const hosts = useContext(PageToolsContext);
   const search = (
@@ -45,16 +53,33 @@ export function PageTools({
       )}
     </div>
   );
-  const add = (
+  const addButton = (onCreate || createDisabledReason) && (
     <Button
       size="icon"
-      title={createLabel}
+      variant={createDisabledReason ? "secondary" : "default"}
+      title={createDisabledReason ? undefined : createLabel}
       aria-label={createLabel}
-      onClick={onCreate}
-      className="h-9 w-9 shrink-0 rounded-full bg-blue-500 text-white shadow-md shadow-blue-500/20 hover:bg-blue-600"
+      aria-disabled={createDisabledReason ? true : undefined}
+      onClick={() => {
+        if (!createDisabledReason) onCreate?.();
+      }}
+      className={cn(
+        "h-9 w-9 shrink-0 rounded-full",
+        createDisabledReason
+          ? "cursor-default bg-muted text-muted-foreground hover:bg-muted hover:text-muted-foreground"
+          : "bg-blue-500 text-white shadow-md shadow-blue-500/20 hover:bg-blue-600",
+      )}
     >
       <Plus className="h-5 w-5" />
     </Button>
+  );
+  const add = createDisabledReason ? (
+    <Tooltip>
+      <TooltipTrigger asChild>{addButton}</TooltipTrigger>
+      <TooltipContent side="bottom">{createDisabledReason}</TooltipContent>
+    </Tooltip>
+  ) : (
+    addButton
   );
   if (!hosts)
     return (

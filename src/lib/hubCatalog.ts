@@ -1,3 +1,4 @@
+import { isRegistered } from "@/lib/linkStatus";
 import type { SkillView } from "@/types";
 
 export interface HubCard {
@@ -35,6 +36,32 @@ export function sourceAgentIds(source: SkillView): string[] {
     if (["source", "linked", "brokenLink"].includes(state.status)) ids.add(id);
   }
   return [...ids].sort();
+}
+
+/** Hide only Agent-owned sources; Hub and shared roots have independent ownership. */
+export function isSkillVisible(
+  source: SkillView,
+  disabledAgents: readonly string[] = [],
+): boolean {
+  if (!disabledAgents.length || source.origin.kind === "hub") return true;
+  const sourceIds = source.sourceIds ?? source.provenance?.sourceIds ?? [];
+  const shared = (path: string) =>
+    /(^|\/)\.agents?(\/|$)/.test(path.replace(/\\/g, "/"));
+  if (
+    sourceIds.includes("agent") ||
+    shared(source.sourcePath) ||
+    shared(source.root)
+  )
+    return true;
+  const owners = new Set(sourceAgentIds(source));
+  for (const id of sourceIds) {
+    if (!["studio", "agent", "external", "unknown"].includes(id))
+      owners.add(id);
+  }
+  for (const [id, state] of Object.entries(source.agents)) {
+    if (isRegistered(state.status)) owners.add(id);
+  }
+  return !owners.size || [...owners].some((id) => !disabledAgents.includes(id));
 }
 
 /** Installation sources per merged card; each source contributes at most once. */

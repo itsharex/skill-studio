@@ -27,7 +27,7 @@ function setup() {
   handlers.set("get_config", () => ({ activeGroups: {} }));
 }
 
-it("opens all three Skill Agents and excludes them when navigating to MCP", async () => {
+it("opens all three Agents in both Skill and MCP navigation", async () => {
   setup();
   renderWithProviders(<App />);
   const nav = within(screen.getByRole("navigation", { name: "主导航" }));
@@ -38,14 +38,25 @@ it("opens all three Skill Agents and excludes them when navigating to MCP", asyn
     expect(
       await screen.findByRole("heading", { name: agent.displayName }),
     ).toBeInTheDocument();
-    expect(screen.getByText(/手动安装的 Skill 始终保留/)).toBeVisible();
+    expect(
+      screen.queryByText(/手动安装的 Skill 始终保留/),
+    ).not.toBeInTheDocument();
+    expect(
+      screen.getByRole("button", {
+        name: `${agent.displayName} Skill 使用说明`,
+      }),
+    ).toBeEnabled();
     expect(screen.getByRole("button", { name: "新建分组" })).toBeEnabled();
   }
   fireEvent.click(nav.getByRole("button", { name: "MCP Hub" }));
   for (const agent of skillOnlyAgents) {
+    fireEvent.click(nav.getByRole("button", { name: agent.displayName }));
     expect(
-      nav.queryByRole("button", { name: agent.displayName }),
-    ).not.toBeInTheDocument();
+      await screen.findByRole("heading", { name: agent.displayName }),
+    ).toBeVisible();
+    await waitFor(() =>
+      expect(screen.getByRole("tab", { name: /^分组/ })).toBeVisible(),
+    );
   }
   expect(nav.getByRole("button", { name: "Claude Code" })).toBeVisible();
   expect(nav.getByRole("button", { name: "Codex" })).toBeVisible();
@@ -55,18 +66,19 @@ it("opens all three Skill Agents and excludes them when navigating to MCP", asyn
   }
 });
 
-it("rejects a restored MCP view for a Skill-only Agent without issuing MCP group requests for it", async () => {
+it("restores Pi MCP view and explains its adapter dependency", async () => {
   setup();
   localStorage.setItem("skill-studio-view", "agent:pi");
   localStorage.setItem("skill-studio-resource", "mcp");
   renderWithProviders(<App />);
+  expect(await screen.findByRole("heading", { name: "Pi" })).toBeVisible();
   expect(
-    await screen.findByRole("heading", { name: "MCP Hub" }),
-  ).toBeInTheDocument();
-  const requests = calls.filter((c) => c.command === "mcp_request");
+    screen.queryByText("pi install npm:pi-mcp-adapter"),
+  ).not.toBeInTheDocument();
+  // Radix/floating-ui opening is checked in the native GUI; jsdom layout is unstable.
   expect(
-    requests.some((c) => JSON.stringify(c.args).includes('"agent":"pi"')),
-  ).toBe(false);
+    screen.getByRole("button", { name: "Pi MCP 使用说明" }),
+  ).toHaveAttribute("aria-expanded", "false");
 });
 
 it("writes all selected Skill Agents to a project using each backend-provided directory", async () => {
@@ -150,10 +162,15 @@ it("persists management visibility for new Agents through settings", async () =>
     const button = await screen.findByRole("button", {
       name: agent.displayName,
     });
-    await waitFor(() => expect(button).toBeEnabled());
+    await waitFor(() =>
+      expect(button).toHaveAttribute("aria-disabled", "false"),
+    );
     fireEvent.click(button);
     await waitFor(() =>
       expect(button).toHaveAttribute("aria-pressed", "false"),
+    );
+    await waitFor(() =>
+      expect(button).toHaveAttribute("aria-disabled", "false"),
     );
   }
   expect(settings.disabledAgents).toEqual(["opencode", "pi", "grok"]);

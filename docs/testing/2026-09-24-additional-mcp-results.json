@@ -1,0 +1,113 @@
+{
+  "date": "2026-09-24",
+  "opencode": [
+    {
+      "mode": "direct",
+      "exitCode": 0,
+      "servers": [
+        {
+          "name": "sample",
+          "status": {
+            "status": "connected"
+          }
+        }
+      ]
+    },
+    {
+      "mode": "gateway",
+      "exitCode": 0,
+      "servers": [
+        {
+          "name": "sample",
+          "status": {
+            "status": "connected"
+          }
+        }
+      ]
+    }
+  ],
+  "grok": [
+    {
+      "mode": "direct",
+      "exitCode": 0,
+      "healthyCount": 1,
+      "failingCount": 0,
+      "checks": [
+        {
+          "label": "command found",
+          "passed": true,
+          "detail": "/usr/bin/python3"
+        },
+        {
+          "label": "server started",
+          "passed": true,
+          "detail": "0.0s"
+        },
+        {
+          "label": "handshake OK",
+          "passed": true,
+          "detail": "protocol 2025-11-25"
+        },
+        {
+          "label": "1 tools discovered",
+          "passed": true,
+          "detail": ""
+        }
+      ]
+    },
+    {
+      "mode": "gateway",
+      "exitCode": 0,
+      "healthyCount": 1,
+      "failingCount": 0,
+      "checks": [
+        {
+          "label": "command found",
+          "passed": true,
+          "detail": "<workspace>/target/debug/skill-studio"
+        },
+        {
+          "label": "server started",
+          "passed": true,
+          "detail": "0.0s"
+        },
+        {
+          "label": "handshake OK",
+          "passed": true,
+          "detail": "protocol 2025-11-25"
+        },
+        {
+          "label": "1 tools discovered",
+          "passed": true,
+          "detail": ""
+        }
+      ]
+    }
+  ],
+  "pi": [
+    {
+      "mode": "direct",
+      "tools": ["echo"],
+      "result": {
+        "content": [
+          {
+            "type": "text",
+            "text": "studio-ok"
+          }
+        ]
+      }
+    },
+    {
+      "mode": "gateway",
+      "tools": ["echo"],
+      "result": {
+        "content": [
+          {
+            "type": "text",
+            "text": "studio-ok"
+          }
+        ]
+      }
+    }
+  ]
+}

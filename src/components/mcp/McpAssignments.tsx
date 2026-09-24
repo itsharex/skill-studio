@@ -1,3 +1,9 @@
+import {
+  MCP_AGENTS,
+  mcpAgentName,
+  MCP_PROJECT_SUFFIXES,
+} from "@/lib/mcpAgents";
+import { McpAgentNote } from "./McpAgentNote";
 import { useState } from "react";
 import { useQuery } from "@tanstack/react-query";
 import { Plus, Trash2 } from "lucide-react";
@@ -41,7 +47,7 @@ const inProject = (
   project: Project,
 ) =>
   binding.project === project.root ||
-  ["/.mcp.json", "/.codex/config.toml"].some(
+  MCP_PROJECT_SUFFIXES.some(
     (suffix) => binding.path === normalize(project.root) + suffix,
   );
 
@@ -249,7 +255,7 @@ function LocalAssignments({
               >
                 <div className="min-w-0">
                   <p className="text-xs">
-                    {binding.agent === "claude" ? "Claude Code" : "Codex"} ·{" "}
+                    {mcpAgentName(binding.agent)} ·{" "}
                     {binding.project
                       ? "项目本地"
                       : project
@@ -286,7 +292,7 @@ function LocalAssignments({
               .map((source) => (
                 <div key={source.id} className="text-xs text-muted-foreground">
                   <p>
-                    {source.agent === "claude" ? "Claude Code" : "Codex"} ·{" "}
+                    {mcpAgentName(source.agent)} ·{" "}
                     {source.enabled ? "已配置" : "已停用"} ·{" "}
                     {groupSource(source) ? "由分组管理" : "原有配置"}
                   </p>
@@ -312,13 +318,14 @@ function LocalAssignments({
             <DialogTitle>
               {project
                 ? `添加 MCP 到 ${project.name}`
-                : `添加全局 MCP 到 ${agent === "claude" ? "Claude Code" : "Codex"}`}
+                : `添加全局 MCP 到 ${mcpAgentName(agent)}`}
             </DialogTitle>
             <DialogDescription>
               从 MCP Hub 选择已保存的服务。暂无服务时，请先在 MCP Hub 添加。
             </DialogDescription>
           </DialogHeader>
           <div className="space-y-4 px-6 pb-4">
+            <McpAgentNote agent={selectedAgent} />
             {project && (
               <>
                 <label className="block space-y-2 text-sm">
@@ -333,8 +340,11 @@ function LocalAssignments({
                       setScope("project");
                     }}
                   >
-                    <option value="claude">Claude Code</option>
-                    <option value="codex">Codex</option>
+                    {MCP_AGENTS.map((a) => (
+                      <option key={a.id} value={a.id}>
+                        {a.name}
+                      </option>
+                    ))}
                   </select>
                 </label>
                 <label className="block space-y-2 text-sm">

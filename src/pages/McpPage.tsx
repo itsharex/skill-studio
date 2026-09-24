@@ -1,3 +1,10 @@
+import {
+  SummaryBar,
+  SummaryStart,
+  SummaryEnd,
+  summaryPillClass,
+} from "@/components/common/SummaryBar";
+import { MCP_AGENTS, mcpAgentName, mcpAppId } from "@/lib/mcpAgents";
 import { useSettings } from "@/hooks/useData";
 import { ConfirmDialog } from "@/components/common/ConfirmDialog";
 import { useEffect, useState } from "react";
@@ -41,6 +48,7 @@ import { EmptyState } from "@/components/common/EmptyState";
 import { AgentIcon } from "@/components/common/AgentIcon";
 import { useTarget } from "@/components/targets/TargetProvider";
 import { McpEditor } from "@/components/mcp/McpEditor";
+import { RemoteMcpPage } from "@/pages/RemoteMcpPage";
 import { mcpRequest } from "@/lib/api/mcp";
 import {
   managementApi,
@@ -66,12 +74,7 @@ export function mcpEditorTitle(editor: McpEditorState) {
 }
 export function McpPage(props: McpPageProps) {
   const target = useTarget();
-  if (target.id !== "local")
-    return (
-      <div className="p-6 text-sm text-muted-foreground">
-        MCP Hub 当前支持本机。请切换到本机管理，当前服务器的配置不会被修改。
-      </div>
-    );
+  if (target.id !== "local") return <RemoteMcpPage key={target.id} />;
   return (
     <NavigationGuard>
       <LocalMcpPage {...props} />
@@ -84,6 +87,9 @@ function LocalMcpPage({
 }: McpPageProps) {
   const requestNavigation = useNavigationGuard();
   const { data: settings } = useSettings();
+  const visibleMcpAgents = MCP_AGENTS.filter(
+    (a) => !settings?.disabledAgents?.includes(a.appId),
+  );
   const status = useQuery({
     queryKey: ["mcp", "local"],
     queryFn: managementApi.list,
@@ -91,10 +97,24 @@ function LocalMcpPage({
     staleTime: MCP_STATUS_STALE_TIME,
     refetchInterval: MCP_STATUS_POLL_INTERVAL,
   });
-  const catalog = rows(status.data);
+  const allRows = rows(status.data);
+  const catalog = allRows.filter(
+    (row) =>
+      row.managed ||
+      !row.sources.length ||
+      row.sources.some(
+        (source) => !settings?.disabledAgents?.includes(mcpAppId(source.agent)),
+      ),
+  );
   const running = status.data?.running ?? false;
   const [query, setQuery] = useState("");
   const [filter, setFilter] = useState("all");
+  const activeFilter = settings?.disabledAgents?.includes(mcpAppId(filter))
+    ? "all"
+    : filter;
+  useEffect(() => {
+    if (settings?.disabledAgents?.includes(mcpAppId(filter))) setFilter("all");
+  }, [filter, settings?.disabledAgents]);
   const [localEditor, setLocalEditor] = useState<McpEditorState | null>(null);
   const editor =
     controlledEditor === undefined ? localEditor : controlledEditor;
@@ -139,16 +159,18 @@ function LocalMcpPage({
         : hasAgent(row, f));
   const filtered = catalog.filter(
     (row) =>
-      matches(row, filter) &&
+      matches(row, activeFilter) &&
       `${row.entry.name} ${row.entry.definition.command ?? ""} ${row.entry.definition.url ?? ""} ${row.sources.map((s) => s.scope).join(" ")}`
         .toLowerCase()
         .includes(query.trim().toLowerCase()),
   );
   const builtinServices = (
-    settings?.showCodexBuiltinMcp ? (status.data?.builtins ?? []) : []
+    settings?.showCodexBuiltinMcp && !settings.disabledAgents?.includes("codex")
+      ? (status.data?.builtins ?? [])
+      : []
   ).filter(
     (service) =>
-      (filter === "all" || filter === "codex") &&
+      (activeFilter === "all" || activeFilter === "codex") &&
       `${service.name} ${service.scope} ${service.path}`
         .toLowerCase()
         .includes(query.trim().toLowerCase()),
@@ -369,40 +391,33 @@ function LocalMcpPage({
         createLabel="添加 MCP"
         onCreate={() => setEditor({ row: null })}
       />
-      <div className="my-4 flex flex-wrap items-center justify-between gap-3 rounded-xl border border-border-default px-5 py-4">
-        <div
-          className="flex flex-wrap gap-2"
-          role="group"
-          aria-label="筛选 MCP"
-        >
+      <SummaryBar>
+        <SummaryStart role="group" aria-label="筛选 MCP">
           {[
             ["all", "全部"],
-            ["claude", "Claude Code"],
-            ["codex", "Codex"],
+            ...visibleMcpAgents.map((a) => [a.id, a.name]),
             ["managed", "已托管"],
             ["gateway", "网关连接"],
           ].map(([key, label]) => (
             <button
               key={key}
               type="button"
-              aria-pressed={filter === key}
+              aria-pressed={activeFilter === key}
               onClick={() => setFilter(key)}
-              className={`inline-flex items-center gap-1.5 rounded-full border border-border-default px-2.5 py-1 text-xs font-medium transition-colors hover:bg-muted focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring ${filter === key ? "bg-muted ring-1 ring-current" : "text-muted-foreground"}`}
+              className={`${summaryPillClass} border-border-default transition-colors hover:bg-muted focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring ${activeFilter === key ? "bg-muted ring-1 ring-current" : "text-muted-foreground"}`}
             >
-              {["claude", "codex"].includes(key) && (
-                <AgentIcon
-                  agentId={key === "claude" ? "claude-code" : "codex"}
-                  className="h-4 w-4"
-                />
+              {MCP_AGENTS.some((a) => a.id === key) && (
+                <AgentIcon agentId={mcpAppId(key)} size="sm" />
               )}
               {label} {catalog.filter((r) => matches(r, key)).length}
             </button>
           ))}
-        </div>
-        <div className="flex items-center gap-2">
+        </SummaryStart>
+        <SummaryEnd>
           <Button
             variant="outline"
             size="sm"
+            className={summaryPillClass}
             onClick={() => setBackupsOpen(true)}
           >
             <ArchiveRestore className="h-4 w-4" />
@@ -411,6 +426,7 @@ function LocalMcpPage({
           <Button
             variant="ghost"
             size="sm"
+            className={`${summaryPillClass} border-transparent`}
             aria-label="MCP 网关"
             aria-pressed={running}
             title={running ? "点击关闭网关" : "点击开启网关"}
@@ -428,8 +444,8 @@ function LocalMcpPage({
             {running ? "网关已开启" : "网关已关闭"}
             <Power className="h-4 w-4" />
           </Button>
-        </div>
-      </div>
+        </SummaryEnd>
+      </SummaryBar>
       {status.data?.gatewayOutdated && (
         <p
           role="status"
@@ -468,8 +484,16 @@ function LocalMcpPage({
           !builtinServices.length && (
             <EmptyState
               icon={Plug}
-              title="MCP Hub 还没有发现服务"
-              description="已扫描 Claude Code、Codex 的全局和已登记项目配置。点击添加 MCP，粘贴安装命令、网址或配置即可添加到 Hub，再到 Agent 或项目页面启用。"
+              title={
+                allRows.length
+                  ? "当前 Agent 选择下没有可显示的 MCP"
+                  : "MCP Hub 还没有发现服务"
+              }
+              description={
+                allRows.length
+                  ? "可在设置中开启其他 Agent，或添加服务到 Hub。"
+                  : "已扫描支持的 Agent 全局和已登记项目配置。点击添加 MCP，粘贴安装命令、网址或配置即可添加到 Hub，再到 Agent 或项目页面启用。"
+              }
             />
           )}
         <ListContainer cards>
@@ -531,17 +555,15 @@ function LocalMcpPage({
                               : "授权待检查"}
                       </Badge>
                     )}
-                  {["claude", "codex"]
+                  {visibleMcpAgents
+                    .map((a) => a.id)
                     .filter((a) => hasAgent(row, a))
                     .map((agent) => (
                       <span
                         key={agent}
-                        title={`${agent === "claude" ? "Claude Code" : "Codex"} 中已配置`}
+                        title={`${mcpAgentName(agent)} 中已配置`}
                       >
-                        <AgentIcon
-                          agentId={agent === "claude" ? "claude-code" : "codex"}
-                          className="h-4 w-4"
-                        />
+                        <AgentIcon agentId={mcpAppId(agent)} size="sm" />
                       </span>
                     ))}
                 </div>
@@ -656,7 +678,8 @@ function LocalMcpPage({
                   </Badge>
                   <AgentIcon
                     agentId="codex"
-                    className="h-4 w-4 grayscale opacity-60"
+                    size="sm"
+                    className="grayscale opacity-60"
                   />
                 </div>
                 <p className="pt-0.5 text-xs">
@@ -762,7 +785,7 @@ function LocalMcpPage({
                       className="rounded-lg border border-border-default p-3"
                     >
                       <p className="text-sm">
-                        {b.agent === "claude" ? "Claude Code" : "Codex"} ·{" "}
+                        {mcpAgentName(b.agent)} ·{" "}
                         {detail.entry.mode === "gateway" ? "网关" : "直连"}
                       </p>
                       <p className="break-all text-xs text-muted-foreground">
@@ -781,8 +804,7 @@ function LocalMcpPage({
                       className="rounded-lg border border-border-default p-3"
                     >
                       <p className="text-sm">
-                        {s.agent === "claude" ? "Claude Code" : "Codex"} ·{" "}
-                        {s.scope}
+                        {mcpAgentName(s.agent)} · {s.scope}
                       </p>
                       <p className="break-all text-xs text-muted-foreground">
                         {s.path} · {s.key}
@@ -865,8 +887,7 @@ function LocalMcpPage({
                 : (remove?.sources ?? [])
               ).map((source) => (
                 <span className="block" key={source.id}>
-                  {source.agent === "claude" ? "Claude Code" : "Codex"} ·{" "}
-                  {source.path} · {source.key}
+                  {mcpAgentName(source.agent)} · {source.path} · {source.key}
                 </span>
               ))}
             </span>

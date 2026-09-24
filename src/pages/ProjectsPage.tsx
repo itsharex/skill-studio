@@ -1,3 +1,9 @@
+import {
+  SummaryBar,
+  SummaryStart,
+  SummaryEnd,
+  summaryPillClass,
+} from "@/components/common/SummaryBar";
 import { agentSourceColor, projectSkillDirectory } from "@/lib/agents";
 import { useSkillPreview } from "@/components/common/SkillPreview";
 import { SkillBackups } from "@/components/common/SkillBackups";
@@ -215,8 +221,8 @@ function ProjectsContent() {
   return (
     <div className="flex min-h-0 flex-1 flex-col">
       {tools}
-      <div className="my-4 flex flex-wrap items-center justify-between gap-3 rounded-xl border border-border-default px-5 py-4">
-        <div className="flex flex-wrap items-center gap-2">
+      <SummaryBar>
+        <SummaryStart role="group" aria-label="按项目 Agent 筛选">
           {agents
             .filter((a) => a.supportsProjectSkills)
             .map((a) => (
@@ -224,32 +230,29 @@ function ProjectsContent() {
                 key={a.id}
                 type="button"
                 title={`筛选 ${a.displayName} 已启用的项目`}
-                className={`inline-flex items-center gap-1.5 rounded-full px-2.5 py-1 text-xs font-medium transition-colors hover:brightness-95 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring ${agentSourceColor(a.id)} ${sourceFilter === a.id ? "ring-2 ring-current" : ""}`}
+                className={`${summaryPillClass} border-transparent transition-colors hover:brightness-95 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring ${agentSourceColor(a.id)} ${sourceFilter === a.id ? "ring-2 ring-current" : ""}`}
                 aria-pressed={sourceFilter === a.id}
                 onClick={() =>
                   setSourceFilter(sourceFilter === a.id ? null : a.id)
                 }
               >
-                <AgentIcon agentId={a.id} className="h-4 w-4" />
-                {a.displayName}:{" "}
+                <AgentIcon agentId={a.id} size="sm" />
+                {`${a.displayName}:`}{" "}
                 {
                   projects.filter((p) => projectAgentIds(p).includes(a.id))
                     .length
                 }
               </button>
             ))}
-        </div>
-        <div
-          className="ml-auto flex items-center gap-2"
-          title="按 Skill Studio 已写入的项目部署统计，同一项目只计一次"
-        >
-          <Badge variant="outline" className="px-3 py-1 text-sm">
+        </SummaryStart>
+        <SummaryEnd title="按 Skill Studio 已写入的项目部署统计，同一项目只计一次">
+          <Badge variant="outline" className={summaryPillClass}>
             项目 {projects.length} 个
           </Badge>
-          <SkillBackups scope="projects" />
+          <SkillBackups scope="projects" className={summaryPillClass} />
           <Badge
             variant="outline"
-            className="px-3 py-1 text-sm"
+            className={summaryPillClass}
             title="各项目目录中未托管、未部署的 skill 数量"
           >
             未托管 skill{" "}
@@ -259,12 +262,12 @@ function ProjectsContent() {
             )}{" "}
             个
           </Badge>
-          <Badge variant="outline" className="px-3 py-1 text-sm">
+          <Badge variant="outline" className={summaryPillClass}>
             已启用{" "}
             {projects.filter((p) => projectAgentIds(p).length > 0).length} 个
           </Badge>
-        </div>
-      </div>
+        </SummaryEnd>
+      </SummaryBar>
 
       <div className="min-h-0 flex-1 overflow-y-auto pb-6">
         {projects.length === 0 ? (
@@ -718,7 +721,7 @@ function ProjectDetail({
                       skill.agentId
                     }
                   >
-                    <AgentIcon agentId={skill.agentId} className="h-4 w-4" />
+                    <AgentIcon agentId={skill.agentId} size="sm" />
                   </span>
                   {skill.tokens && (
                     <Badge
@@ -860,7 +863,7 @@ function ProjectDetail({
                   checked={draft.value.agentIds.includes(a.id)}
                   aria-label={a.displayName}
                 />
-                <AgentIcon agentId={a.id} className="h-4 w-4 shrink-0" />
+                <AgentIcon agentId={a.id} size="sm" />
                 <span className="flex-1 text-sm font-medium">
                   {a.displayName}
                 </span>

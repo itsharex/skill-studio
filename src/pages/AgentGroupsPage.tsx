@@ -1,3 +1,11 @@
+import {
+  SummaryBar,
+  SummaryStart,
+  SummaryEnd,
+  summaryPillClass,
+  summaryTabClass,
+} from "@/components/common/SummaryBar";
+import { HelpPopover } from "@/components/common/HelpPopover";
 import { SkillBackups } from "@/components/common/SkillBackups";
 import { Tabs, TabsList, TabsTrigger, TabsContent } from "@/components/ui/tabs";
 import { PageTools } from "@/components/common/PageTools";
@@ -222,57 +230,62 @@ export function AgentPage({ agentId }: { agentId: string }) {
         className="flex min-h-0 flex-1 flex-col"
       >
         {/* 分页与统计合成一行：左边切页、右边靠右对齐的三个数字 */}
-        <div className="my-4 flex flex-wrap items-center justify-between gap-x-6 gap-y-3 rounded-xl border border-border-default px-4 py-3">
-          <TabsList aria-label="Agent 内容">
-            <TabsTrigger
-              value="groups"
-              className="gap-2 data-[state=active]:bg-background data-[state=active]:text-foreground dark:data-[state=active]:bg-background"
-            >
-              分组<span className="text-xs opacity-60">{own.length}</span>
-            </TabsTrigger>
-            <TabsTrigger
-              value="installed"
-              className="gap-2 data-[state=active]:bg-background data-[state=active]:text-foreground dark:data-[state=active]:bg-background"
-            >
-              已安装 skill
-              <span className="text-xs opacity-60">
-                {
-                  skills.filter(
-                    (s) =>
-                      s.agents[agentId] &&
-                      s.agents[agentId].status !== "notLinked",
-                  ).length
-                }
-              </span>
-            </TabsTrigger>
-            <TabsTrigger
-              value="manual"
-              className="gap-2 data-[state=active]:bg-background data-[state=active]:text-foreground"
-            >
-              未托管 skill
-              <span className="text-xs opacity-60">
-                {skills.filter((s) => s.agents[agentId]?.manual).length}
-              </span>
-            </TabsTrigger>
-          </TabsList>
+        <SummaryBar>
+          <SummaryStart>
+            <TabsList className="h-9 shrink-0" aria-label="Agent 内容">
+              <TabsTrigger
+                value="groups"
+                className={`${summaryTabClass} gap-2 data-[state=active]:bg-background data-[state=active]:text-foreground dark:data-[state=active]:bg-background`}
+              >
+                分组 <span className="text-xs opacity-60">{own.length}</span>
+              </TabsTrigger>
+              <TabsTrigger
+                value="installed"
+                className={`${summaryTabClass} gap-2 data-[state=active]:bg-background data-[state=active]:text-foreground dark:data-[state=active]:bg-background`}
+              >
+                已安装 skill
+                <span className="text-xs opacity-60">
+                  {
+                    skills.filter(
+                      (s) =>
+                        s.agents[agentId] &&
+                        s.agents[agentId].status !== "notLinked",
+                    ).length
+                  }
+                </span>
+              </TabsTrigger>
+              <TabsTrigger
+                value="manual"
+                className={`${summaryTabClass} gap-2 data-[state=active]:bg-background data-[state=active]:text-foreground`}
+              >
+                未托管 skill
+                <span className="text-xs opacity-60">
+                  {skills.filter((s) => s.agents[agentId]?.manual).length}
+                </span>
+              </TabsTrigger>
+            </TabsList>
+          </SummaryStart>
           {/*
             这三枚统计胶囊只报数、这一行没有筛选语义，所以是不可聚焦的 Badge
             而不是按钮。用 Badge 的 outline 变体而不是手抄它的类名 —— 裸 `border`
             会吃到 preflight 推出的 #e4e4e7，深色下就是近白边框套在已经变暗的卡片里。
           */}
           {tab !== "mcp" && (
-            <div className="ml-auto flex flex-wrap items-center gap-2">
-              <SkillBackups scope={`agent:${agentId}`} />
+            <SummaryEnd>
+              <SkillBackups
+                scope={`agent:${agentId}`}
+                className={summaryPillClass}
+              />
               <Badge
                 variant="outline"
-                className="px-3 py-1 text-sm font-medium"
+                className={summaryPillClass}
                 title={`每个 agent 同一时间只能启用一个分组；本 agent 共 ${own.length} 个分组`}
               >
                 已启用 {activeGroupCount} 个分组
               </Badge>
               <Badge
                 variant="outline"
-                className="px-3 py-1 text-sm font-medium"
+                className={summaryPillClass}
                 title={
                   agent?.supportsNativeToggle
                     ? "文件在位、且没被 agent 的原生开关停用的 skill。目录里有痕迹但用不上的（外来占位、悬空链接）不计。"
@@ -284,7 +297,7 @@ export function AgentPage({ agentId }: { agentId: string }) {
               </Badge>
               <Badge
                 variant="outline"
-                className="px-3 py-1 text-sm font-medium"
+                className={summaryPillClass}
                 title={tokenTitle(
                   enabledTokens,
                   agent?.supportsNativeToggle
@@ -295,17 +308,17 @@ export function AgentPage({ agentId }: { agentId: string }) {
               >
                 ≈ {formatTokens(enabledTokens.total)} tokens
               </Badge>
-            </div>
+              {agent && !agent.supportsNativeToggle && (
+                <HelpPopover label={`${agent.displayName} Skill 使用说明`}>
+                  {agent.displayName} 本版支持 Skill
+                  安装、托管和分组部署，暂不读取或修改原生启停配置。
+                  分组停用只撤回 Studio 部署的副本，手动安装的 Skill 始终保留。
+                  修改后请在 Agent 中重新加载 Skill 或重启会话。
+                </HelpPopover>
+              )}
+            </SummaryEnd>
           )}
-        </div>
-        {agent && !agent.supportsNativeToggle && (
-          <p className="mb-4 text-xs leading-relaxed text-muted-foreground">
-            {agent.displayName} 本版支持 Skill
-            安装、托管和分组部署，暂不读取或修改原生启停配置。 分组停用只撤回
-            Studio 部署的副本，手动安装的 Skill 始终保留。修改后请在 Agent
-            中重新加载 Skill 或重启会话。
-          </p>
-        )}
+        </SummaryBar>
         <TabsContent
           value="groups"
           className="min-h-0 flex-1 overflow-y-auto pb-6"

@@ -69,6 +69,7 @@ export function SettingsPage() {
   const { data: backups = [] } = useBackups();
   const { data: version } = useAppVersion();
   const update = useUpdateSettings();
+  const visibilityUpdate = useUpdateSettings();
   const restore = useRestoreBackup();
   const prune = usePrune();
 
@@ -121,29 +122,37 @@ export function SettingsPage() {
           <TabsContent value="general" className="space-y-7">
             <SettingsSection title="管理的应用" icon={<Settings2 />}>
               <p className="text-xs text-muted-foreground">
-                选择在顶部显示的应用。关闭仅隐藏管理入口，已安装的
-                skill、启用中的分组和 Hub 来源记录保持不变。
+                选择要管理的应用。关闭后隐藏其专属 Skill、MCP
+                及来源统计，并退出该应用的 Skill 分组管理。Hub
+                托管内容和共享内容继续显示。
               </p>
               <div className="flex flex-wrap gap-2 rounded-xl border border-border-default p-2">
                 {agents.map((agent) => {
-                  const disabled = settings.disabledAgents ?? [];
+                  const disabled =
+                    (visibilityUpdate.isPending
+                      ? visibilityUpdate.variables?.disabledAgents
+                      : settings.disabledAgents) ?? [];
                   const enabled = !disabled.includes(agent.id);
                   return (
                     <Button
                       key={agent.id}
                       variant={enabled ? "default" : "ghost"}
                       aria-pressed={enabled}
-                      disabled={update.isPending}
-                      onClick={() =>
-                        update.mutate({
+                      aria-disabled={
+                        visibilityUpdate.isPending || update.isPending
+                      }
+                      onClick={() => {
+                        if (visibilityUpdate.isPending || update.isPending)
+                          return;
+                        visibilityUpdate.mutate({
                           disabledAgents: enabled
                             ? [...disabled, agent.id]
                             : disabled.filter((id) => id !== agent.id),
-                        })
-                      }
+                        });
+                      }}
                       className="gap-2"
                     >
-                      <AgentIcon agentId={agent.id} className="h-5 w-5" />
+                      <AgentIcon agentId={agent.id} />
                       {agent.displayName}
                     </Button>
                   );

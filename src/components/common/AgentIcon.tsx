@@ -1,20 +1,26 @@
 import type { ComponentType } from "react";
 import { Boxes } from "lucide-react";
+import { cn } from "@/lib/utils";
 
 interface MarkProps {
   className?: string;
 }
 
 /**
+ * 品牌图形的最长边以外框的 90% 为基准，细线条的 Grok 使用完整画布作视觉补偿。
+ * 通过 viewBox 校准原始留白，保留图形比例，不改变外框尺寸或图标与文字的间距。
+ */
+
+/**
  * Claude 品牌标记。矢量数据取自 cc-switch 的
- * `src/icons/extracted/claude.svg`（与 @lobehub/icons 同源），只把 SVG 属性
- * 改写成 JSX 形式。品牌橙 #D97757 写死不跟随文字色 —— 它在浅色和深色底上
+ * `src/icons/extracted/claude.svg`（与 @lobehub/icons 同源），保留路径并校准留白。
+ * 品牌橙 #D97757 写死不跟随文字色 —— 它在浅色和深色底上
  * 都有足够对比度，跟着 muted-foreground 变灰反而认不出来了。
  */
 function ClaudeMark({ className }: MarkProps) {
   return (
     <svg
-      viewBox="0 0 24 24"
+      viewBox="-1.333 -1.333 26.666 26.666"
       className={className}
       aria-hidden="true"
       focusable="false"
@@ -37,7 +43,7 @@ function ClaudeMark({ className }: MarkProps) {
 function OpenAIMark({ className }: MarkProps) {
   return (
     <svg
-      viewBox="0 0 24 24"
+      viewBox="-0.222 -0.222 24.444 24.444"
       className={className}
       aria-hidden="true"
       focusable="false"
@@ -52,7 +58,7 @@ function OpenAIMark({ className }: MarkProps) {
 }
 
 /**
- * OpenCode、Pi、Grok 的路径与 viewBox 取自 farion1231/cc-switch
+ * OpenCode、Pi、Grok 的路径取自 farion1231/cc-switch
  * `src/icons/extracted/index.ts`，来源版本和许可见 THIRD_PARTY_NOTICES.md。
  * OpenCode 省略覆盖整个画布的 mask/clipPath，避免重复渲染产生同名 SVG id；
  * 浅色保留原始双色填充，深色仅调整明暗以保持可见。
@@ -60,7 +66,7 @@ function OpenAIMark({ className }: MarkProps) {
 function OpenCodeMark({ className }: MarkProps) {
   return (
     <svg
-      viewBox="0 0 240 300"
+      viewBox="-46.667 -16.667 333.334 333.334"
       className={className}
       aria-hidden="true"
       focusable="false"
@@ -79,7 +85,7 @@ function OpenCodeMark({ className }: MarkProps) {
   );
 }
 
-/** CC Switch 的 grokbuild 使用 grok 标记。 */
+/** CC Switch 的 grokbuild 使用 grok 标记；比统一基准放大约 11%，补偿较细的图形。 */
 function GrokMark({ className }: MarkProps) {
   return (
     <svg
@@ -95,11 +101,11 @@ function GrokMark({ className }: MarkProps) {
   );
 }
 
-/** CC Switch 的 Pi 像素标记，保留原始 viewBox 与留白比例。 */
+/** CC Switch 的 Pi 像素标记，收紧原始画布的大面积留白以匹配其他品牌。 */
 function PiMark({ className }: MarkProps) {
   return (
     <svg
-      viewBox="0 0 800 800"
+      viewBox="139.21 139.21 521.59 521.59"
       className={className}
       aria-hidden="true"
       focusable="false"
@@ -132,14 +138,24 @@ export function agentIcon(agentId: string): ComponentType<MarkProps> {
   return MARKS[agentId] ?? Boxes;
 }
 
-/** 按 agent 渲染品牌标记。尺寸由 className 决定，单色标记跟随文字色。 */
+/** 导航／设置使用 md，来源统计／卡片／弹窗使用 sm；共享品牌留白校准。 */
 export function AgentIcon({
   agentId,
+  size = "md",
   className,
 }: {
   agentId: string;
+  size?: "sm" | "md";
   className?: string;
 }) {
   const Mark = agentIcon(agentId);
-  return <Mark className={className} />;
+  return (
+    <Mark
+      className={cn(
+        "shrink-0",
+        size === "sm" ? "h-4 w-4" : "h-5 w-5",
+        className,
+      )}
+    />
+  );
 }

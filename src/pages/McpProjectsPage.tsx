@@ -1,3 +1,10 @@
+import {
+  SummaryBar,
+  SummaryStart,
+  SummaryEnd,
+  summaryPillClass,
+} from "@/components/common/SummaryBar";
+import { MCP_PROJECT_SUFFIXES } from "@/lib/mcpAgents";
 import { useState } from "react";
 import { useQuery } from "@tanstack/react-query";
 import { ArrowLeft, FolderGit2, FolderOpen, Trash2 } from "lucide-react";
@@ -77,7 +84,7 @@ function McpProjectsContent() {
           row.entry.bindings.filter(
             (binding) =>
               binding.project === active.root ||
-              ["/.mcp.json", "/.codex/config.toml"].some(
+              MCP_PROJECT_SUFFIXES.some(
                 (suffix) =>
                   binding.path === active.root.replace(/\/+$/, "") + suffix,
               ),
@@ -109,7 +116,7 @@ function McpProjectsContent() {
       [...row.sources, ...row.entry.bindings].some(
         (source) =>
           source.project === root ||
-          ["/.mcp.json", "/.codex/config.toml"].some(
+          MCP_PROJECT_SUFFIXES.some(
             (suffix) => source.path === root.replace(/\/+$/, "") + suffix,
           ),
       ),
@@ -181,14 +188,18 @@ function McpProjectsContent() {
         </>
       ) : (
         <>
-          <div className="my-4 flex flex-wrap items-center justify-between gap-3 rounded-xl border border-border-default px-5 py-4">
-            <p className="text-sm text-muted-foreground">
-              管理各项目的 MCP 接入
-            </p>
-            <Badge variant="outline">
-              项目 {projects.data?.length ?? 0} 个
-            </Badge>
-          </div>
+          <SummaryBar>
+            <SummaryStart>
+              <p className="truncate text-xs text-muted-foreground">
+                管理各项目的 MCP 接入
+              </p>
+            </SummaryStart>
+            <SummaryEnd>
+              <Badge variant="outline" className={summaryPillClass}>
+                项目 {projects.data?.length ?? 0} 个
+              </Badge>
+            </SummaryEnd>
+          </SummaryBar>
           <div className="min-h-0 flex-1 overflow-y-auto pb-6">
             {(projects.isPending || status.isPending) && (
               <p className="py-6 text-sm text-muted-foreground">

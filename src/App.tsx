@@ -1,3 +1,4 @@
+import { supportsMcp } from "@/lib/mcpAgents";
 import { AgentMcpGroups } from "@/pages/AgentMcpGroups";
 import { McpProjectsPage } from "@/pages/McpProjectsPage";
 import {
@@ -100,6 +101,7 @@ function AppContent() {
           : "skills",
   );
   const activeResource = mcpEnabled ? resource : "skills";
+  const remoteMcp = target.id !== "local" && activeResource === "mcp";
   useEffect(() => {
     localStorage.setItem("skill-studio-resource", resource);
   }, [resource]);
@@ -131,14 +133,15 @@ function AppContent() {
 
   useEffect(() => {
     const disabledView = (id: ViewId) =>
-      id.startsWith(AGENT_PREFIX) &&
-      (settings?.disabledAgents?.includes(id.slice(AGENT_PREFIX.length)) ||
-        (activeResource === "mcp" &&
-          !["claude-code", "codex"].includes(id.slice(AGENT_PREFIX.length))));
+      (remoteMcp && (id === "projects" || id.startsWith(AGENT_PREFIX))) ||
+      (id.startsWith(AGENT_PREFIX) &&
+        (settings?.disabledAgents?.includes(id.slice(AGENT_PREFIX.length)) ||
+          (activeResource === "mcp" &&
+            !supportsMcp(id.slice(AGENT_PREFIX.length)))));
     const hub = activeResource === "mcp" ? "mcp" : "library";
     if (disabledView(backTarget.current)) backTarget.current = hub;
     if (disabledView(view)) setView(hub);
-  }, [settings?.disabledAgents, view, activeResource]);
+  }, [settings?.disabledAgents, view, activeResource, remoteMcp]);
 
   // 启动期错误（例如配置文件坏了）要让用户看见，而不是静默用默认值跑
   useEffect(() => {
@@ -179,16 +182,15 @@ function AppContent() {
       {
         label: "AGENT",
         items: agents
-          .filter(
-            (a) =>
-              activeResource === "skills" ||
-              ["claude-code", "codex"].includes(a.id),
-          )
+          .filter((a) => activeResource === "skills" || supportsMcp(a.id))
           .map((a) => ({
             id: `${AGENT_PREFIX}${a.id}` as ViewId,
             label: a.displayName,
-            icon: <AgentIcon agentId={a.id} className="h-5 w-5" />,
+            icon: <AgentIcon agentId={a.id} />,
             badge: a.detected ? undefined : "未装",
+            disabledReason: remoteMcp
+              ? "远程 MCP 暂不支持分组管理，请在 MCP Hub 查看。"
+              : undefined,
           })),
       },
       {
@@ -198,11 +200,14 @@ function AppContent() {
             id: "projects",
             label: STATIC_TITLES.projects,
             icon: <FolderGit2 className="h-5 w-5" />,
+            disabledReason: remoteMcp
+              ? "远程 MCP 暂不支持项目管理，请在 MCP Hub 查看。"
+              : undefined,
           },
         ],
       },
     ],
-    [agents, activeResource, mcpEnabled],
+    [agents, activeResource, mcpEnabled, remoteMcp],
   );
 
   const refresh = () => {
@@ -210,6 +215,8 @@ function AppContent() {
   };
 
   const content = () => {
+    if (remoteMcp && (view === "projects" || view.startsWith(AGENT_PREFIX)))
+      return <McpPage />;
     if (view.startsWith(AGENT_PREFIX)) {
       return activeResource === "mcp" ? (
         <AgentMcpGroups key={view} agentId={view.slice(AGENT_PREFIX.length)} />
@@ -392,7 +399,7 @@ function AppContent() {
                 </nav>
                 <div
                   ref={setAddHost}
-                  className="col-start-4 row-start-1 justify-self-end"
+                  className="col-start-4 row-start-1 w-9 justify-self-end"
                   data-tauri-no-drag
                 />
               </>

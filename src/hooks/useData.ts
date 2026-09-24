@@ -213,17 +213,48 @@ export function useWriteProjectGitignore() {
 export function useUpdateSettings() {
   const qc = useQueryClient();
   return useMutation({
+    scope: { id: "update-settings" },
     mutationFn: (patch: SettingsPatch) => settingsApi.update(patch),
     onSuccess: (settings, patch) => {
       qc.setQueryData(queryKeys.settings, settings);
-      if (patch.manageMcp !== undefined) {
+      const visibilityOnly = patch.disabledAgents !== undefined;
+      // Leaving Agent management may stop a Skill group and restore manual policy.
+      // Mark these snapshots stale, but avoid scans/CLI probes while editing settings.
+      const refetchType = visibilityOnly
+        ? ("none" as const)
+        : ("active" as const);
+      void qc.invalidateQueries({ queryKey: queryKeys.config, refetchType });
+      if (
+        patch.manageMcp !== undefined ||
+        patch.agentDirOverrides !== undefined
+      ) {
         void qc.invalidateQueries({ queryKey: ["mcp", "local"] });
       }
-      void qc.invalidateQueries({ queryKey: queryKeys.config });
-      void qc.invalidateQueries({ queryKey: queryKeys.groups });
-      // 目录覆盖会改变扫描位置
-      void qc.invalidateQueries({ queryKey: queryKeys.skills });
-      void qc.invalidateQueries({ queryKey: queryKeys.agents });
+      if (
+        visibilityOnly ||
+        patch.manageMcp !== undefined ||
+        patch.agentDirOverrides !== undefined ||
+        patch.showCodexBuiltinMcp !== undefined
+      ) {
+        void qc.invalidateQueries({
+          queryKey: ["mcp", "inventory"],
+          refetchType,
+        });
+      }
+      const pathsChanged =
+        patch.agentDirOverrides !== undefined ||
+        patch.hubDir !== undefined ||
+        patch.clearHubDir;
+      if (
+        visibilityOnly ||
+        pathsChanged ||
+        patch.preserveManualSkills !== undefined
+      ) {
+        void qc.invalidateQueries({ queryKey: queryKeys.groups, refetchType });
+        void qc.invalidateQueries({ queryKey: queryKeys.skills, refetchType });
+      }
+      if (pathsChanged)
+        void qc.invalidateQueries({ queryKey: queryKeys.agents });
     },
     onError: (e: unknown) => toast.error(String(e)),
   });

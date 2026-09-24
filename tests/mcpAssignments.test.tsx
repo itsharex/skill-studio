@@ -225,3 +225,53 @@ it("does not list project bindings in an agent's global MCP list", async () => {
   );
   expect(screen.queryByText("Tools")).not.toBeInTheDocument();
 });
+
+it.each(["opencode", "pi", "grok"])(
+  "adds %s project MCP and recognizes existing project bindings",
+  async (agent) => {
+    renderWithProviders(<McpAssignments project={project} />);
+    await open();
+    fireEvent.change(screen.getByLabelText("MCP Agent"), {
+      target: { value: agent },
+    });
+    expect(
+      screen.queryByRole("option", { name: /项目本地/ }),
+    ).not.toBeInTheDocument();
+    fireEvent.click(screen.getByRole("button", { name: "添加并启用" }));
+    await waitFor(() =>
+      expect(saved()).toMatchObject({
+        agents: [agent],
+        scope: "project",
+        projectId: "p1",
+      }),
+    );
+  },
+);
+
+it.each([
+  ["opencode", "/work/.opencode/opencode.jsonc"],
+  ["pi", "/work/.pi/mcp.json"],
+  ["grok", "/work/.grok/config.toml"],
+])(
+  "shows the %s name and project binding without allowing duplicate installs",
+  async (agent, path) => {
+    entry.bindings = [
+      {
+        id: "project",
+        agent,
+        path,
+        project: null,
+        key: "Tools",
+        original: null,
+        installed: entry.definition,
+      },
+    ];
+    renderWithProviders(<McpAssignments project={project} />);
+    expect(await screen.findByText(path)).toBeVisible();
+    await open();
+    fireEvent.change(screen.getByLabelText("MCP Agent"), {
+      target: { value: agent },
+    });
+    expect(screen.getByRole("button", { name: "添加并启用" })).toBeDisabled();
+  },
+);

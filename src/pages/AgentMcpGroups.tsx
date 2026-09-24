@@ -1,3 +1,12 @@
+import {
+  SummaryBar,
+  SummaryStart,
+  SummaryEnd,
+  summaryPillClass,
+  summaryTabClass,
+} from "@/components/common/SummaryBar";
+import { mcpAgentName } from "@/lib/mcpAgents";
+import { McpAgentNote } from "@/components/mcp/McpAgentNote";
 import { McpAssignments } from "@/components/mcp/McpAssignments";
 import { Tabs, TabsList, TabsTrigger, TabsContent } from "@/components/ui/tabs";
 import { useState } from "react";
@@ -192,39 +201,42 @@ function LocalGroups({ agent }: { agent: string }) {
         }}
         className="flex min-h-0 flex-1 flex-col"
       >
-        <div className="my-4 flex flex-wrap items-center justify-between gap-x-6 gap-y-3 rounded-xl border border-border-default px-4 py-3">
-          <TabsList aria-label="MCP 内容">
-            <TabsTrigger
-              value="groups"
-              className="gap-2 data-[state=active]:bg-background data-[state=active]:text-foreground dark:data-[state=active]:bg-background"
-            >
-              分组 <span className="text-xs opacity-60">{groups.length}</span>
-            </TabsTrigger>
-            <TabsTrigger
-              value="installed"
-              className="gap-2 data-[state=active]:bg-background data-[state=active]:text-foreground dark:data-[state=active]:bg-background"
-            >
-              已配置 MCP{" "}
-              <span className="text-xs opacity-60">{configured.length}</span>
-            </TabsTrigger>
-            <TabsTrigger
-              value="manual"
-              className="gap-2 data-[state=active]:bg-background data-[state=active]:text-foreground dark:data-[state=active]:bg-background"
-            >
-              未托管 MCP{" "}
-              <span className="text-xs opacity-60">{manual.length}</span>
-            </TabsTrigger>
-          </TabsList>
-          <div className="ml-auto flex flex-wrap items-center gap-2">
-            <Badge variant="outline" className="px-3 py-1 text-sm font-medium">
+        <SummaryBar>
+          <SummaryStart>
+            <TabsList className="h-9 shrink-0" aria-label="MCP 内容">
+              <TabsTrigger
+                value="groups"
+                className={`${summaryTabClass} gap-2 data-[state=active]:bg-background data-[state=active]:text-foreground dark:data-[state=active]:bg-background`}
+              >
+                分组 <span className="text-xs opacity-60">{groups.length}</span>
+              </TabsTrigger>
+              <TabsTrigger
+                value="installed"
+                className={`${summaryTabClass} gap-2 data-[state=active]:bg-background data-[state=active]:text-foreground dark:data-[state=active]:bg-background`}
+              >
+                已配置 MCP{" "}
+                <span className="text-xs opacity-60">{configured.length}</span>
+              </TabsTrigger>
+              <TabsTrigger
+                value="manual"
+                className={`${summaryTabClass} gap-2 data-[state=active]:bg-background data-[state=active]:text-foreground dark:data-[state=active]:bg-background`}
+              >
+                未托管 MCP{" "}
+                <span className="text-xs opacity-60">{manual.length}</span>
+              </TabsTrigger>
+            </TabsList>
+          </SummaryStart>
+          <SummaryEnd>
+            <Badge variant="outline" className={summaryPillClass}>
               已启用 {groups.some((g) => g.id === active?.groupId) ? 1 : 0}{" "}
               个分组
             </Badge>
-            <Badge variant="outline" className="px-3 py-1 text-sm font-medium">
+            <Badge variant="outline" className={summaryPillClass}>
               已启用 {installed.length} 个 MCP
             </Badge>
-          </div>
-        </div>
+            <McpAgentNote agent={agent} compact />
+          </SummaryEnd>
+        </SummaryBar>
         <TabsContent
           value="groups"
           className="min-h-0 flex-1 overflow-y-auto pb-6"
@@ -430,7 +442,7 @@ function LocalGroups({ agent }: { agent: string }) {
                 : "新建 MCP 分组"}
             </DialogTitle>
             <DialogDescription>
-              为 {agent === "claude" ? "Claude Code" : "Codex"} 选择 MCP
+              为 {mcpAgentName(agent)} 选择 MCP
               组合，保存后点击启用。保存只记录成员，不会托管或修改已有配置。
             </DialogDescription>
           </DialogHeader>

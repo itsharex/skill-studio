@@ -4,7 +4,7 @@
 
 The OpenCode, Pi, and Grok marks in `src/components/common/AgentIcon.tsx` are adapted from `farion1231/cc-switch`, `src/icons/extracted/index.ts`, at commit `da193d4f7a6ce3710623c312245c752376c0d036`.
 
-The icon names follow CC Switch's `src/components/AppSwitcher.tsx`: `opencode` → `opencode`, `pi` → `pi`, and `grokbuild` → `grok`. SVG paths and viewBox proportions are preserved. Attributes are converted to JSX; OpenCode's full-canvas mask and clipping wrapper are omitted, and its fills are adapted for dark mode.
+The icon names follow CC Switch's `src/components/AppSwitcher.tsx`: `opencode` → `opencode`, `pi` → `pi`, and `grokbuild` → `grok`. SVG paths and artwork proportions are preserved; viewBox padding is adjusted to give the marks a consistent visible size. Attributes are converted to JSX; OpenCode's full-canvas mask and clipping wrapper are omitted, and its fills are adapted for dark mode.
 
 MIT License
 
