@@ -1,4 +1,11 @@
 import { supportsMcp } from "@/lib/mcpAgents";
+import {
+  readInitialView,
+  initialResource,
+  VIEW_STORAGE_KEY,
+  type StaticView,
+  type ViewId,
+} from "@/lib/initialView";
 import { AgentMcpGroups } from "@/pages/AgentMcpGroups";
 import { McpProjectsPage } from "@/pages/McpProjectsPage";
 import {
@@ -43,10 +50,6 @@ import { SettingsPage } from "@/pages/SettingsPage";
 const DRAG_BAR_HEIGHT = isWindows() || isLinux() ? 0 : 28;
 
 const AGENT_PREFIX = "agent:";
-const VIEW_STORAGE_KEY = "skill-studio-view";
-
-type StaticView = "mcp" | "library" | "projects" | "settings" | "install";
-type ViewId = StaticView | `agent:${string}`;
 
 const STATIC_TITLES: Record<StaticView, string> = {
   mcp: "MCP Hub",
@@ -68,7 +71,7 @@ function AppContent() {
   const target = useTarget();
   const connecting = useTargetConnecting();
   const requestNavigation = useNavigationGuard();
-  const { data: allAgents = [] } = useAgents();
+  const { data: allAgents = [], isDetecting, detectionFailed } = useAgents();
   const { data: settings } = useSettings();
   const mcpEnabled = settings ? settings.manageMcp !== false : false;
   const agents = useMemo(
@@ -79,26 +82,11 @@ function AppContent() {
   useSkillsAutoRefresh();
 
   const [initError, setInitError] = useState<string | null>(null);
-  const [view, setView] = useState<ViewId>(() => {
-    const stored = localStorage.getItem(VIEW_STORAGE_KEY) as ViewId | null;
-    // 设置是临时视图，重启后停在这里没有意义；
-    // 旧版本可能已经把它写进过 localStorage，这里一并挡掉。
-    return stored &&
-      (stored === "mcp" ||
-        stored === "projects" ||
-        stored === "library" ||
-        stored.startsWith(AGENT_PREFIX))
-      ? stored
-      : "library";
-  });
+  const [view, setView] = useState<ViewId>(() =>
+    readInitialView(settings, target.id),
+  );
   const [resource, setResource] = useState<"skills" | "mcp">(() =>
-    view === "mcp"
-      ? "mcp"
-      : view === "library"
-        ? "skills"
-        : localStorage.getItem("skill-studio-resource") === "mcp"
-          ? "mcp"
-          : "skills",
+    initialResource(view, settings),
   );
   const activeResource = mcpEnabled ? resource : "skills";
   const remoteMcp = target.id !== "local" && activeResource === "mcp";
@@ -187,7 +175,13 @@ function AppContent() {
             id: `${AGENT_PREFIX}${a.id}` as ViewId,
             label: a.displayName,
             icon: <AgentIcon agentId={a.id} />,
-            badge: a.detected ? undefined : "未装",
+            badge: a.detected
+              ? undefined
+              : isDetecting
+                ? "检测中"
+                : detectionFailed
+                  ? "检测失败"
+                  : "未装",
             disabledReason: remoteMcp
               ? "远程 MCP 暂不支持分组管理，请在 MCP Hub 查看。"
               : undefined,
@@ -207,7 +201,14 @@ function AppContent() {
         ],
       },
     ],
-    [agents, activeResource, mcpEnabled, remoteMcp],
+    [
+      agents,
+      activeResource,
+      mcpEnabled,
+      remoteMcp,
+      isDetecting,
+      detectionFailed,
+    ],
   );
 
   const refresh = () => {

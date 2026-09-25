@@ -7,6 +7,7 @@ import { Toaster } from "sonner";
 import { queryClient } from "@/lib/query/queryClient";
 import { ThemeProvider } from "@/components/theme-provider";
 import App from "@/App";
+import { StartupBoundary } from "@/components/common/StartupBoundary";
 import "@/index.css";
 
 ReactDOM.createRoot(document.getElementById("root")!).render(
@@ -15,7 +16,9 @@ ReactDOM.createRoot(document.getElementById("root")!).render(
       <ThemeProvider>
         <NavigationGuard>
           <TargetProvider>
-            <App />
+            <StartupBoundary>
+              <App />
+            </StartupBoundary>
           </TargetProvider>
         </NavigationGuard>
         <Toaster position="top-center" richColors duration={2000} />

@@ -17,7 +17,7 @@ import {
 import { calls, handlers, makeSkill, defaultSettings } from "./mocks/tauri";
 
 /**
- * scan_skills 是同步命令，跑在 Tauri 的事件循环线程上：多扫一次就是多卡一次界面。
+ * scan_skills 在后台线程遍历全库并占用配置锁，避免导航触发无谓的重复扫描。
  * 这里验证的是"什么时候不该扫"和"什么时候必须扫"两侧。
  */
 function wrapper(providedClient?: QueryClient) {
@@ -125,7 +125,9 @@ it("defers data refresh after an Agent visibility change but refreshes on next n
       disabledAgents: ["opencode"],
     });
   });
-  expect(calls.filter((c) => c.command === "list_agents")).toHaveLength(1);
+  expect(
+    calls.filter((c) => c.command === "list_agents").map((c) => c.args),
+  ).toEqual([{ skipCliProbe: true }, { skipCliProbe: false }]);
   expect(scans()).toHaveLength(1);
   expect(client.getQueryState(queryKeys.config)?.isInvalidated).toBe(true);
   expect(client.getQueryState(queryKeys.groups)?.isInvalidated).toBe(true);
@@ -158,5 +160,13 @@ it("still refreshes Agent discovery and Skill data when config directories chang
     });
   });
   await waitFor(() => expect(scans()).toHaveLength(2));
-  expect(calls.filter((c) => c.command === "list_agents")).toHaveLength(2);
+  for (const skipCliProbe of [true, false]) {
+    expect(
+      calls.filter(
+        (c) =>
+          c.command === "list_agents" &&
+          (c.args as { skipCliProbe: boolean }).skipCliProbe === skipCliProbe,
+      ),
+    ).toHaveLength(2);
+  }
 });

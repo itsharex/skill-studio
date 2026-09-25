@@ -17,20 +17,48 @@ import type { LinkMode, SettingsPatch } from "@/types";
 
 /* ─────────────────── 查询 ─────────────────── */
 
-export function useAgents() {
+export function useAgentInventory() {
   return useQuery({
     queryKey: queryKeys.agents,
-    queryFn: () => agentsApi.list(false),
-    // CLI 探测要起子进程，不必频繁重跑
+    queryFn: () => agentsApi.list(true),
     staleTime: 60_000,
   });
+}
+
+export function useAgents() {
+  const inventory = useAgentInventory();
+  const probe = useQuery({
+    queryKey: queryKeys.agentProbe,
+    queryFn: () => agentsApi.list(false),
+    enabled: inventory.data !== undefined,
+    // Version detection enriches the inventory; it never blocks navigation.
+    staleTime: 60_000,
+  });
+  const details = new Map(probe.data?.map((agent) => [agent.id, agent]));
+  return {
+    ...inventory,
+    data: inventory.data?.map((agent) => {
+      const detail = details.get(agent.id);
+      return detail
+        ? {
+            ...agent,
+            detected: agent.detected || detail.detected,
+            cliAvailable: detail.cliAvailable,
+            cliBroken: detail.cliBroken,
+            cliVersion: detail.cliVersion,
+          }
+        : agent;
+    }),
+    isDetecting: probe.data === undefined && !probe.isError,
+    detectionFailed: probe.isError,
+  };
 }
 
 export function useSkills() {
   return useQuery({
     queryKey: queryKeys.skills,
     queryFn: () => skillsApi.scan(),
-    // scan_skills 是同步命令、全库走一遍文件系统，期间界面是卡住的，而全局默认
+    // scan_skills 在后台线程遍历全库并占用配置锁；全局默认的
     // staleTime: 0 + refetchOnWindowFocus 会让纯导航和切回窗口都白扫一次。
     // 敢留这个窗口是因为失效不靠过期驱动：watcher 的 skills-changed、写操作后的
     // invalidate、手动刷新都是 invalidateQueries，对活跃查询立即重取、不看 staleTime。

@@ -161,6 +161,8 @@ it("keeps Agent buttons and focus stable while saving and rolls back failed chan
   await act(async () => rejectSave(new Error("disk full")));
   await waitFor(() => expect(button).toHaveAttribute("aria-pressed", "true"));
   expect(button).toHaveFocus();
-  expect(calls.filter((c) => c.command === "list_agents")).toHaveLength(1);
+  expect(
+    calls.filter((c) => c.command === "list_agents").map((c) => c.args),
+  ).toEqual([{ skipCliProbe: true }, { skipCliProbe: false }]);
   expect(calls.filter((c) => c.command === "get_config_dir")).toHaveLength(1);
 });

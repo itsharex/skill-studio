@@ -10,6 +10,8 @@ pub fn list_agents(
     skip_cli_probe: Option<bool>,
 ) -> Result<Vec<AgentInfo>, String> {
     let skip = skip_cli_probe.unwrap_or(false);
-    let config = state.config();
+    // CLI probes can take seconds. Do not hold the read lock while probing:
+    // startup skill scanning needs the write lock to reconcile manual skills.
+    let config = state.config().clone();
     Ok(state.studio().agents(&config, skip))
 }
