@@ -75,7 +75,7 @@ pub fn search_catalog_skills(
 #[serde(tag = "status", rename_all = "camelCase")]
 pub enum CatalogInstallResult {
     Installed {
-        skill: Skill,
+        skill: Box<Skill>,
     },
     SelectionRequired {
         candidates: Vec<skill_studio_core::services::marketplace::CatalogCandidate>,
@@ -91,9 +91,11 @@ pub fn install_catalog_skill(
     use skill_studio_core::services::marketplace::{prepare_catalog, CatalogPreparation};
     match prepare_catalog(&source, &skill_id, repository_path.as_deref()).map_err(String::from)? {
         CatalogPreparation::Ready(prepared) => Ok(CatalogInstallResult::Installed {
-            skill: state
-                .install_catalog_skill(&prepared)
-                .map_err(String::from)?,
+            skill: Box::new(
+                state
+                    .install_catalog_skill(&prepared)
+                    .map_err(String::from)?,
+            ),
         }),
         CatalogPreparation::SelectionRequired(candidates) => {
             Ok(CatalogInstallResult::SelectionRequired { candidates })
