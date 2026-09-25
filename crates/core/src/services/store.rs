@@ -60,6 +60,7 @@ impl Store {
         super::transaction::recover(&self.dir.join("migration.json"))?;
         super::transaction::recover(&self.dir.join("skill-files.json"))?;
         super::transaction::recover(&self.dir.join("group-switch.json"))?;
+        super::transaction::recover(&self.dir.join("skill-unregister.json"))?;
         super::transaction::recover(&self.dir.join("manual-policy.json"))?;
         super::transaction::recover(&self.dir.join("project-write.json"))?;
         let path = self.config_path();

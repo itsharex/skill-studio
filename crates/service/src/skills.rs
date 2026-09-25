@@ -29,7 +29,7 @@ pub fn unregister_skills(
     force: Option<bool>,
 ) -> Result<LinkReport, String> {
     state
-        .mutate(|studio, config| {
+        .transactional(|studio, config| {
             studio.unregister(config, &skill_ids, &agent_ids, force.unwrap_or(false))
         })
         .map_err(Into::into)

@@ -256,6 +256,81 @@ fn catalog_candidates_use_complete_content_and_install_only_the_selected_path() 
 }
 
 #[test]
+fn malformed_sibling_is_reported_but_does_not_block_explicit_healthy_selection() {
+    let bytes = archive(&[
+        ("root/skills/demo/SKILL.md", "---\nname: demo\n---\nhealthy"),
+        (
+            "root/.codex/skills/demo/SKILL.md",
+            "---\nname: [broken\n---",
+        ),
+    ]);
+    let marketplace::CatalogPreparation::SelectionRequired(candidates) =
+        marketplace::prepare_catalog_archive("owner/repo", "demo", &bytes, None).unwrap()
+    else {
+        panic!("must acknowledge unavailable candidate")
+    };
+    assert_eq!(candidates.len(), 2);
+    assert!(candidates[0]
+        .error
+        .as_ref()
+        .unwrap()
+        .contains(".codex/skills/demo"));
+    assert!(candidates[1].error.is_none());
+    assert!(matches!(
+        marketplace::prepare_catalog_archive("owner/repo", "demo", &bytes, Some("skills/demo"))
+            .unwrap(),
+        marketplace::CatalogPreparation::Ready(_)
+    ));
+    let error = marketplace::prepare_catalog_archive(
+        "owner/repo",
+        "demo",
+        &bytes,
+        Some(".codex/skills/demo"),
+    )
+    .err()
+    .unwrap()
+    .to_string();
+    assert!(error.contains(".codex/skills/demo"));
+    let all_bad = archive(&[("root/skills/demo/SKILL.md", "---\nname: [broken\n---")]);
+    assert!(
+        marketplace::prepare_catalog_archive("owner/repo", "demo", &all_bad, None)
+            .err()
+            .unwrap()
+            .to_string()
+            .contains("skills/demo")
+    );
+}
+
+#[test]
+fn unhashable_sibling_does_not_block_a_healthy_candidate() {
+    let deep = format!(
+        "root/.codex/skills/demo/{}tool.txt",
+        "nested/".repeat(scanner::MAX_SCAN_DEPTH + 2)
+    );
+    let document = "---\nname: demo\n---\nhealthy";
+    let bytes = archive(&[
+        ("root/skills/demo/SKILL.md", document),
+        ("root/.codex/skills/demo/SKILL.md", document),
+        (&deep, "resource"),
+    ]);
+    let marketplace::CatalogPreparation::SelectionRequired(candidates) =
+        marketplace::prepare_catalog_archive("owner/repo", "demo", &bytes, None).unwrap()
+    else {
+        panic!("expected candidate error")
+    };
+    assert!(candidates[0]
+        .error
+        .as_ref()
+        .unwrap()
+        .contains(".codex/skills/demo"));
+    assert!(matches!(
+        marketplace::prepare_catalog_archive("owner/repo", "demo", &bytes, Some("skills/demo"))
+            .unwrap(),
+        marketplace::CatalogPreparation::Ready(_)
+    ));
+}
+
+#[test]
 fn identical_candidates_report_matching_hashes() {
     let document = "---\nname: demo\n---\nbody";
     let bytes = archive(&[

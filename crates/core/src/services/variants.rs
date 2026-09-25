@@ -58,7 +58,9 @@ pub fn entries<'a>(config: &'a AppConfig, skill: &Skill) -> &'a [SkillVariant] {
         .unwrap_or(&[])
 }
 
-pub fn for_agent(config: &AppConfig, skill: &Skill, agent: &str) -> Result<Skill> {
+/// Resolve identity without reading source contents. Used for existing deployments,
+/// including broken sources; this never authorizes copying from that path.
+pub fn deployment_source(config: &AppConfig, skill: &Skill, agent: &str) -> Result<Skill> {
     let variants = entries(config, skill);
     if variants.is_empty() {
         return Ok(skill.clone());
@@ -73,13 +75,35 @@ pub fn for_agent(config: &AppConfig, skill: &Skill, agent: &str) -> Result<Skill
                 skill.name, agent
             ))
         })?;
-    let source = payload(&skill.source_path, &selected.key)?;
+    if selected.key != GENERIC && !AGENTS.iter().any(|a| a.id == selected.key) {
+        return Err(Error::invalid("无效的 Skill 变体标识"));
+    }
+    let mut resolved = skill.clone();
+    resolved.source_path = skill.source_path.join(DIRECTORY).join(&selected.key);
+    Ok(resolved)
+}
+
+pub fn for_agent(config: &AppConfig, skill: &Skill, agent: &str) -> Result<Skill> {
+    let mut resolved = deployment_source(config, skill, agent)?;
+    let source = resolved.source_path.clone();
+    if !entries(config, skill).is_empty() {
+        payload(
+            &skill.source_path,
+            source.file_name().unwrap().to_str().unwrap(),
+        )?;
+    }
     scanner::validate_sync_source(&source)?;
     let fm = scanner::parse_frontmatter(&source.join(scanner::SKILL_FILE));
     if fm.malformed {
-        return Err(Error::invalid("Skill 变体的 YAML 格式无效"));
+        return Err(Error::invalid(format!(
+            "Skill 的 YAML 格式无效：{}",
+            source.display()
+        )));
     }
-    let mut resolved = skill.clone();
+    // Single-source views already carry their scanned hash and metadata.
+    if entries(config, skill).is_empty() {
+        return Ok(resolved);
+    }
     resolved.content_hash = scanner::dir_content_hash(&source)?;
     resolved.source_path = source;
     resolved.description = fm.description;

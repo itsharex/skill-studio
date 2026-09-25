@@ -44,10 +44,12 @@ export function InstallSkillsPage({ onBack }: { onBack?: () => void }) {
   const grouped = !!selection?.candidates.every((c) => c.variantKey);
   const slot = (candidate: CatalogCandidate) =>
     grouped ? candidate.variantKey! : "source";
-  const requiredSlots = new Set(selection?.candidates.map(slot));
-  const selectionReady = [...requiredSlots].every(
-    (key) => key in selectedPaths,
+  const requiredSlots = new Set(
+    selection?.candidates.filter((c) => !c.error).map(slot),
   );
+  const selectionReady =
+    requiredSlots.size > 0 &&
+    [...requiredSlots].every((key) => key in selectedPaths);
   const { data: installed = [] } = useSkills();
   const client = useQueryClient();
   const search = useQuery({
@@ -76,10 +78,10 @@ export function InstallSkillsPage({ onBack }: { onBack?: () => void }) {
         setSelection({ skill, candidates: result.candidates });
         const choices: Record<string, string> = {};
         if (result.candidates.every((c) => c.variantKey)) {
-          for (const candidate of result.candidates) {
+          for (const candidate of result.candidates.filter((c) => !c.error)) {
             if (
               result.candidates.filter(
-                (c) => c.variantKey === candidate.variantKey,
+                (c) => !c.error && c.variantKey === candidate.variantKey,
               ).length === 1
             )
               choices[candidate.variantKey!] = candidate.repositoryPath;
@@ -128,17 +130,24 @@ export function InstallSkillsPage({ onBack }: { onBack?: () => void }) {
             <p className="break-all text-xs text-muted-foreground">
               {selection?.skill.source}
             </p>
-            {selection && (
-              <p className="text-sm text-muted-foreground">
-                {new Set(
-                  selection.candidates.map(
-                    (candidate) => candidate.contentHash,
-                  ),
-                ).size === 1
-                  ? "这些目录的文件内容相同，但来源路径不同。"
-                  : "这些目录的文件内容不同，可能是针对不同 Agent 的版本。"}
+            {selection?.candidates.some((c) => c.error) && (
+              <p role="alert" className="text-sm text-amber-600">
+                部分目录不可用，不会安装这些版本。确认后仅安装可用版本；缺少专用版的
+                Agent 将使用通用版，没有通用版则不可部署。
               </p>
             )}
+            {selection &&
+              selection.candidates.filter((c) => !c.error).length > 1 && (
+                <p className="text-sm text-muted-foreground">
+                  {new Set(
+                    selection.candidates
+                      .filter((c) => !c.error)
+                      .map((candidate) => candidate.contentHash),
+                  ).size === 1
+                    ? "这些目录的文件内容相同，但来源路径不同。"
+                    : "这些目录的文件内容不同，可能是针对不同 Agent 的版本。"}
+                </p>
+              )}
             <fieldset disabled={install.isPending} className="space-y-2">
               <legend className="sr-only">安装目录</legend>
               {selection?.candidates.map((candidate) => (
@@ -150,6 +159,7 @@ export function InstallSkillsPage({ onBack }: { onBack?: () => void }) {
                     type="radio"
                     name={`catalog-path-${slot(candidate)}`}
                     className="mt-1"
+                    disabled={!!candidate.error}
                     checked={
                       selectedPaths[slot(candidate)] ===
                       candidate.repositoryPath
@@ -170,6 +180,11 @@ export function InstallSkillsPage({ onBack }: { onBack?: () => void }) {
                     <span className="block break-all font-mono text-sm">
                       {candidate.repositoryPath || "仓库根目录"}
                     </span>
+                    {candidate.error && (
+                      <span className="block text-xs text-destructive">
+                        {candidate.error}
+                      </span>
+                    )}
                     {candidate.description && (
                       <span className="mt-1 block whitespace-pre-wrap break-words text-xs text-muted-foreground">
                         {candidate.description}

@@ -213,7 +213,7 @@ pub fn unapply_project(
     force: Option<bool>,
 ) -> Result<LinkReport, String> {
     state
-        .mutate(|studio, config| {
+        .transactional(|studio, config| {
             studio.unapply_project(config, &project_id, &skill_ids, force.unwrap_or(false))
         })
         .map_err(Into::into)

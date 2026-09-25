@@ -149,7 +149,7 @@ pub fn apply_group(
     force: Option<bool>,
 ) -> Result<LinkReport, String> {
     state
-        .mutate(|studio, config| {
+        .transactional(|studio, config| {
             studio.apply_group(config, &group_id, &agent_ids, mode, force.unwrap_or(false))
         })
         .map_err(Into::into)

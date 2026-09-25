@@ -125,6 +125,8 @@ pub struct PreparedSkill {
 #[derive(Debug, Clone, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct CatalogCandidate {
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub error: Option<String>,
     pub repository_path: String,
     pub variant_key: Option<String>,
     pub description: Option<String>,
@@ -326,11 +328,14 @@ pub fn prepare_catalog_archive_variants(
     let candidates = found
         .iter()
         .map(|directory| {
-            scanner::validate_sync_source(directory)?;
             let fm = scanner::parse_frontmatter(&directory.join("SKILL.md"));
-            if fm.malformed {
-                return Err(Error::invalid("Skill 的 YAML 格式无效"));
-            }
+            let validation = (|| -> Result<String> {
+                scanner::validate_sync_source(directory)?;
+                if fm.malformed {
+                    return Err(Error::invalid("Skill 的 YAML 格式无效"));
+                }
+                scanner::dir_content_hash(directory)
+            })();
             if directory.join(variants::DIRECTORY).exists() {
                 return Err(Error::invalid("仓库包含保留的变体目录"));
             }
@@ -340,9 +345,19 @@ pub fn prepare_catalog_archive_variants(
                     variants::repository_key(&repository_path)
                         .ok_or_else(|| Error::invalid("Skill 来源不在支持的目录中"))?,
                 ),
+                error: validation.as_ref().err().map(|e| {
+                    format!(
+                        "{}：{e}",
+                        if repository_path.is_empty() {
+                            "仓库根目录"
+                        } else {
+                            &repository_path
+                        }
+                    )
+                }),
                 repository_path,
                 description: fm.description,
-                content_hash: scanner::dir_content_hash(directory)?,
+                content_hash: validation.unwrap_or_default(),
             })
         })
         .collect::<Result<Vec<_>>>()?;
@@ -352,16 +367,37 @@ pub fn prepare_catalog_archive_variants(
     {
         return Err(Error::invalid("所选 skill 目录已失效，请重新选择安装来源"));
     }
+    for candidate in &candidates {
+        if selected.contains(&candidate.repository_path) {
+            if let Some(error) = &candidate.error {
+                return Err(Error::invalid(error));
+            }
+        }
+    }
+    if candidates.iter().all(|c| c.error.is_some()) {
+        return Err(Error::invalid(
+            candidates
+                .iter()
+                .filter_map(|c| c.error.as_deref())
+                .collect::<Vec<_>>()
+                .join("；"),
+        ));
+    }
+    // Require acknowledgement before installing a partial, healthy collection.
+    if selected.is_empty() && candidates.iter().any(|c| c.error.is_some()) {
+        return Ok(CatalogPreparation::SelectionRequired(candidates));
+    }
     let mut chosen = Vec::new();
     let keys: std::collections::BTreeSet<_> = candidates
         .iter()
+        .filter(|c| c.error.is_none())
         .filter_map(|c| c.variant_key.clone())
         .collect();
     for key in keys {
         let bucket: Vec<_> = candidates
             .iter()
             .enumerate()
-            .filter(|(_, c)| c.variant_key.as_deref() == Some(&key))
+            .filter(|(_, c)| c.error.is_none() && c.variant_key.as_deref() == Some(&key))
             .collect();
         let explicit: Vec<_> = bucket
             .iter()

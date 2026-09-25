@@ -72,6 +72,7 @@ export interface CatalogSkill {
 }
 
 export interface CatalogCandidate {
+  error?: string | null;
   repositoryPath: string;
   variantKey?: string | null;
   description: string | null;

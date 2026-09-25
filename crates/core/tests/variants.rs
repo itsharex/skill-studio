@@ -51,6 +51,257 @@ fn body(path: &std::path::Path) -> String {
 
 #[test]
 #[serial]
+fn damaged_sources_preserve_identity_and_allow_cleanup_of_intact_copies() {
+    for missing in [false, true] {
+        let env = Env::new();
+        let studio = env.studio();
+        let mut c = studio.load_config().unwrap();
+        let skill = studio.install_catalog_skill(&mut c, &bundle(true)).unwrap();
+        let ids = vec![skill.id.clone()];
+        let agents = vec!["claude-code".into(), "codex".into()];
+        studio
+            .register(&mut c, &ids, &agents, Some(LinkMode::Copy), false)
+            .unwrap();
+        let path = variants::payload(&skill.source_path, "codex").unwrap();
+        if missing {
+            fs::remove_dir_all(path).unwrap();
+        } else {
+            fs::write(path.join("SKILL.md"), "---\nname: [broken\n---").unwrap();
+        }
+        let views = studio.scan_skills(&c).unwrap();
+        assert_eq!(views.len(), 1);
+        assert!(views[0].diagnostics.is_empty());
+        assert!(views[0].agents["codex"].unavailable_reason.is_some());
+        assert!(views[0].agents["codex"].status.is_registered());
+        assert!(views[0].agents["claude-code"].unavailable_reason.is_none());
+        studio
+            .set_skill_enabled(&c, &skill.id, "codex", false)
+            .unwrap();
+        let report = studio.unregister(&mut c, &ids, &agents, false).unwrap();
+        assert!(report.failed.is_empty());
+        assert!(!env.codex_skills().join("demo").exists());
+        assert!(!env.claude_skills().join("demo").exists());
+        assert!(studio.load_config().unwrap().registrations.is_empty());
+    }
+}
+
+#[test]
+#[serial]
+fn missing_source_does_not_authorize_deleting_modified_copy_and_management_can_exit() {
+    let env = Env::new();
+    let studio = env.studio();
+    let mut c = studio.load_config().unwrap();
+    let skill = studio.install_catalog_skill(&mut c, &bundle(true)).unwrap();
+    studio
+        .register(
+            &mut c,
+            std::slice::from_ref(&skill.id),
+            &["codex".into()],
+            Some(LinkMode::Copy),
+            false,
+        )
+        .unwrap();
+    fs::remove_dir_all(variants::payload(&skill.source_path, "codex").unwrap()).unwrap();
+    let target = env.codex_skills().join("demo");
+    fs::write(target.join("scripts/tool.txt"), "local edit").unwrap();
+    assert!(!studio
+        .unregister(
+            &mut c,
+            std::slice::from_ref(&skill.id),
+            &["codex".into()],
+            false
+        )
+        .unwrap()
+        .failed
+        .is_empty());
+    assert!(target.exists());
+    assert!(c.registration(&skill.id, "codex").is_some());
+    assert!(studio.set_agent_management(&mut c, "codex", false).is_err());
+    fs::write(target.join("scripts/tool.txt"), "codex").unwrap();
+    studio.set_agent_management(&mut c, "codex", false).unwrap();
+    assert!(!target.exists());
+    assert!(c.settings.disabled_agents.contains(&"codex".into()));
+}
+
+#[test]
+#[serial]
+fn unregister_rolls_back_files_when_config_cannot_be_saved() {
+    let env = Env::new();
+    let studio = env.studio();
+    let mut c = studio.load_config().unwrap();
+    let skill = studio.install_catalog_skill(&mut c, &bundle(true)).unwrap();
+    studio
+        .register(
+            &mut c,
+            std::slice::from_ref(&skill.id),
+            &["codex".into()],
+            Some(LinkMode::Copy),
+            false,
+        )
+        .unwrap();
+    let path = studio.store().config_path();
+    let bytes = fs::read(&path).unwrap();
+    fs::remove_file(&path).unwrap();
+    fs::create_dir(&path).unwrap();
+    assert!(studio
+        .unregister(
+            &mut c,
+            std::slice::from_ref(&skill.id),
+            &["codex".into()],
+            false
+        )
+        .is_err());
+    assert_eq!(body(&env.codex_skills().join("demo")), "codex");
+    assert!(c.registration(&skill.id, "codex").is_some());
+    fs::remove_dir(&path).unwrap();
+    fs::write(path, bytes).unwrap();
+}
+
+#[test]
+#[serial]
+fn preview_damage_does_not_block_healthy_group_or_project_and_project_removal_ignores_source_damage(
+) {
+    let env = Env::new();
+    let studio = env.studio();
+    let mut c = studio.load_config().unwrap();
+    let skill = studio.install_catalog_skill(&mut c, &bundle(true)).unwrap();
+    fs::write(
+        skill.source_path.join("SKILL.md"),
+        "---\nname: [broken\n---",
+    )
+    .unwrap();
+    studio
+        .save_agent_group(&mut c, "g".into(), "codex", "Group", vec![skill.id.clone()])
+        .unwrap();
+    studio
+        .activate_agent_group(&mut c, "codex", Some("g"))
+        .unwrap();
+    studio.activate_agent_group(&mut c, "codex", None).unwrap();
+    fs::remove_file(skill.source_path.join("SKILL.md")).unwrap();
+    let views = studio.scan_skills(&c).unwrap();
+    assert_eq!(views.len(), 1);
+    assert_eq!(views[0].skill.id, skill.id);
+    let root = env.path().join("project");
+    fs::create_dir_all(&root).unwrap();
+    let mut project = ProjectBinding::new("p".into(), "Project".into(), root.clone());
+    project.agent_ids = vec!["claude-code".into(), "codex".into()];
+    project.skill_ids = vec![skill.id.clone()];
+    c.projects.push(project);
+    studio.apply_project(&mut c, "p").unwrap();
+    fs::remove_dir_all(variants::payload(&skill.source_path, "codex").unwrap()).unwrap();
+    let report = studio
+        .unapply_project(&mut c, "p", std::slice::from_ref(&skill.id), false)
+        .unwrap();
+    assert!(report.failed.is_empty());
+    assert!(!root.join(".claude/skills/demo").exists());
+    assert!(!root.join(".agents/skills/demo").exists());
+    assert!(studio.load_config().unwrap().projects[0]
+        .managed_entries
+        .is_empty());
+}
+
+#[cfg(unix)]
+#[test]
+#[serial]
+fn missing_preview_keeps_variant_links_attached_to_the_hub_identity() {
+    let env = Env::new();
+    let studio = env.studio();
+    let mut c = studio.load_config().unwrap();
+    let skill = studio.install_catalog_skill(&mut c, &bundle(true)).unwrap();
+    studio
+        .register(
+            &mut c,
+            std::slice::from_ref(&skill.id),
+            &["codex".into(), "pi".into()],
+            Some(LinkMode::Symlink),
+            false,
+        )
+        .unwrap();
+    fs::remove_file(skill.source_path.join("SKILL.md")).unwrap();
+    let views = studio.scan_skills(&c).unwrap();
+    assert_eq!(views.len(), 1);
+    assert_eq!(views[0].skill.id, skill.id);
+    assert_eq!(views[0].skill.name, "demo");
+    assert_eq!(views[0].agents["codex"].status, LinkStatus::Linked);
+    assert_eq!(views[0].agents["pi"].status, LinkStatus::Linked);
+    let payload = variants::payload(&skill.source_path, "codex").unwrap();
+    let outside = env.path().join("outside");
+    fs::rename(&payload, &outside).unwrap();
+    std::os::unix::fs::symlink(&outside, &payload).unwrap();
+    let views = studio.scan_skills(&c).unwrap();
+    assert_eq!(views.len(), 1);
+    assert_eq!(views[0].skill.id, skill.id);
+    assert!(views[0].agents["codex"].unavailable_reason.is_some());
+    studio
+        .unregister(
+            &mut c,
+            std::slice::from_ref(&skill.id),
+            &["codex".into(), "pi".into()],
+            false,
+        )
+        .unwrap();
+    assert!(outside.join("SKILL.md").is_file());
+    assert!(!env.codex_skills().join("demo").exists());
+}
+
+#[test]
+#[serial]
+fn deployment_checks_reject_bad_actual_sources_for_bundles_and_single_skills() {
+    for bundled in [false, true] {
+        let env = Env::new();
+        let studio = env.studio();
+        let mut c = studio.load_config().unwrap();
+        let prepared = if bundled {
+            bundle(true)
+        } else {
+            marketplace::prepare_archive(
+                "owner/repo",
+                "demo",
+                &archive(&[("skills/demo", "generic")]),
+            )
+            .unwrap()
+        };
+        let skill = studio.install_catalog_skill(&mut c, &prepared).unwrap();
+        let source = if bundled {
+            variants::payload(&skill.source_path, "codex").unwrap()
+        } else {
+            skill.source_path.clone()
+        };
+        fs::write(source.join("SKILL.md"), "---\nname: [broken\n---").unwrap();
+        studio
+            .save_agent_group(&mut c, "g".into(), "codex", "Group", vec![skill.id.clone()])
+            .unwrap();
+        assert!(studio
+            .activate_agent_group(&mut c, "codex", Some("g"))
+            .is_err());
+        assert!(!env.codex_skills().join("demo").exists());
+        let root = env.path().join("project");
+        fs::create_dir_all(&root).unwrap();
+        let mut project = ProjectBinding::new("p".into(), "Project".into(), root.clone());
+        project.agent_ids = vec!["codex".into()];
+        project.skill_ids = vec![skill.id.clone()];
+        c.projects.push(project);
+        assert!(studio.apply_project(&mut c, "p").is_err());
+        assert!(!root.join(".agents/skills/demo").exists());
+        assert_eq!(
+            studio
+                .register(
+                    &mut c,
+                    std::slice::from_ref(&skill.id),
+                    &["codex".into()],
+                    Some(LinkMode::Copy),
+                    false
+                )
+                .unwrap()
+                .failed
+                .len(),
+            1
+        );
+    }
+}
+
+#[test]
+#[serial]
 fn variants_share_one_identity_but_deploy_distinct_payloads_and_fallback() {
     let env = Env::new();
     let studio = env.studio();

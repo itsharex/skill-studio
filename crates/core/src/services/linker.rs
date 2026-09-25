@@ -65,7 +65,13 @@ pub fn link_status(source: &Path, dest: &Path) -> LinkStatus {
                 return LinkStatus::CopyDamaged;
             };
             let Ok(current) = scanner::dir_content_hash(source) else {
-                return LinkStatus::CopyConflict;
+                // Source availability does not determine ownership of an intact
+                // deployed copy. Never discard target-local modifications.
+                return if actual == sidecar.source_hash {
+                    LinkStatus::Copied
+                } else {
+                    LinkStatus::CopyModified
+                };
             };
             if actual != sidecar.source_hash {
                 if current == sidecar.source_hash {

@@ -102,9 +102,6 @@ impl Studio {
                 let resolved = super::variants::for_agent(config, &view.skill, agent_id)?;
                 let skill = &resolved;
                 scanner::validate_sync_source(&skill.source_path)?;
-                if view.malformed_frontmatter {
-                    return Err(Error::invalid("Skill 的 YAML 格式无效"));
-                }
                 let dest = root.join(&skill.name);
                 if self
                     .skill_backups()?

@@ -96,6 +96,16 @@ impl AppState {
         Ok(outcome)
     }
 
+    /// Core operation owns the filesystem/config transaction and updates memory
+    /// only after commit. Do not follow it with a second, fallible config save.
+    pub(crate) fn transactional<T>(
+        &self,
+        f: impl FnOnce(&Studio, &mut AppConfig) -> Result<T>,
+    ) -> Result<T> {
+        self.ensure_writable()?;
+        f(&self.studio, &mut self.config_mut())
+    }
+
     pub fn register_skills(
         &self,
         ids: &[String],

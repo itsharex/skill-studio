@@ -154,12 +154,6 @@ impl Studio {
             let mut view = view.clone();
             view.skill = super::variants::for_agent(config, &view.skill, agent_id)?;
             scanner::validate_sync_source(&view.skill.source_path)?;
-            if view.malformed_frontmatter {
-                return Err(Error::invalid(format!(
-                    "{} 的 YAML 有误，请先修复后启用",
-                    view.skill.name
-                )));
-            }
             let state = &view.agents[agent_id];
             let retained = owned
                 .iter()
@@ -290,7 +284,8 @@ impl Studio {
                 use crate::models::skill::LinkStatus::*;
                 if !matches!(
                     linker::link_status(
-                        &super::variants::for_agent(config, &view.skill, agent_id)?.source_path,
+                        &super::variants::deployment_source(config, &view.skill, agent_id)?
+                            .source_path,
                         target
                     ),
                     Linked | Copied | CopyStale

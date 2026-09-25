@@ -146,6 +146,55 @@ it("chooses one source per ambiguous variant scope while retaining unique Agent 
   });
 });
 
+it("disables invalid candidates and requires confirmation before installing healthy scopes", async () => {
+  handlers.set("search_catalog_skills", () => [hit]);
+  handlers.set("install_catalog_skill", (args) =>
+    args.repositoryPaths
+      ? { status: "installed", skill: makeSkill() }
+      : {
+          status: "selectionRequired",
+          candidates: [
+            {
+              repositoryPath: ".codex/skills/demo",
+              variantKey: "codex",
+              contentHash: "",
+              error: ".codex/skills/demo：YAML 无效",
+            },
+            {
+              repositoryPath: "skills/demo",
+              variantKey: "generic",
+              contentHash: "ok",
+            },
+          ],
+        },
+  );
+  renderWithProviders(<InstallSkillsPage />);
+  search();
+  fireEvent.click(await screen.findByRole("button", { name: "安装" }));
+  const radios = await screen.findAllByRole("radio");
+  expect(radios[0]).toBeDisabled();
+  expect(radios[0]).not.toBeChecked();
+  expect(radios[1]).toBeChecked();
+  expect(screen.getByRole("alert")).toHaveTextContent("部分目录不可用");
+  expect(screen.getByRole("dialog")).toHaveTextContent(
+    ".codex/skills/demo：YAML 无效",
+  );
+  expect(
+    calls.filter((c) => c.command === "install_catalog_skill"),
+  ).toHaveLength(1);
+  fireEvent.click(screen.getByRole("button", { name: "安装所选版本" }));
+  await waitFor(() => expect(screen.queryByRole("dialog")).toBeNull());
+  expect(calls).toContainEqual({
+    command: "install_catalog_skill",
+    args: {
+      source: hit.source,
+      skillId: hit.skillId,
+      repositoryPath: null,
+      repositoryPaths: ["skills/demo"],
+    },
+  });
+});
+
 const candidates = [
   {
     repositoryPath: ".claude/skills/demo",
