@@ -20,16 +20,16 @@ fn archive(files: &[(&str, &str)]) -> Vec<u8> {
 
 #[test]
 #[serial]
-fn install_nested_skill_is_atomic_idempotent_and_has_studio_origin() {
+fn install_standard_skill_is_atomic_idempotent_and_has_studio_origin() {
     let env = Env::new();
     let studio = env.studio();
     let mut config = studio.load_config().unwrap();
     let bytes = archive(&[
         (
-            "repo-HEAD/plugins/demo/SKILL.md",
+            "repo-HEAD/skills/demo/SKILL.md",
             "---\nname: demo\ndescription: test\n---\nbody",
         ),
-        ("repo-HEAD/plugins/demo/scripts/test.txt", "resource"),
+        ("repo-HEAD/skills/demo/scripts/test.txt", "resource"),
         ("repo-HEAD/other/SKILL.md", "---\nname: other\n---"),
     ]);
     let prepared = prepare_archive("owner/repo", "demo", &bytes).unwrap();
@@ -52,7 +52,7 @@ fn install_nested_skill_is_atomic_idempotent_and_has_studio_origin() {
     assert!(views[0].provenance.is_none());
     assert_eq!(
         views[0].installation.as_ref().unwrap().repository_path,
-        "plugins/demo"
+        "skills/demo"
     );
     assert_eq!(
         views[0].installation.as_ref().unwrap().content_hash,
@@ -76,7 +76,7 @@ fn same_name_collision_never_overwrites_existing_hub_skill() {
     let mut config = studio.load_config().unwrap();
     let existing = env.write_simple_skill(&env.hub(), "demo");
     let original = std::fs::read(existing.join("SKILL.md")).unwrap();
-    let bytes = archive(&[("repo/demo/SKILL.md", "---\nname: demo\n---\nnew")]);
+    let bytes = archive(&[("repo/skills/demo/SKILL.md", "---\nname: demo\n---\nnew")]);
     let prepared = prepare_archive("owner/repo", "demo", &bytes).unwrap();
     assert!(studio
         .install_catalog_skill(&mut config, &prepared)
@@ -90,10 +90,10 @@ fn malformed_ambiguous_and_unsafe_archives_are_rejected() {
     for files in [
         vec![("../escape", "bad")],
         vec![
-            ("root/a/demo/SKILL.md", "---\nname: demo\n---"),
-            ("root/b/demo/SKILL.md", "---\nname: demo\n---"),
+            ("root/skills/a/SKILL.md", "---\nname: demo\n---"),
+            ("root/skills/b/SKILL.md", "---\nname: demo\n---"),
         ],
-        vec![("root/demo/SKILL.md", "---\nname: [invalid\n---")],
+        vec![("root/skills/demo/SKILL.md", "---\nname: [invalid\n---")],
         vec![("root/README.md", "no skill")],
     ] {
         assert!(prepare_archive("owner/repo", "demo", &archive(&files)).is_err());
@@ -110,44 +110,83 @@ fn malformed_ambiguous_and_unsafe_archives_are_rejected() {
 }
 
 #[test]
-fn catalog_excludes_openclaw_but_preserves_generic_and_supported_agent_paths() {
-    for path in [
-        "skills/demo",
-        ".claude/skills/demo",
-        ".codex/skills/demo",
-        ".agents/skills/demo",
-    ] {
-        let file = format!("root/{path}/SKILL.md");
+fn catalog_discovery_and_variant_scopes_share_registry_whitelist() {
+    use skill_studio_core::{models::agent::AGENTS, services::variants};
+    let roots = variants::repository_roots();
+    assert_eq!(AGENTS.len(), 5);
+    for agent in AGENTS {
+        assert!(roots.values().any(|key| *key == agent.id));
+    }
+    for (root, key) in roots {
+        let path = format!("{root}/demo");
+        let file = format!("envelope/{path}/SKILL.md");
         let bytes = archive(&[
-            (&file, "---\nname: demo\n---\ngeneric"),
+            (&file, "---\nname: demo\n---\nsupported"),
             (
-                "root/.openclaw/skills/demo/SKILL.md",
-                "---\nname: demo\n---\nopenclaw",
+                "envelope/.future-agent/skills/demo/SKILL.md",
+                "---\nname: [invalid\n---",
             ),
             (
-                "root/nested/.openclaw/skills/demo/SKILL.md",
-                "---\nname: demo\n---\nopenclaw",
+                "envelope/examples/.claude/skills/demo/SKILL.md",
+                "---\nname: demo\n---\nexample",
             ),
         ]);
-        assert_eq!(
-            prepare_archive("owner/repo", "demo", &bytes)
-                .unwrap()
-                .repository_path,
-            path
-        );
+        let prepared = prepare_archive("owner/repo", "demo", &bytes).unwrap();
+        assert_eq!(prepared.repository_path, path);
+        assert_eq!(variants::repository_key(&path).as_deref(), Some(key));
         assert!(marketplace::prepare_catalog_archive(
             "owner/repo",
             "demo",
             &bytes,
-            Some(".openclaw/skills/demo")
+            Some(".future-agent/skills/demo")
         )
         .is_err());
     }
-    let only_openclaw = archive(&[(
-        "root/.openclaw/skills/demo/SKILL.md",
-        "---\nname: demo\n---",
-    )]);
-    assert!(prepare_archive("owner/repo", "demo", &only_openclaw).is_err());
+    for path in [
+        ".future-agent/skills/demo",
+        ".openclaw/skills/demo",
+        "plugins/demo",
+        "examples/.codex/skills/demo",
+        "skills/nested/demo",
+        "demo",
+        ".agents/rules/demo",
+    ] {
+        let file = format!("envelope/{path}/SKILL.md");
+        assert!(
+            prepare_archive(
+                "owner/repo",
+                "demo",
+                &archive(&[(&file, "---\nname: demo\n---")])
+            )
+            .is_err(),
+            "unexpected source: {path}"
+        );
+    }
+}
+
+#[test]
+fn repository_root_skill_is_a_supported_generic_source() {
+    let prepared = prepare_archive(
+        "owner/repo",
+        "demo",
+        &archive(&[("envelope/SKILL.md", "---\nname: demo\n---\nroot skill")]),
+    )
+    .unwrap();
+    assert_eq!(prepared.repository_path, "");
+    assert!(prepared.variants.is_empty());
+}
+
+#[test]
+fn multiple_repository_envelopes_are_rejected() {
+    assert!(prepare_archive(
+        "owner/repo",
+        "demo",
+        &archive(&[
+            ("one/skills/demo/SKILL.md", "---\nname: demo\n---"),
+            ("two/skills/demo/SKILL.md", "---\nname: demo\n---")
+        ])
+    )
+    .is_err());
 }
 
 #[test]
@@ -156,11 +195,11 @@ fn catalog_candidates_use_complete_content_and_install_only_the_selected_path() 
     use marketplace::{prepare_catalog_archive, CatalogPreparation};
     let document = "---\nname: demo\ndescription: shared description\n---\nbody";
     let bytes = archive(&[
-        ("root/.codex/skills/demo/SKILL.md", document),
-        ("root/.codex/skills/demo/scripts/tool.txt", "codex resource"),
-        ("root/.claude/skills/demo/SKILL.md", document),
+        ("root/skills/demo/SKILL.md", document),
+        ("root/skills/demo/scripts/tool.txt", "codex resource"),
+        ("root/.agents/skills/demo/SKILL.md", document),
         (
-            "root/.claude/skills/demo/scripts/tool.txt",
+            "root/.agents/skills/demo/scripts/tool.txt",
             "claude resource",
         ),
         ("root/.openclaw/skills/demo/SKILL.md", document),
@@ -172,8 +211,8 @@ fn catalog_candidates_use_complete_content_and_install_only_the_selected_path() 
         panic!("expected selection")
     };
     assert_eq!(candidates.len(), 2);
-    assert_eq!(candidates[0].repository_path, ".claude/skills/demo");
-    assert_eq!(candidates[1].repository_path, ".codex/skills/demo");
+    assert_eq!(candidates[0].repository_path, ".agents/skills/demo");
+    assert_eq!(candidates[1].repository_path, "skills/demo");
     assert_eq!(
         candidates[0].description.as_deref(),
         Some("shared description")
@@ -190,7 +229,7 @@ fn catalog_candidates_use_complete_content_and_install_only_the_selected_path() 
         assert!(prepare_catalog_archive("owner/repo", "demo", &bytes, Some(invalid)).is_err());
     }
     let CatalogPreparation::Ready(prepared) =
-        prepare_catalog_archive("owner/repo", "demo", &bytes, Some(".codex/skills/demo")).unwrap()
+        prepare_catalog_archive("owner/repo", "demo", &bytes, Some("skills/demo")).unwrap()
     else {
         panic!("expected ready")
     };
@@ -206,10 +245,10 @@ fn catalog_candidates_use_complete_content_and_install_only_the_selected_path() 
     );
     assert_eq!(
         config.skill_installations[&skill.id].repository_path,
-        ".codex/skills/demo"
+        "skills/demo"
     );
     let CatalogPreparation::Ready(other) =
-        prepare_catalog_archive("owner/repo", "demo", &bytes, Some(".claude/skills/demo")).unwrap()
+        prepare_catalog_archive("owner/repo", "demo", &bytes, Some(".agents/skills/demo")).unwrap()
     else {
         panic!("expected ready")
     };
@@ -220,8 +259,8 @@ fn catalog_candidates_use_complete_content_and_install_only_the_selected_path() 
 fn identical_candidates_report_matching_hashes() {
     let document = "---\nname: demo\n---\nbody";
     let bytes = archive(&[
-        ("root/a/demo/SKILL.md", document),
-        ("root/b/demo/SKILL.md", document),
+        ("root/skills/a/SKILL.md", document),
+        ("root/skills/b/SKILL.md", document),
     ]);
     let marketplace::CatalogPreparation::SelectionRequired(candidates) =
         marketplace::prepare_catalog_archive("owner/repo", "demo", &bytes, None).unwrap()

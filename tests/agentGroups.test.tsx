@@ -26,6 +26,27 @@ function setup() {
   ]);
   handlers.set("get_config", () => ({ activeGroups: {} }));
 }
+it("explains and disables a Skill without a matching Agent variant", async () => {
+  setup();
+  handlers.set("scan_skills", () => [
+    makeSkill({
+      name: "Only Claude",
+      agents: {
+        codex: {
+          ...agentState("notLinked"),
+          unavailableReason: "没有 Codex 专用版或通用版",
+        },
+      },
+    }),
+  ]);
+  renderWithProviders(<AgentPage agentId="codex" />);
+  fireEvent.click(screen.getByRole("button", { name: "新建分组" }));
+  expect(
+    await screen.findByRole("checkbox", { name: "选择 Only Claude" }),
+  ).toBeDisabled();
+  expect(screen.getByText("没有 Codex 专用版或通用版")).toBeInTheDocument();
+});
+
 it("creates an agent-scoped draft and saves the full rapid selection without activating", async () => {
   setup();
   handlers.set("save_agent_group", (args) => makeGroup(args));

@@ -20,8 +20,8 @@ pub const COPY_SIDECAR: &str = ".skill-studio-copy.json";
 /// `SKILL.md` 是识别一个 skill 目录的唯一锚点
 pub const SKILL_FILE: &str = "SKILL.md";
 
-/// 上传到 claude.ai / Skills API 时**只允许**这 6 个字段，多一个是硬报错。
-/// Agent Skills 标准本身也只要求 name + description。
+/// Agent Skills 通用 frontmatter 字段。额外字段仅作为扩展信息展示，
+/// 不能据此判定某个 Agent 不兼容，或推断整个插件的安装能力。
 const PORTABLE_KEYS: &[&str] = &[
     "name",
     "description",
@@ -69,8 +69,7 @@ pub struct ScannedEntry {
 pub struct Frontmatter {
     pub name: Option<String>,
     pub description: Option<String>,
-    /// 非可移植字段（Claude Code 专有等）。注册到 Codex 后会被忽略，
-    /// 上传到 claude.ai 会直接报错，所以要提示用户。
+    /// 通用字段集合之外的扩展字段；具体语义和兼容性取决于目标 Agent。
     #[serde(default)]
     pub extra_keys: Vec<String>,
     /// frontmatter 存在但 YAML 解析失败

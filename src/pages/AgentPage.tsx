@@ -138,7 +138,10 @@ export function AgentSkills({
                   key={s.id}
                   variant="outline"
                   className="w-full justify-start"
-                  disabled={register.isPending}
+                  disabled={
+                    register.isPending || !!s.agents[agentId]?.unavailableReason
+                  }
+                  title={s.agents[agentId]?.unavailableReason}
                   onClick={() =>
                     register.mutate(
                       { skillIds: [s.id], agentIds: [agentId] },
@@ -152,6 +155,11 @@ export function AgentSkills({
                   }
                 >
                   {s.name}
+                  {s.agents[agentId]?.unavailableReason && (
+                    <span className="ml-2 truncate text-xs text-muted-foreground">
+                      {s.agents[agentId].unavailableReason}
+                    </span>
+                  )}
                 </Button>
               ))
             )}

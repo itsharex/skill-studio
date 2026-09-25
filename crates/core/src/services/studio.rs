@@ -32,6 +32,8 @@ pub struct AgentSkillState {
     pub mode: Option<LinkMode>,
     /// 同一来源在该 agent 下的全部入口（含别名）。
     pub entry_paths: Vec<PathBuf>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub unavailable_reason: Option<String>,
 }
 
 /// 前端拿到的 skill 视图
@@ -178,6 +180,14 @@ impl Studio {
                 )
             })
             .collect();
+        // Internal payload links retain their logical Hub identity.
+        for skill in sources.values() {
+            for variant in super::variants::entries(config, skill) {
+                if let Ok(path) = super::variants::payload(&skill.source_path, &variant.key) {
+                    identities.insert(path.canonicalize().unwrap_or(path), skill.id.clone());
+                }
+            }
+        }
         for agent in AGENTS {
             for root in agent.resolved_global_roots(overrides) {
                 for entry in scanner::scan_root(&root, agent)? {
@@ -236,7 +246,7 @@ impl Studio {
                     .map(|g| g.id.clone())
                     .collect();
                 let fm = scanner::parse_frontmatter(&skill.source_path.join(scanner::SKILL_FILE));
-                let diagnostics = if !skill.source_path.join(scanner::SKILL_FILE).is_file() {
+                let mut diagnostics = if !skill.source_path.join(scanner::SKILL_FILE).is_file() {
                     vec![match std::fs::metadata(&skill.source_path) {
                         Err(e) if e.kind() == std::io::ErrorKind::NotFound => {
                             "目标目录不存在".into()
@@ -256,6 +266,13 @@ impl Studio {
                 } else {
                     vec![]
                 };
+                for variant in super::variants::entries(config, &skill) {
+                    if let Err(error) = super::variants::payload(&skill.source_path, &variant.key)
+                        .and_then(|path| scanner::validate_sync_source(&path))
+                    {
+                        diagnostics.push(format!("{} 变体不可用：{}", variant.key, error));
+                    }
+                }
                 let provenance = config.skill_provenance.get(&skill.id).cloned();
                 let installation = config.skill_installations.get(&skill.id).cloned();
                 let source_ids = if installation.is_some() {
@@ -353,6 +370,9 @@ impl Studio {
         let mut out = HashMap::new();
 
         for agent in AGENTS {
+            let resolved = super::variants::for_agent(config, skill, agent.id);
+            let unavailable = resolved.as_ref().err().map(ToString::to_string);
+            let skill = resolved.as_ref().unwrap_or(skill);
             let roots = agent.resolved_global_roots(overrides);
             let primary = roots.first().cloned().unwrap_or_default();
             let mut best: Option<(LinkStatus, PathBuf)> = None;
@@ -394,6 +414,13 @@ impl Studio {
 
             let (status, target_path) =
                 best.unwrap_or((LinkStatus::NotLinked, primary.join(&skill.name)));
+            // The representative root is not a deployable fallback for a missing
+            // variant, even if someone manually linked it into this Agent.
+            let status = if unavailable.is_some() && status.is_registered() {
+                LinkStatus::Conflict
+            } else {
+                status
+            };
             let document = target_path.join(scanner::SKILL_FILE);
             let declared = scanner::parse_frontmatter(&document)
                 .name
@@ -413,6 +440,7 @@ impl Studio {
             out.insert(
                 agent.id.to_string(),
                 AgentSkillState {
+                    unavailable_reason: unavailable,
                     status,
                     target_path,
                     policy_blocked: agent.toggle_config_path(overrides).is_some()
@@ -490,7 +518,20 @@ impl Studio {
         for agent_id in agent_ids {
             let agent = crate::models::agent::require_agent(agent_id)?;
             let root = agent.primary_global_root(&overrides);
-            for skill in &skills {
+            for family in &skills {
+                let resolved = match super::variants::for_agent(config, family, agent_id) {
+                    Ok(skill) => skill,
+                    Err(error) => {
+                        report.push_err(result(
+                            family,
+                            agent_id,
+                            LinkStatus::NotLinked,
+                            Some(error.to_string()),
+                        ));
+                        continue;
+                    }
+                };
+                let skill = &resolved;
                 let dest = self
                     .agent_targets(config, skill, agent)
                     .into_iter()
@@ -580,7 +621,9 @@ impl Studio {
 
         for agent_id in agent_ids {
             let agent = crate::models::agent::require_agent(agent_id)?;
-            for skill in &skills {
+            for family in &skills {
+                let resolved = super::variants::for_agent(config, family, agent_id)?;
+                let skill = &resolved;
                 // 遍历全部根，把散落在共享根里的注册也清掉
                 for dest in self.agent_targets(config, skill, agent) {
                     if !scanner::is_symlink_or_junction(&dest)
@@ -672,7 +715,9 @@ impl Studio {
             let Some(root) = agent.project_root(&project.root) else {
                 continue;
             };
-            for skill in &skills {
+            for family in &skills {
+                let resolved = super::variants::for_agent(config, family, agent_id)?;
+                let skill = &resolved;
                 let dest = root.join(&skill.name);
                 match linker::unregister(&skill.source_path, &dest, force) {
                     Ok(true) => {
@@ -727,6 +772,7 @@ impl Studio {
         if !state.status.is_registered() {
             return Err(Error::invalid("该 skill 在目标 agent 上不可用"));
         }
+        let skill = super::variants::for_agent(config, &skill, agent_id)?;
         for target in state.entry_paths {
             if !linker::link_status(&skill.source_path, &target).is_registered()
                 && !crate::fs::paths::paths_alias(&target, &skill.source_path)
@@ -761,6 +807,15 @@ impl Studio {
     }
 
     pub fn release_from_hub(&self, config: &mut AppConfig, skill_id: &str) -> Result<Skill> {
+        if config
+            .skill_installations
+            .get(skill_id)
+            .is_some_and(|i| !i.variants.is_empty())
+        {
+            return Err(Error::invalid(
+                "多端安装由 Hub 统一管理，不能还原为单个 Agent 来源",
+            ));
+        }
         self.relocate_hub_skill(config, skill_id, true)
     }
 

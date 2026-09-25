@@ -1,4 +1,5 @@
 import { LocalSkillsPanel } from "./LocalSkillsPanel";
+import { variantLabel } from "@/lib/skillVariants";
 import { useTarget } from "@/components/targets/TargetProvider";
 import { useState } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
@@ -37,7 +38,16 @@ export function InstallSkillsPage({ onBack }: { onBack?: () => void }) {
     skill: CatalogSkill;
     candidates: CatalogCandidate[];
   } | null>(null);
-  const [selectedPath, setSelectedPath] = useState<string | null>(null);
+  const [selectedPaths, setSelectedPaths] = useState<Record<string, string>>(
+    {},
+  );
+  const grouped = !!selection?.candidates.every((c) => c.variantKey);
+  const slot = (candidate: CatalogCandidate) =>
+    grouped ? candidate.variantKey! : "source";
+  const requiredSlots = new Set(selection?.candidates.map(slot));
+  const selectionReady = [...requiredSlots].every(
+    (key) => key in selectedPaths,
+  );
   const { data: installed = [] } = useSkills();
   const client = useQueryClient();
   const search = useQuery({
@@ -48,17 +58,34 @@ export function InstallSkillsPage({ onBack }: { onBack?: () => void }) {
     staleTime: 5 * 60 * 1000,
   });
   const install = useMutation({
-    mutationFn: (skill: CatalogSkill & { repositoryPath?: string }) =>
+    mutationFn: (
+      skill: CatalogSkill & {
+        repositoryPath?: string;
+        repositoryPaths?: string[];
+      },
+    ) =>
       skillsApi.installCatalog(
         skill.source,
         skill.skillId,
         skill.repositoryPath,
+        skill.repositoryPaths,
       ),
     onMutate: () => setInstallError(null),
     onSuccess: async (result, skill) => {
       if (result.status === "selectionRequired") {
         setSelection({ skill, candidates: result.candidates });
-        setSelectedPath(null);
+        const choices: Record<string, string> = {};
+        if (result.candidates.every((c) => c.variantKey)) {
+          for (const candidate of result.candidates) {
+            if (
+              result.candidates.filter(
+                (c) => c.variantKey === candidate.variantKey,
+              ).length === 1
+            )
+              choices[candidate.variantKey!] = candidate.repositoryPath;
+          }
+        }
+        setSelectedPaths(choices);
         return;
       }
       setSelection(null);
@@ -92,8 +119,9 @@ export function InstallSkillsPage({ onBack }: { onBack?: () => void }) {
             <DialogTitle>选择 skill 安装来源</DialogTitle>
             <DialogDescription>
               {selection?.skill.name}{" "}
-              在仓库中有多个同名版本，请确认要安装的目录。仅安装所选版本到 Skill
-              Hub。
+              {grouped
+                ? "包含多个适配来源。每类选择一个目录，安装后在 Hub 中统一管理，按 Agent 部署对应版本。"
+                : "在仓库中有多个同名来源，无法确认它们属于同一变体组。请选择一个目录，不会自动合并。"}
             </DialogDescription>
           </DialogHeader>
           <div className="space-y-3 overflow-y-auto px-6 py-4">
@@ -120,12 +148,25 @@ export function InstallSkillsPage({ onBack }: { onBack?: () => void }) {
                 >
                   <input
                     type="radio"
-                    name="catalog-path"
+                    name={`catalog-path-${slot(candidate)}`}
                     className="mt-1"
-                    checked={selectedPath === candidate.repositoryPath}
-                    onChange={() => setSelectedPath(candidate.repositoryPath)}
+                    checked={
+                      selectedPaths[slot(candidate)] ===
+                      candidate.repositoryPath
+                    }
+                    onChange={() =>
+                      setSelectedPaths((current) => ({
+                        ...current,
+                        [slot(candidate)]: candidate.repositoryPath,
+                      }))
+                    }
                   />
                   <span className="min-w-0">
+                    {grouped && (
+                      <span className="block text-sm font-medium">
+                        {variantLabel(candidate.variantKey!)}
+                      </span>
+                    )}
                     <span className="block break-all font-mono text-sm">
                       {candidate.repositoryPath || "仓库根目录"}
                     </span>
@@ -156,12 +197,14 @@ export function InstallSkillsPage({ onBack }: { onBack?: () => void }) {
               取消
             </Button>
             <Button
-              disabled={selectedPath === null || install.isPending}
+              disabled={!selectionReady || install.isPending}
               onClick={() => {
-                if (selection && selectedPath !== null)
+                if (selection && selectionReady)
                   install.mutate({
                     ...selection.skill,
-                    repositoryPath: selectedPath,
+                    ...(grouped
+                      ? { repositoryPaths: Object.values(selectedPaths) }
+                      : { repositoryPath: selectedPaths.source }),
                   });
               }}
             >

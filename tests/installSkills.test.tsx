@@ -51,7 +51,12 @@ it("requires two characters, installs the selected result and refreshes Studio o
   expect(await screen.findByRole("button", { name: "已安装" })).toBeDisabled();
   expect(calls).toContainEqual({
     command: "install_catalog_skill",
-    args: { source: "owner/repo", skillId: "demo", repositoryPath: null },
+    args: {
+      source: "owner/repo",
+      skillId: "demo",
+      repositoryPath: null,
+      repositoryPaths: null,
+    },
   });
   view.unmount();
   renderWithProviders(<LibraryPage />);
@@ -90,6 +95,55 @@ it("failed installs remain retryable and do not show installed", async () => {
     expect(screen.getByRole("button", { name: "安装" })).toBeEnabled(),
   );
   expect(screen.queryByRole("button", { name: "已安装" })).toBeNull();
+});
+
+it("chooses one source per ambiguous variant scope while retaining unique Agent variants", async () => {
+  handlers.set("search_catalog_skills", () => [hit]);
+  handlers.set("install_catalog_skill", (args) =>
+    args.repositoryPaths
+      ? { status: "installed", skill: makeSkill() }
+      : {
+          status: "selectionRequired",
+          candidates: [
+            {
+              repositoryPath: "skills/demo",
+              variantKey: "generic",
+              description: "通用 A",
+              contentHash: "a",
+            },
+            {
+              repositoryPath: ".agents/skills/demo",
+              variantKey: "generic",
+              description: "通用 B",
+              contentHash: "b",
+            },
+            {
+              repositoryPath: ".codex/skills/demo",
+              variantKey: "codex",
+              description: "Codex",
+              contentHash: "c",
+            },
+          ],
+        },
+  );
+  renderWithProviders(<InstallSkillsPage />);
+  search();
+  fireEvent.click(await screen.findByRole("button", { name: "安装" }));
+  const radios = await screen.findAllByRole("radio");
+  expect(radios[2]).toBeChecked();
+  expect(screen.getByRole("button", { name: "安装所选版本" })).toBeDisabled();
+  fireEvent.click(radios[0]);
+  fireEvent.click(screen.getByRole("button", { name: "安装所选版本" }));
+  await waitFor(() => expect(screen.queryByRole("dialog")).toBeNull());
+  expect(calls).toContainEqual({
+    command: "install_catalog_skill",
+    args: {
+      source: hit.source,
+      skillId: hit.skillId,
+      repositoryPath: null,
+      repositoryPaths: [".codex/skills/demo", "skills/demo"],
+    },
+  });
 });
 
 const candidates = [
@@ -132,6 +186,7 @@ it("asks for an explicit candidate, sends its path and retries failures in the d
       source: hit.source,
       skillId: hit.skillId,
       repositoryPath: ".codex/skills/demo",
+      repositoryPaths: null,
     },
   });
   handlers.set("install_catalog_skill", () => ({

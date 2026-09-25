@@ -87,9 +87,11 @@ pub fn install_catalog_skill(
     source: String,
     skill_id: String,
     repository_path: Option<String>,
+    repository_paths: Option<Vec<String>>,
 ) -> Result<CatalogInstallResult, String> {
-    use skill_studio_core::services::marketplace::{prepare_catalog, CatalogPreparation};
-    match prepare_catalog(&source, &skill_id, repository_path.as_deref()).map_err(String::from)? {
+    use skill_studio_core::services::marketplace::{prepare_catalog_variants, CatalogPreparation};
+    let selected = repository_paths.unwrap_or_else(|| repository_path.into_iter().collect());
+    match prepare_catalog_variants(&source, &skill_id, &selected).map_err(String::from)? {
         CatalogPreparation::Ready(prepared) => Ok(CatalogInstallResult::Installed {
             skill: Box::new(
                 state

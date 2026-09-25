@@ -586,7 +586,11 @@ export function AgentPage({ agentId }: { agentId: string }) {
                     <Checkbox
                       aria-label={`选择 ${s.name}`}
                       checked={editing?.skillIds.includes(s.id) ?? false}
-                      disabled={save.isPending}
+                      disabled={
+                        save.isPending ||
+                        (!!s.agents[agentId]?.unavailableReason &&
+                          !editing?.skillIds.includes(s.id))
+                      }
                       onCheckedChange={(on) =>
                         setEditing(
                           (prev) =>
@@ -601,6 +605,11 @@ export function AgentPage({ agentId }: { agentId: string }) {
                     />
                     <div className="min-w-0">
                       <p className="text-sm font-medium">{s.name}</p>
+                      {s.agents[agentId]?.unavailableReason && (
+                        <p className="text-xs text-amber-600">
+                          {s.agents[agentId].unavailableReason}
+                        </p>
+                      )}
                       <p className="truncate text-xs text-muted-foreground">
                         {s.description}
                       </p>

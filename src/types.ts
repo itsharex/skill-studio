@@ -35,7 +35,7 @@ export interface Skill {
   sourcePath: string;
   origin: SkillOrigin;
   contentHash: string;
-  /** frontmatter 里的非可移植字段：注册到 Codex 会被忽略，上传 claude.ai 会报错 */
+  /** 通用集合之外的扩展字段；具体支持情况取决于 Agent，不代表正文不可用 */
   frontmatterExtra: string[];
   root: string;
   /** token 体量估算，后端扫描时算好（见 crates/core services::tokens） */
@@ -59,6 +59,7 @@ export interface AgentSkillState {
   disabled: boolean;
   manual?: boolean;
   policyBlocked?: boolean;
+  unavailableReason?: string;
   mode: LinkMode | null;
 }
 
@@ -72,6 +73,7 @@ export interface CatalogSkill {
 
 export interface CatalogCandidate {
   repositoryPath: string;
+  variantKey?: string | null;
   description: string | null;
   contentHash: string;
 }
@@ -87,6 +89,7 @@ export interface SkillView extends Skill {
     repositoryPath: string;
     installedAt: number;
     contentHash: string;
+    variants?: { key: string; repositoryPath: string; contentHash: string }[];
   } | null;
   agents: Record<string, AgentSkillState>;
   groupIds: string[];

@@ -191,6 +191,14 @@ impl Helper {
                     .as_str()
                     .unwrap_or("")
                     .to_string();
+                prepared.variants = serde_json::from_value(
+                    request
+                        .params
+                        .get("variants")
+                        .cloned()
+                        .unwrap_or_else(|| json!([])),
+                )
+                .map_err(|e| e.to_string())?;
                 return serde_json::to_value(
                     state
                         .install_catalog_skill(&prepared)
@@ -209,6 +217,7 @@ impl Helper {
                 "home": paths::home_dir(),
                 "writable": self.writable,
                 "desktopServices": 1,
+                "skillVariants": 1,
                 "methods": ["hello", "list_agents", "scan_skills", "scan_mcp", "set_skill_enabled"]
             })),
             "list_agents" => {

@@ -107,6 +107,7 @@ pub async fn install_catalog_skill(
     source: String,
     skill_id: String,
     repository_path: Option<String>,
+    repository_paths: Option<Vec<String>>,
 ) -> Result<skill_studio_service::skills::CatalogInstallResult, String> {
     let state = state.inner().clone();
     tauri::async_runtime::spawn_blocking(move || {
@@ -115,6 +116,7 @@ pub async fn install_catalog_skill(
             source,
             skill_id,
             repository_path,
+            repository_paths,
         )
     })
     .await

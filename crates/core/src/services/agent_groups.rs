@@ -151,6 +151,8 @@ impl Studio {
                 .iter()
                 .find(|v| &v.skill.id == id)
                 .ok_or_else(|| Error::NotFound(format!("分组成员已不存在：{id}")))?;
+            let mut view = view.clone();
+            view.skill = super::variants::for_agent(config, &view.skill, agent_id)?;
             scanner::validate_sync_source(&view.skill.source_path)?;
             if view.malformed_frontmatter {
                 return Err(Error::invalid(format!(
@@ -287,7 +289,10 @@ impl Studio {
                     .ok_or_else(|| Error::invalid("注册来源缺失，无法安全退出管理"))?;
                 use crate::models::skill::LinkStatus::*;
                 if !matches!(
-                    linker::link_status(&view.skill.source_path, target),
+                    linker::link_status(
+                        &super::variants::for_agent(config, &view.skill, agent_id)?.source_path,
+                        target
+                    ),
                     Linked | Copied | CopyStale
                 ) {
                     return Err(Error::invalid(format!(

@@ -184,7 +184,7 @@ fn v1_shared_groups_and_project_references_survive_upgrade() {
     fs::create_dir_all(path.parent().unwrap()).unwrap();
     fs::write(&path,r#"{"version":1,"groups":[{"id":"old","name":"Old","skillIds":["s"]}],"projects":[{"id":"p","name":"P","root":"/tmp/project","groupIds":["old"]}]}"#).unwrap();
     let c = studio.load_config().unwrap();
-    assert_eq!(c.version, 2);
+    assert_eq!(c.version, skill_studio_core::models::config::CONFIG_VERSION);
     assert_eq!(c.groups[0].agent_id, None);
     assert_eq!(c.projects[0].group_ids, vec!["old"]);
     assert!(c.active_groups.is_empty());

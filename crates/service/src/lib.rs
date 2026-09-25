@@ -158,6 +158,7 @@ pub fn dispatch(state: &AppState, method: &str, params: Value) -> Result<Value, 
             arg(&params, "source")?,
             arg(&params, "skillId")?,
             arg(&params, "repositoryPath")?,
+            arg(&params, "repositoryPaths")?,
         )?),
         "prune_missing" => serde_json::to_value(skills::prune_missing(state)?),
         "read_skill_document" => {

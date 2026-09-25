@@ -46,6 +46,8 @@ pub(crate) fn plan(
         if !state.status.is_registered() {
             continue;
         }
+        let mut view = view.clone();
+        view.skill = super::variants::for_agent(config, &view.skill, agent_id)?;
         for target in &state.entry_paths {
             if owned.iter().any(|e| e.target_path == *target) {
                 continue;

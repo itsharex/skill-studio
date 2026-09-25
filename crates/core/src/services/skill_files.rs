@@ -144,14 +144,21 @@ impl Studio {
             next.restore_disabled = true;
             return atomic::write_json_file(&payload.parent().unwrap().join("record.json"), &next);
         }
+        let uses_source = |source: &Path| {
+            let base = path.canonicalize().unwrap_or_else(|_| path.into());
+            let target = source.canonicalize().unwrap_or_else(|_| {
+                scanner::link_destination(source).unwrap_or_else(|_| source.into())
+            });
+            paths::paths_alias(path, source) || paths::path_is_within(&base, &target)
+        };
         if config.active_groups.values().any(|g| {
             g.entries
                 .iter()
-                .any(|e| e.target_path == path || paths::paths_alias(&e.source_path, path))
+                .any(|e| e.target_path == path || uses_source(&e.source_path))
         }) || config.projects.iter().any(|p| {
             p.managed_entries
                 .iter()
-                .any(|e| e.target_path == path || paths::paths_alias(&e.source_path, path))
+                .any(|e| e.target_path == path || uses_source(&e.source_path))
         }) {
             return Err(Error::invalid(
                 "此 skill 正被分组或项目使用，请先停用或解除绑定",
@@ -163,7 +170,7 @@ impl Studio {
                     for entry in scanner::scan_root(&root, agent)? {
                         if entry.path != path
                             && scanner::is_symlink_or_junction(&entry.path)
-                            && paths::paths_alias(&entry.path, path)
+                            && uses_source(&entry.path)
                         {
                             return Err(Error::invalid(
                                 "其他 Agent 仍通过软链接使用此 skill，请先移除对应链接",

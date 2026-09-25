@@ -119,12 +119,14 @@ pub struct PreparedSkill {
     pub source: String,
     pub skill_id: String,
     pub repository_path: String,
+    pub variants: Vec<crate::models::config::SkillVariant>,
 }
 
 #[derive(Debug, Clone, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct CatalogCandidate {
     pub repository_path: String,
+    pub variant_key: Option<String>,
     pub description: Option<String>,
     pub content_hash: String,
 }
@@ -152,15 +154,25 @@ pub fn prepare_catalog(
     skill_id: &str,
     repository_path: Option<&str>,
 ) -> Result<CatalogPreparation> {
+    prepare_catalog_variants(
+        source,
+        skill_id,
+        &repository_path
+            .map(str::to_owned)
+            .into_iter()
+            .collect::<Vec<_>>(),
+    )
+}
+
+pub fn prepare_catalog_variants(
+    source: &str,
+    skill_id: &str,
+    selected: &[String],
+) -> Result<CatalogPreparation> {
     validate_coordinates(source, skill_id)?;
     let url = reqwest::Url::parse(&format!("https://codeload.github.com/{source}/zip/HEAD"))
         .map_err(|e| Error::Other(e.to_string()))?;
-    prepare_catalog_archive(
-        source,
-        skill_id,
-        &download(url, MAX_DOWNLOAD)?,
-        repository_path,
-    )
+    prepare_catalog_archive_variants(source, skill_id, &download(url, MAX_DOWNLOAD)?, selected)
 }
 
 /// Public for deterministic integration testing with repository archives.
@@ -173,6 +185,23 @@ pub fn prepare_catalog_archive(
     skill_id: &str,
     bytes: &[u8],
     repository_path: Option<&str>,
+) -> Result<CatalogPreparation> {
+    prepare_catalog_archive_variants(
+        source,
+        skill_id,
+        bytes,
+        &repository_path
+            .map(str::to_owned)
+            .into_iter()
+            .collect::<Vec<_>>(),
+    )
+}
+
+pub fn prepare_catalog_archive_variants(
+    source: &str,
+    skill_id: &str,
+    bytes: &[u8],
+    selected: &[String],
 ) -> Result<CatalogPreparation> {
     validate_coordinates(source, skill_id)?;
     if bytes.len() as u64 > MAX_DOWNLOAD {
@@ -237,37 +266,49 @@ pub fn prepare_catalog_archive(
                 .map_err(|e| Error::io(&target, e))?;
         }
     }
-    fn find(dir: &Path, id: &str, depth: usize, matches: &mut Vec<PathBuf>) -> Result<()> {
-        if depth > scanner::MAX_SCAN_DEPTH {
-            return Err(Error::invalid("仓库目录层级过深"));
-        }
-        if dir.join("SKILL.md").is_file() {
-            let fm = scanner::parse_frontmatter(&dir.join("SKILL.md"));
-            if dir.file_name().is_some_and(|n| n == id) || fm.name.as_deref() == Some(id) {
-                matches.push(dir.to_path_buf());
+    // GitHub archives have one repository envelope. Only inspect registered
+    // root conventions and their immediate Skill children, never walk examples,
+    // plugin trees or arbitrary Agent directories looking for matching names.
+    let envelopes = fs::read_dir(temp.path())
+        .map_err(|e| Error::io(temp.path(), e))?
+        .collect::<std::io::Result<Vec<_>>>()
+        .map_err(|e| Error::io(temp.path(), e))?;
+    if envelopes.len() != 1 || !envelopes[0].path().is_dir() {
+        return Err(Error::invalid("仓库归档必须包含一个根目录"));
+    }
+    let repository = envelopes[0].path();
+    let mut found = Vec::new();
+    let mut consider = |directory: PathBuf| {
+        if directory.join("SKILL.md").is_file() {
+            let fm = scanner::parse_frontmatter(&directory.join("SKILL.md"));
+            if directory.file_name().is_some_and(|name| name == skill_id)
+                || fm.name.as_deref() == Some(skill_id)
+            {
+                found.push(directory);
             }
         }
-        for entry in fs::read_dir(dir).map_err(|e| Error::io(dir, e))? {
-            let entry = entry.map_err(|e| Error::io(dir, e))?;
+    };
+    consider(repository.clone());
+    for relative in super::variants::repository_roots().keys() {
+        let root = repository.join(relative);
+        if !root.is_dir() {
+            continue;
+        }
+        for entry in fs::read_dir(&root).map_err(|e| Error::io(&root, e))? {
+            let entry = entry.map_err(|e| Error::io(&root, e))?;
             if entry
                 .file_type()
                 .map_err(|e| Error::io(entry.path(), e))?
                 .is_dir()
-                && entry.file_name() != ".git"
-                && entry.file_name() != "node_modules"
-                // OpenClaw packages are not supported installation sources.
-                && entry.file_name() != ".openclaw"
+                && !entry.file_name().to_string_lossy().starts_with('.')
             {
-                find(&entry.path(), id, depth + 1, matches)?;
+                consider(entry.path());
             }
         }
-        Ok(())
     }
-    let mut found = Vec::new();
-    find(temp.path(), skill_id, 0, &mut found)?;
     if found.is_empty() {
         return Err(Error::invalid(
-            "仓库中未找到支持的对应 skill，目录可能已变更",
+            "仓库中未找到支持的对应 skill；仅扫描已支持 Agent 的标准目录、.agents/skills、skills 和仓库根目录",
         ));
     }
     let relative = |directory: &Path| {
@@ -281,49 +322,97 @@ pub fn prepare_catalog_archive(
             .join("/")
     };
     found.sort_by_key(|directory| relative(directory));
-    let directory = if let Some(selected) = repository_path {
-        // Match only discovered candidates, never join an untrusted client path.
-        let index = found
-            .iter()
-            .position(|directory| relative(directory) == selected)
-            .ok_or_else(|| Error::invalid("所选 skill 目录已失效，请重新选择安装来源"))?;
-        found.remove(index)
-    } else if found.len() == 1 {
-        found.remove(0)
-    } else {
-        let candidates = found
-            .iter()
-            .map(|directory| {
-                scanner::validate_sync_source(directory)?;
-                let fm = scanner::parse_frontmatter(&directory.join("SKILL.md"));
-                Ok(CatalogCandidate {
-                    repository_path: relative(directory),
-                    description: fm.description,
-                    content_hash: scanner::dir_content_hash(directory)?,
-                })
+    use super::variants::{self, GENERIC};
+    let candidates = found
+        .iter()
+        .map(|directory| {
+            scanner::validate_sync_source(directory)?;
+            let fm = scanner::parse_frontmatter(&directory.join("SKILL.md"));
+            if fm.malformed {
+                return Err(Error::invalid("Skill 的 YAML 格式无效"));
+            }
+            if directory.join(variants::DIRECTORY).exists() {
+                return Err(Error::invalid("仓库包含保留的变体目录"));
+            }
+            let repository_path = relative(directory);
+            Ok(CatalogCandidate {
+                variant_key: Some(
+                    variants::repository_key(&repository_path)
+                        .ok_or_else(|| Error::invalid("Skill 来源不在支持的目录中"))?,
+                ),
+                repository_path,
+                description: fm.description,
+                content_hash: scanner::dir_content_hash(directory)?,
             })
-            .collect::<Result<Vec<_>>>()?;
-        return Ok(CatalogPreparation::SelectionRequired(candidates));
-    };
-    scanner::validate_sync_source(&directory)?;
-    if scanner::parse_frontmatter(&directory.join("SKILL.md")).malformed {
-        return Err(Error::invalid("Skill 的 YAML 格式无效"));
+        })
+        .collect::<Result<Vec<_>>>()?;
+    if selected
+        .iter()
+        .any(|p| !candidates.iter().any(|c| &c.repository_path == p))
+    {
+        return Err(Error::invalid("所选 skill 目录已失效，请重新选择安装来源"));
     }
-    // The first archive component is the GitHub repository envelope.
-    let repository_path = directory
-        .strip_prefix(temp.path())
-        .unwrap()
-        .components()
-        .skip(1)
-        .map(|c| c.as_os_str().to_string_lossy())
-        .collect::<Vec<_>>()
-        .join("/");
+    let mut chosen = Vec::new();
+    let keys: std::collections::BTreeSet<_> = candidates
+        .iter()
+        .filter_map(|c| c.variant_key.clone())
+        .collect();
+    for key in keys {
+        let bucket: Vec<_> = candidates
+            .iter()
+            .enumerate()
+            .filter(|(_, c)| c.variant_key.as_deref() == Some(&key))
+            .collect();
+        let explicit: Vec<_> = bucket
+            .iter()
+            .filter(|(_, c)| selected.contains(&c.repository_path))
+            .collect();
+        if explicit.len() > 1 {
+            return Err(Error::invalid("每个 Agent 只能选择一个 Skill 变体"));
+        }
+        if let Some((index, _)) = explicit.first() {
+            chosen.push(*index);
+        } else if bucket.len() == 1 {
+            chosen.push(bucket[0].0);
+        } else {
+            return Ok(CatalogPreparation::SelectionRequired(candidates));
+        }
+    }
+    chosen.sort_by_key(|i| (candidates[*i].variant_key.as_deref() != Some(GENERIC), *i));
+    let primary = chosen[0];
+    let repository_path = candidates[primary].repository_path.clone();
+    let bundle = chosen.len() > 1
+        || candidates[primary]
+            .variant_key
+            .as_deref()
+            .is_some_and(|k| k != GENERIC);
+    let mut variant_records = Vec::new();
+    let directory = if bundle {
+        let root = temp.path().join(".assembled");
+        linker::copy_tree(&found[primary], &root)?;
+        for index in chosen {
+            let c = &candidates[index];
+            let key = c.variant_key.clone().unwrap_or_else(|| GENERIC.into());
+            let path = variants::payload(&root, &key)?;
+            fs::create_dir_all(path.parent().unwrap()).map_err(|e| Error::io(&path, e))?;
+            linker::copy_tree(&found[index], &path)?;
+            variant_records.push(crate::models::config::SkillVariant {
+                key,
+                repository_path: c.repository_path.clone(),
+                content_hash: c.content_hash.clone(),
+            });
+        }
+        root
+    } else {
+        found[primary].clone()
+    };
     Ok(CatalogPreparation::Ready(PreparedSkill {
         _temp: temp,
         directory,
         source: source.into(),
         skill_id: skill_id.into(),
         repository_path,
+        variants: variant_records,
     }))
 }
 
@@ -345,6 +434,27 @@ impl Studio {
         } else {
             validate_coordinates(&prepared.source, &prepared.skill_id)?;
         }
+        let mut keys = std::collections::HashSet::new();
+        for variant in &prepared.variants {
+            if !keys.insert(&variant.key)
+                || super::variants::repository_key(&variant.repository_path).as_deref()
+                    != Some(&variant.key)
+            {
+                return Err(Error::invalid("Skill 变体来源或标识无效"));
+            }
+            let payload = super::variants::payload(&prepared.directory, &variant.key)?;
+            scanner::validate_sync_source(&payload)?;
+            if scanner::parse_frontmatter(&payload.join("SKILL.md")).malformed
+                || scanner::dir_content_hash(&payload)? != variant.content_hash
+            {
+                return Err(Error::invalid("Skill 变体内容校验失败"));
+            }
+        }
+        if prepared.variants.is_empty()
+            && prepared.directory.join(super::variants::DIRECTORY).exists()
+        {
+            return Err(Error::invalid("变体安装包缺少来源记录，请从仓库重新安装"));
+        }
         let hub = self.store().hub_dir(config);
         let roots: Vec<_> = crate::models::agent::AGENTS
             .iter()
@@ -358,6 +468,13 @@ impl Studio {
                 r.source == prepared.source
                     && r.skill_id == prepared.skill_id
                     && r.repository_path == prepared.repository_path
+                    && r.variants
+                        .iter()
+                        .map(|v| (&v.key, &v.repository_path))
+                        .eq(prepared
+                            .variants
+                            .iter()
+                            .map(|v| (&v.key, &v.repository_path)))
             }) {
                 if let Some(view) = self
                     .scan_skills(config)?
@@ -380,6 +497,7 @@ impl Studio {
                 repository_path: prepared.repository_path.clone(),
                 installed_at: linker::now_secs(),
                 content_hash: hash.clone(),
+                variants: prepared.variants.clone(),
             },
         );
         let mut tx = Transaction::begin(self.store().dir().join("migration.json"))?;
@@ -524,5 +642,6 @@ pub fn prepare_local(path: &Path) -> Result<PreparedSkill> {
         source: format!("local:{}", source.display()),
         skill_id,
         repository_path: String::new(),
+        variants: Vec::new(),
     })
 }

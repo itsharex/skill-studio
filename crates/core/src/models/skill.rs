@@ -111,10 +111,7 @@ pub struct Skill {
     pub origin: SkillOrigin,
     /// 目录内容哈希，复制模式的 drift 检测用
     pub content_hash: String,
-    /// frontmatter 里出现的非标准字段。
-    /// Agent Skills 标准与 Codex 只要求 name + description；Claude Code 支持一批
-    /// 扩展字段（context / agent / model / effort / hooks / paths / allowed-tools…），
-    /// 而上传到 claude.ai 时只允许 6 个字段，多一个是硬报错。收集起来给用户提示。
+    /// frontmatter 的扩展字段，仅用于提示，不等于目标 Agent 不兼容。
     #[serde(default)]
     pub frontmatter_extra: Vec<String>,
     /// 所在的全局根（用于区分 `~/.codex/skills` 与共享的 `~/.agents/skills`）

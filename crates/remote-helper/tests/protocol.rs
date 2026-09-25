@@ -409,6 +409,56 @@ fn desktop_project_group_and_hub_workflow_uses_the_remote_home() {
 }
 
 #[test]
+fn uploaded_variants_keep_their_identity_and_deploy_the_dedicated_payload() {
+    let home = fixture();
+    let mut session = Session::start(home.path(), true);
+    assert_eq!(
+        session.call("hello", Value::Null)["result"]["skillVariants"],
+        1
+    );
+    let payload = home.path().join("variant-fixture");
+    std::fs::create_dir_all(&payload).unwrap();
+    let bytes =
+        b"---\nname: variant-probe\ndescription: Codex variant\n---\nCodex instructions\n".to_vec();
+    std::fs::write(payload.join("SKILL.md"), &bytes).unwrap();
+    let hash = skill_studio_core::services::scanner::dir_content_hash(&payload).unwrap();
+    session.call("upload_begin", Value::Null);
+    for path in ["SKILL.md", ".skill-studio-variants/codex/SKILL.md"] {
+        let reply = session.call("upload_file", json!({"path":path,"data":bytes}));
+        assert!(reply.get("error").is_none(), "{reply}");
+    }
+    let reply = session.call("upload_finish", json!({
+        "source":"owner/repo", "skillId":"variant-probe", "repositoryPath":".codex/skills/variant-probe",
+        "variants":[{"key":"codex","repositoryPath":".codex/skills/variant-probe","contentHash":hash}]
+    }));
+    assert!(reply.get("error").is_none(), "{reply}");
+    let id = reply["result"]["id"].clone();
+    let report = session.call(
+        "register_skills",
+        json!({"skillIds":[id],"agentIds":["codex"],"mode":"copy","force":false}),
+    );
+    assert!(report.get("error").is_none(), "{report}");
+    assert_eq!(report["result"]["failed"].as_array().unwrap().len(), 0);
+    assert_eq!(
+        std::fs::read(home.path().join(".codex/skills/variant-probe/SKILL.md")).unwrap(),
+        bytes
+    );
+    assert!(!home
+        .path()
+        .join(".codex/skills/variant-probe/.skill-studio-variants")
+        .exists());
+    let scanned = session.call("scan_skills", Value::Null);
+    let matching: Vec<_> = scanned["result"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .filter(|s| s["id"] == id)
+        .collect();
+    assert_eq!(matching.len(), 1);
+    assert_eq!(matching[0]["installation"]["variants"][0]["key"], "codex");
+}
+
+#[test]
 fn uploaded_skill_is_installed_and_paths_cannot_escape_staging() {
     let home = fixture();
     let mut session = Session::start(home.path(), true);

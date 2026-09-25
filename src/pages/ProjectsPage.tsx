@@ -617,7 +617,16 @@ function ProjectDetail({
         : [...previous[key], id],
     }));
   const toggleAgent = (id: string) => toggle("agentIds", id);
-  const toggleSkill = (id: string) => toggle("skillIds", id);
+  const variantIssue = (skill: (typeof skills)[number]) =>
+    draft.value.agentIds
+      .map((id) => skill.agents[id]?.unavailableReason)
+      .filter(Boolean)
+      .join("；");
+  const toggleSkill = (id: string) => {
+    const skill = skills.find((s) => s.id === id);
+    if (draft.value.skillIds.includes(id) || !skill || !variantIssue(skill))
+      toggle("skillIds", id);
+  };
   const toggleGroup = (id: string) => toggle("groupIds", id);
 
   return (
@@ -954,10 +963,18 @@ function ProjectDetail({
                 >
                   <Checkbox
                     checked={draft.value.skillIds.includes(s.id)}
+                    disabled={
+                      !draft.value.skillIds.includes(s.id) && !!variantIssue(s)
+                    }
                     aria-label={s.name}
                   />
                   <div className="min-w-0 flex-1">
                     <p className="truncate text-sm font-medium">{s.name}</p>
+                    {variantIssue(s) && (
+                      <p className="text-xs text-amber-600">
+                        {variantIssue(s)}
+                      </p>
+                    )}
                     {s.description && (
                       <p className="truncate text-xs text-muted-foreground">
                         {s.description}

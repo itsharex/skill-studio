@@ -8,7 +8,7 @@ use super::project::ProjectBinding;
 use super::skill::LinkMode;
 
 /// 当前配置结构版本。改结构时 +1 并在 store 里加迁移分支。
-pub const CONFIG_VERSION: u32 = 2;
+pub const CONFIG_VERSION: u32 = 3;
 
 /// 某个 skill 在某个 agent 上的注册记录。
 ///
@@ -113,12 +113,23 @@ impl Default for Settings {
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
+pub struct SkillVariant {
+    /// "generic" or a registered Agent ID; also the managed storage directory key.
+    pub key: String,
+    pub repository_path: String,
+    pub content_hash: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
 pub struct SkillInstallation {
     pub source: String,
     pub skill_id: String,
     pub repository_path: String,
     pub installed_at: i64,
     pub content_hash: String,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub variants: Vec<SkillVariant>,
 }
 
 /// Durable provenance and recovery information; independent of the current storage location.

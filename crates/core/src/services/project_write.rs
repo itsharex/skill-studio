@@ -99,7 +99,8 @@ impl Studio {
                     .iter()
                     .find(|v| v.skill.id == sid)
                     .ok_or_else(|| Error::NotFound(format!("skill {sid}")))?;
-                let skill = &view.skill;
+                let resolved = super::variants::for_agent(config, &view.skill, agent_id)?;
+                let skill = &resolved;
                 scanner::validate_sync_source(&skill.source_path)?;
                 if view.malformed_frontmatter {
                     return Err(Error::invalid("Skill 的 YAML 格式无效"));

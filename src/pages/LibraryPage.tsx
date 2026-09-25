@@ -4,6 +4,7 @@ import {
   SummaryEnd,
   summaryPillClass,
 } from "@/components/common/SummaryBar";
+import { SkillVariantDetails } from "@/components/common/SkillVariantDetails";
 import { agentSourceColor } from "@/lib/agents";
 import { useSkillPreview } from "@/components/common/SkillPreview";
 import {
@@ -22,7 +23,6 @@ import {
   Bot,
   PackageMinus,
   CircleHelp,
-  TriangleAlert,
   Link2,
 } from "lucide-react";
 import { AgentIcon } from "@/components/common/AgentIcon";
@@ -399,24 +399,24 @@ export function LibraryPage({ onAdd }: { onAdd?: () => void } = {}) {
                         {message}
                       </span>
                     ))}
+                    <SkillVariantDetails skill={skill} />
                     {skill.frontmatterExtra.length > 0 && (
                       <Tooltip>
                         <TooltipTrigger asChild>
-                          <span className="inline-flex cursor-default items-center gap-0.5 rounded-md bg-amber-100 px-1.5 py-0.5 text-[10px] font-semibold text-amber-700 dark:bg-amber-500/20 dark:text-amber-300">
-                            <TriangleAlert className="h-3 w-3" />
-                            跨端
+                          <span className="inline-flex cursor-default items-center rounded-md bg-muted px-1.5 py-0.5 text-[10px] font-medium text-muted-foreground">
+                            扩展字段
                           </span>
                         </TooltipTrigger>
                         <TooltipContent>
                           <p className="font-medium">
-                            含非可移植 frontmatter 字段
+                            包含扩展 frontmatter 字段
                           </p>
                           <p className="pt-0.5 font-mono text-[10px]">
                             {skill.frontmatterExtra.join(", ")}
                           </p>
                           <p className="pt-1 text-muted-foreground">
-                            这些字段是 Claude Code 专有的：注册到 Codex
-                            后会被忽略， 上传到 claude.ai 会直接报错。
+                            不同 Agent 对这些字段的支持可能不同。此提示不表示
+                            Skill 正文不可用，也不代表已安装完整插件。
                           </p>
                         </TooltipContent>
                       </Tooltip>

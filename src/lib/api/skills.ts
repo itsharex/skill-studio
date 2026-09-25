@@ -23,11 +23,13 @@ export const skillsApi = {
     source: string,
     skillId: string,
     repositoryPath?: string,
+    repositoryPaths?: string[],
   ): Promise<CatalogInstallResult> {
     return await invoke("install_catalog_skill", {
       source,
       skillId,
       repositoryPath: repositoryPath ?? null,
+      repositoryPaths: repositoryPaths ?? null,
     });
   },
   async scan(): Promise<SkillView[]> {

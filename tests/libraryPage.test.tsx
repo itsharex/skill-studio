@@ -271,10 +271,49 @@ describe("Skill Hub", () => {
     expect(screen.queryByText("没有匹配的可用 skill")).toBeNull();
   });
 
-  it("含 Claude 专有 frontmatter 字段时给出跨端提示", async () => {
+  it("以扩展字段提示代替笼统的跨端警告", async () => {
     setup([makeSkill({ frontmatterExtra: ["context", "agent"] })]);
     renderWithProviders(<LibraryPage />);
-    expect(await screen.findByText("跨端")).toBeInTheDocument();
+    expect(await screen.findByText("扩展字段")).toBeInTheDocument();
+    expect(screen.queryByText("跨端")).toBeNull();
+  });
+
+  it("keeps one Hub card and explains dedicated variants separately from plugin installation", async () => {
+    setup([
+      makeSkill({
+        name: "demo",
+        installation: {
+          source: "owner/repo",
+          skillId: "demo",
+          repositoryPath: ".claude/skills/demo",
+          contentHash: "bundle",
+          installedAt: 1,
+          variants: [
+            {
+              key: "claude-code",
+              repositoryPath: ".claude/skills/demo",
+              contentHash: "cc",
+            },
+            {
+              key: "codex",
+              repositoryPath: ".codex/skills/demo",
+              contentHash: "cx",
+            },
+          ],
+        },
+      }),
+    ]);
+    renderWithProviders(<LibraryPage />);
+    const user = userEvent.setup();
+    await user.click(
+      await screen.findByRole("button", { name: "demo 适配版本" }),
+    );
+    expect(screen.getByRole("dialog")).toHaveTextContent("Claude Code 专用版");
+    expect(screen.getByRole("dialog")).toHaveTextContent("Codex 专用版");
+    expect(screen.getByRole("dialog")).toHaveTextContent(
+      "不包含插件、hooks 或扩展",
+    );
+    expect(screen.getByText("已安装 1 个")).toBeInTheDocument();
   });
 
   it("搜索按名称与描述过滤", async () => {

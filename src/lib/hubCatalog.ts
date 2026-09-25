@@ -16,7 +16,10 @@ export function hubCatalog(skills: SkillView[]): HubCard[] {
   )) {
     const unavailable = !!skill.diagnostics?.length;
     const key =
-      !unavailable && !skill.malformedFrontmatter && skill.contentHash
+      !skill.installation?.variants?.length &&
+      !unavailable &&
+      !skill.malformedFrontmatter &&
+      skill.contentHash
         ? JSON.stringify([skill.name, skill.contentHash])
         : `source:${skill.id}`;
     const card = cards.get(key);

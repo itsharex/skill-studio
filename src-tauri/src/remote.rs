@@ -558,13 +558,18 @@ pub fn request(
         "install_catalog_skill" => {
             let source = params["source"].as_str().ok_or("缺少 source")?;
             let skill = params["skillId"].as_str().ok_or("缺少 skillId")?;
-            use skill_studio_core::services::marketplace::{prepare_catalog, CatalogPreparation};
+            use skill_studio_core::services::marketplace::{
+                prepare_catalog_variants, CatalogPreparation,
+            };
             let repository_path: Option<String> =
                 serde_json::from_value(params["repositoryPath"].clone())
                     .map_err(|e| e.to_string())?;
-            match prepare_catalog(source, skill, repository_path.as_deref())
-                .map_err(String::from)?
-            {
+            let repository_paths: Option<Vec<String>> =
+                serde_json::from_value(params["repositoryPaths"].clone())
+                    .map_err(|e| e.to_string())?;
+            let selected =
+                repository_paths.unwrap_or_else(|| repository_path.into_iter().collect());
+            match prepare_catalog_variants(source, skill, &selected).map_err(String::from)? {
                 CatalogPreparation::Ready(prepared) => {
                     let skill = upload_skill(&mut session, prepared)?;
                     Ok(serde_json::json!({ "status": "installed", "skill": skill }))
@@ -587,6 +592,11 @@ fn upload_skill(
     session: &mut Session,
     prepared: skill_studio_core::services::marketplace::PreparedSkill,
 ) -> Result<Value, String> {
+    if !prepared.variants.is_empty()
+        && session.call("hello", Value::Null)?["skillVariants"].as_u64() != Some(1)
+    {
+        return Err("远程 helper 不支持 Skill 变体，请重新连接以更新 helper".into());
+    }
     session.call("upload_begin", Value::Null)?;
     fn walk(session: &mut Session, root: &Path, dir: &Path) -> Result<(), String> {
         for entry in std::fs::read_dir(dir).map_err(|e| e.to_string())? {
@@ -629,7 +639,7 @@ fn upload_skill(
         Ok(())
     }
     walk(session, &prepared.directory, &prepared.directory)?;
-    session.call("upload_finish",json!({"source":prepared.source,"skillId":prepared.skill_id,"repositoryPath":prepared.repository_path}))
+    session.call("upload_finish",json!({"source":prepared.source,"skillId":prepared.skill_id,"repositoryPath":prepared.repository_path,"variants":prepared.variants}))
 }
 
 fn prepare_askpass_stream(stream: &TcpStream) -> std::io::Result<()> {
