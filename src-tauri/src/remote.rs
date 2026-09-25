@@ -558,9 +558,21 @@ pub fn request(
         "install_catalog_skill" => {
             let source = params["source"].as_str().ok_or("缺少 source")?;
             let skill = params["skillId"].as_str().ok_or("缺少 skillId")?;
-            let prepared = skill_studio_core::services::marketplace::prepare(source, skill)
-                .map_err(String::from)?;
-            upload_skill(&mut session, prepared)
+            use skill_studio_core::services::marketplace::{prepare_catalog, CatalogPreparation};
+            let repository_path: Option<String> =
+                serde_json::from_value(params["repositoryPath"].clone())
+                    .map_err(|e| e.to_string())?;
+            match prepare_catalog(source, skill, repository_path.as_deref())
+                .map_err(String::from)?
+            {
+                CatalogPreparation::Ready(prepared) => {
+                    let skill = upload_skill(&mut session, prepared)?;
+                    Ok(serde_json::json!({ "status": "installed", "skill": skill }))
+                }
+                CatalogPreparation::SelectionRequired(candidates) => Ok(
+                    serde_json::json!({ "status": "selectionRequired", "candidates": candidates }),
+                ),
+            }
         }
         "upload_local_skill" => {
             let path = params["path"].as_str().ok_or("缺少 path")?;

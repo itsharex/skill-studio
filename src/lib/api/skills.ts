@@ -1,6 +1,7 @@
 import { invoke } from "@/lib/api/transport";
 import type {
   CatalogSkill,
+  CatalogInstallResult,
   LocalSkill,
   LinkMode,
   LinkReport,
@@ -18,8 +19,16 @@ export const skillsApi = {
   async searchCatalog(query: string): Promise<CatalogSkill[]> {
     return await invoke("search_catalog_skills", { query });
   },
-  async installCatalog(source: string, skillId: string): Promise<Skill> {
-    return await invoke("install_catalog_skill", { source, skillId });
+  async installCatalog(
+    source: string,
+    skillId: string,
+    repositoryPath?: string,
+  ): Promise<CatalogInstallResult> {
+    return await invoke("install_catalog_skill", {
+      source,
+      skillId,
+      repositoryPath: repositoryPath ?? null,
+    });
   },
   async scan(): Promise<SkillView[]> {
     return await invoke("scan_skills");

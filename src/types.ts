@@ -70,6 +70,16 @@ export interface CatalogSkill {
   installs: number;
 }
 
+export interface CatalogCandidate {
+  repositoryPath: string;
+  description: string | null;
+  contentHash: string;
+}
+
+export type CatalogInstallResult =
+  | { status: "installed"; skill: Skill }
+  | { status: "selectionRequired"; candidates: CatalogCandidate[] };
+
 export interface SkillView extends Skill {
   installation?: {
     source: string;

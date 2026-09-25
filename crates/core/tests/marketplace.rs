@@ -110,6 +110,128 @@ fn malformed_ambiguous_and_unsafe_archives_are_rejected() {
 }
 
 #[test]
+fn catalog_excludes_openclaw_but_preserves_generic_and_supported_agent_paths() {
+    for path in [
+        "skills/demo",
+        ".claude/skills/demo",
+        ".codex/skills/demo",
+        ".agents/skills/demo",
+    ] {
+        let file = format!("root/{path}/SKILL.md");
+        let bytes = archive(&[
+            (&file, "---\nname: demo\n---\ngeneric"),
+            (
+                "root/.openclaw/skills/demo/SKILL.md",
+                "---\nname: demo\n---\nopenclaw",
+            ),
+            (
+                "root/nested/.openclaw/skills/demo/SKILL.md",
+                "---\nname: demo\n---\nopenclaw",
+            ),
+        ]);
+        assert_eq!(
+            prepare_archive("owner/repo", "demo", &bytes)
+                .unwrap()
+                .repository_path,
+            path
+        );
+        assert!(marketplace::prepare_catalog_archive(
+            "owner/repo",
+            "demo",
+            &bytes,
+            Some(".openclaw/skills/demo")
+        )
+        .is_err());
+    }
+    let only_openclaw = archive(&[(
+        "root/.openclaw/skills/demo/SKILL.md",
+        "---\nname: demo\n---",
+    )]);
+    assert!(prepare_archive("owner/repo", "demo", &only_openclaw).is_err());
+}
+
+#[test]
+#[serial]
+fn catalog_candidates_use_complete_content_and_install_only_the_selected_path() {
+    use marketplace::{prepare_catalog_archive, CatalogPreparation};
+    let document = "---\nname: demo\ndescription: shared description\n---\nbody";
+    let bytes = archive(&[
+        ("root/.codex/skills/demo/SKILL.md", document),
+        ("root/.codex/skills/demo/scripts/tool.txt", "codex resource"),
+        ("root/.claude/skills/demo/SKILL.md", document),
+        (
+            "root/.claude/skills/demo/scripts/tool.txt",
+            "claude resource",
+        ),
+        ("root/.openclaw/skills/demo/SKILL.md", document),
+        ("root/skills/other/SKILL.md", "---\nname: other\n---"),
+    ]);
+    let CatalogPreparation::SelectionRequired(candidates) =
+        prepare_catalog_archive("owner/repo", "demo", &bytes, None).unwrap()
+    else {
+        panic!("expected selection")
+    };
+    assert_eq!(candidates.len(), 2);
+    assert_eq!(candidates[0].repository_path, ".claude/skills/demo");
+    assert_eq!(candidates[1].repository_path, ".codex/skills/demo");
+    assert_eq!(
+        candidates[0].description.as_deref(),
+        Some("shared description")
+    );
+    assert_ne!(candidates[0].content_hash, candidates[1].content_hash);
+    for invalid in [
+        "../demo",
+        "/.codex/skills/demo",
+        ".codex/skills/demo/../demo",
+        "skills/other",
+        "missing",
+        ".openclaw/skills/demo",
+    ] {
+        assert!(prepare_catalog_archive("owner/repo", "demo", &bytes, Some(invalid)).is_err());
+    }
+    let CatalogPreparation::Ready(prepared) =
+        prepare_catalog_archive("owner/repo", "demo", &bytes, Some(".codex/skills/demo")).unwrap()
+    else {
+        panic!("expected ready")
+    };
+    let env = Env::new();
+    let studio = env.studio();
+    let mut config = studio.load_config().unwrap();
+    let skill = studio
+        .install_catalog_skill(&mut config, &prepared)
+        .unwrap();
+    assert_eq!(
+        std::fs::read_to_string(skill.source_path.join("scripts/tool.txt")).unwrap(),
+        "codex resource"
+    );
+    assert_eq!(
+        config.skill_installations[&skill.id].repository_path,
+        ".codex/skills/demo"
+    );
+    let CatalogPreparation::Ready(other) =
+        prepare_catalog_archive("owner/repo", "demo", &bytes, Some(".claude/skills/demo")).unwrap()
+    else {
+        panic!("expected ready")
+    };
+    assert!(studio.install_catalog_skill(&mut config, &other).is_err());
+}
+
+#[test]
+fn identical_candidates_report_matching_hashes() {
+    let document = "---\nname: demo\n---\nbody";
+    let bytes = archive(&[
+        ("root/a/demo/SKILL.md", document),
+        ("root/b/demo/SKILL.md", document),
+    ]);
+    let marketplace::CatalogPreparation::SelectionRequired(candidates) =
+        marketplace::prepare_catalog_archive("owner/repo", "demo", &bytes, None).unwrap()
+    else {
+        panic!("expected selection")
+    };
+    assert_eq!(candidates[0].content_hash, candidates[1].content_hash);
+}
+
+#[test]
 #[serial]
 #[ignore = "requires live skills.sh and GitHub network"]
 fn live_search_download_and_install_in_temporary_home() {

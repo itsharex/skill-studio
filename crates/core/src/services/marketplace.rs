@@ -121,15 +121,59 @@ pub struct PreparedSkill {
     pub repository_path: String,
 }
 
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct CatalogCandidate {
+    pub repository_path: String,
+    pub description: Option<String>,
+    pub content_hash: String,
+}
+
+pub enum CatalogPreparation {
+    Ready(PreparedSkill),
+    SelectionRequired(Vec<CatalogCandidate>),
+}
+
 pub fn prepare(source: &str, skill_id: &str) -> Result<PreparedSkill> {
+    require_ready(prepare_catalog(source, skill_id, None)?)
+}
+
+fn require_ready(result: CatalogPreparation) -> Result<PreparedSkill> {
+    match result {
+        CatalogPreparation::Ready(skill) => Ok(skill),
+        CatalogPreparation::SelectionRequired(_) => {
+            Err(Error::invalid("仓库内有多个同名 skill，请选择安装目录"))
+        }
+    }
+}
+
+pub fn prepare_catalog(
+    source: &str,
+    skill_id: &str,
+    repository_path: Option<&str>,
+) -> Result<CatalogPreparation> {
     validate_coordinates(source, skill_id)?;
     let url = reqwest::Url::parse(&format!("https://codeload.github.com/{source}/zip/HEAD"))
         .map_err(|e| Error::Other(e.to_string()))?;
-    prepare_archive(source, skill_id, &download(url, MAX_DOWNLOAD)?)
+    prepare_catalog_archive(
+        source,
+        skill_id,
+        &download(url, MAX_DOWNLOAD)?,
+        repository_path,
+    )
 }
 
 /// Public for deterministic integration testing with repository archives.
 pub fn prepare_archive(source: &str, skill_id: &str, bytes: &[u8]) -> Result<PreparedSkill> {
+    require_ready(prepare_catalog_archive(source, skill_id, bytes, None)?)
+}
+
+pub fn prepare_catalog_archive(
+    source: &str,
+    skill_id: &str,
+    bytes: &[u8],
+    repository_path: Option<&str>,
+) -> Result<CatalogPreparation> {
     validate_coordinates(source, skill_id)?;
     if bytes.len() as u64 > MAX_DOWNLOAD {
         return Err(Error::invalid("下载内容过大"));
@@ -211,6 +255,8 @@ pub fn prepare_archive(source: &str, skill_id: &str, bytes: &[u8]) -> Result<Pre
                 .is_dir()
                 && entry.file_name() != ".git"
                 && entry.file_name() != "node_modules"
+                // OpenClaw packages are not supported installation sources.
+                && entry.file_name() != ".openclaw"
             {
                 find(&entry.path(), id, depth + 1, matches)?;
             }
@@ -219,14 +265,46 @@ pub fn prepare_archive(source: &str, skill_id: &str, bytes: &[u8]) -> Result<Pre
     }
     let mut found = Vec::new();
     find(temp.path(), skill_id, 0, &mut found)?;
-    if found.len() != 1 {
-        return Err(Error::invalid(if found.is_empty() {
-            "仓库中未找到对应 skill，目录可能已变更"
-        } else {
-            "仓库内有多个同名 skill，无法确定安装目标"
-        }));
+    if found.is_empty() {
+        return Err(Error::invalid(
+            "仓库中未找到支持的对应 skill，目录可能已变更",
+        ));
     }
-    let directory = found.remove(0);
+    let relative = |directory: &Path| {
+        directory
+            .strip_prefix(temp.path())
+            .unwrap()
+            .components()
+            .skip(1)
+            .map(|c| c.as_os_str().to_string_lossy())
+            .collect::<Vec<_>>()
+            .join("/")
+    };
+    found.sort_by_key(|directory| relative(directory));
+    let directory = if let Some(selected) = repository_path {
+        // Match only discovered candidates, never join an untrusted client path.
+        let index = found
+            .iter()
+            .position(|directory| relative(directory) == selected)
+            .ok_or_else(|| Error::invalid("所选 skill 目录已失效，请重新选择安装来源"))?;
+        found.remove(index)
+    } else if found.len() == 1 {
+        found.remove(0)
+    } else {
+        let candidates = found
+            .iter()
+            .map(|directory| {
+                scanner::validate_sync_source(directory)?;
+                let fm = scanner::parse_frontmatter(&directory.join("SKILL.md"));
+                Ok(CatalogCandidate {
+                    repository_path: relative(directory),
+                    description: fm.description,
+                    content_hash: scanner::dir_content_hash(directory)?,
+                })
+            })
+            .collect::<Result<Vec<_>>>()?;
+        return Ok(CatalogPreparation::SelectionRequired(candidates));
+    };
     scanner::validate_sync_source(&directory)?;
     if scanner::parse_frontmatter(&directory.join("SKILL.md")).malformed {
         return Err(Error::invalid("Skill 的 YAML 格式无效"));
@@ -240,13 +318,13 @@ pub fn prepare_archive(source: &str, skill_id: &str, bytes: &[u8]) -> Result<Pre
         .map(|c| c.as_os_str().to_string_lossy())
         .collect::<Vec<_>>()
         .join("/");
-    Ok(PreparedSkill {
+    Ok(CatalogPreparation::Ready(PreparedSkill {
         _temp: temp,
         directory,
         source: source.into(),
         skill_id: skill_id.into(),
         repository_path,
-    })
+    }))
 }
 
 impl Studio {
@@ -276,11 +354,11 @@ impl Studio {
         let target = hub.join(&prepared.skill_id);
         let id = skill_id_for(&target);
         if target.symlink_metadata().is_ok() {
-            if config
-                .skill_installations
-                .get(&id)
-                .is_some_and(|r| r.source == prepared.source && r.skill_id == prepared.skill_id)
-            {
+            if config.skill_installations.get(&id).is_some_and(|r| {
+                r.source == prepared.source
+                    && r.skill_id == prepared.skill_id
+                    && r.repository_path == prepared.repository_path
+            }) {
                 if let Some(view) = self
                     .scan_skills(config)?
                     .into_iter()

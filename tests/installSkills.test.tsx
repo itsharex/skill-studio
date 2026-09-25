@@ -38,7 +38,7 @@ it("requires two characters, installs the selected result and refreshes Studio o
         },
       }),
     ];
-    return skills[0];
+    return { status: "installed", skill: skills[0] };
   });
   const view = renderWithProviders(<InstallSkillsPage />);
   expect(screen.getByRole("button", { name: "搜索技能" })).toBeDisabled();
@@ -51,7 +51,7 @@ it("requires two characters, installs the selected result and refreshes Studio o
   expect(await screen.findByRole("button", { name: "已安装" })).toBeDisabled();
   expect(calls).toContainEqual({
     command: "install_catalog_skill",
-    args: { source: "owner/repo", skillId: "demo" },
+    args: { source: "owner/repo", skillId: "demo", repositoryPath: null },
   });
   view.unmount();
   renderWithProviders(<LibraryPage />);
@@ -90,6 +90,74 @@ it("failed installs remain retryable and do not show installed", async () => {
     expect(screen.getByRole("button", { name: "安装" })).toBeEnabled(),
   );
   expect(screen.queryByRole("button", { name: "已安装" })).toBeNull();
+});
+
+const candidates = [
+  {
+    repositoryPath: ".claude/skills/demo",
+    description: "Claude Code 版本",
+    contentHash: "cc",
+  },
+  {
+    repositoryPath: ".codex/skills/demo",
+    description: "Codex 版本",
+    contentHash: "codex",
+  },
+];
+
+it("asks for an explicit candidate, sends its path and retries failures in the dialog", async () => {
+  handlers.set("search_catalog_skills", () => [hit]);
+  handlers.set("install_catalog_skill", () => ({
+    status: "selectionRequired",
+    candidates,
+  }));
+  renderWithProviders(<InstallSkillsPage />);
+  search();
+  fireEvent.click(await screen.findByRole("button", { name: "安装" }));
+  expect(await screen.findByRole("dialog")).toHaveTextContent("文件内容不同");
+  expect(screen.getByRole("button", { name: "安装所选版本" })).toBeDisabled();
+  expect(screen.queryByRole("alert")).toBeNull();
+  fireEvent.click(screen.getByRole("radio", { name: /\.codex\/skills\/demo/ }));
+  handlers.set("install_catalog_skill", () => {
+    throw new Error("下载失败");
+  });
+  fireEvent.click(screen.getByRole("button", { name: "安装所选版本" }));
+  expect(await screen.findByRole("alert")).toHaveTextContent("下载失败");
+  expect(
+    screen.getByRole("radio", { name: /\.codex\/skills\/demo/ }),
+  ).toBeChecked();
+  expect(calls).toContainEqual({
+    command: "install_catalog_skill",
+    args: {
+      source: hit.source,
+      skillId: hit.skillId,
+      repositoryPath: ".codex/skills/demo",
+    },
+  });
+  handlers.set("install_catalog_skill", () => ({
+    status: "installed",
+    skill: makeSkill(),
+  }));
+  fireEvent.click(screen.getByRole("button", { name: "安装所选版本" }));
+  await waitFor(() => expect(screen.queryByRole("dialog")).toBeNull());
+});
+
+it("allows cancelling candidate selection without installing anything", async () => {
+  handlers.set("search_catalog_skills", () => [hit]);
+  handlers.set("install_catalog_skill", () => ({
+    status: "selectionRequired",
+    candidates: candidates.map((c) => ({ ...c, contentHash: "same" })),
+  }));
+  renderWithProviders(<InstallSkillsPage />);
+  search();
+  fireEvent.click(await screen.findByRole("button", { name: "安装" }));
+  expect(await screen.findByRole("dialog")).toHaveTextContent("文件内容相同");
+  fireEvent.click(screen.getByRole("button", { name: "取消" }));
+  expect(screen.queryByRole("dialog")).toBeNull();
+  expect(
+    calls.filter((c) => c.command === "install_catalog_skill"),
+  ).toHaveLength(1);
+  expect(screen.getByRole("button", { name: "安装" })).toBeEnabled();
 });
 
 it("local tab scans a collection, imports a selected skill and refreshes its state", async () => {

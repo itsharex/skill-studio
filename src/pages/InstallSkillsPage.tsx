@@ -17,7 +17,15 @@ import { Input } from "@/components/ui/input";
 import { Badge } from "@/components/ui/badge";
 import { useSkills } from "@/hooks/useData";
 import { skillsApi } from "@/lib/api";
-import type { CatalogSkill } from "@/types";
+import type { CatalogSkill, CatalogCandidate } from "@/types";
+import {
+  Dialog,
+  DialogContent,
+  DialogHeader,
+  DialogTitle,
+  DialogDescription,
+  DialogFooter,
+} from "@/components/ui/dialog";
 
 export function InstallSkillsPage({ onBack }: { onBack?: () => void }) {
   const target = useTarget();
@@ -25,6 +33,11 @@ export function InstallSkillsPage({ onBack }: { onBack?: () => void }) {
   const [query, setQuery] = useState("");
   const [submitted, setSubmitted] = useState("");
   const [installError, setInstallError] = useState<string | null>(null);
+  const [selection, setSelection] = useState<{
+    skill: CatalogSkill;
+    candidates: CatalogCandidate[];
+  } | null>(null);
+  const [selectedPath, setSelectedPath] = useState<string | null>(null);
   const { data: installed = [] } = useSkills();
   const client = useQueryClient();
   const search = useQuery({
@@ -35,10 +48,20 @@ export function InstallSkillsPage({ onBack }: { onBack?: () => void }) {
     staleTime: 5 * 60 * 1000,
   });
   const install = useMutation({
-    mutationFn: (skill: CatalogSkill) =>
-      skillsApi.installCatalog(skill.source, skill.skillId),
+    mutationFn: (skill: CatalogSkill & { repositoryPath?: string }) =>
+      skillsApi.installCatalog(
+        skill.source,
+        skill.skillId,
+        skill.repositoryPath,
+      ),
     onMutate: () => setInstallError(null),
-    onSuccess: async () => {
+    onSuccess: async (result, skill) => {
+      if (result.status === "selectionRequired") {
+        setSelection({ skill, candidates: result.candidates });
+        setSelectedPath(null);
+        return;
+      }
+      setSelection(null);
       await client.invalidateQueries({ queryKey: ["skills"] });
       toast.success("已安装到 Skill Hub");
     },
@@ -55,6 +78,98 @@ export function InstallSkillsPage({ onBack }: { onBack?: () => void }) {
   };
   return (
     <div className="flex min-h-0 flex-1 flex-col">
+      <Dialog
+        open={selection !== null}
+        onOpenChange={(open) => {
+          if (!open && !install.isPending) {
+            setSelection(null);
+            setInstallError(null);
+          }
+        }}
+      >
+        <DialogContent hideClose={install.isPending}>
+          <DialogHeader>
+            <DialogTitle>选择 skill 安装来源</DialogTitle>
+            <DialogDescription>
+              {selection?.skill.name}{" "}
+              在仓库中有多个同名版本，请确认要安装的目录。仅安装所选版本到 Skill
+              Hub。
+            </DialogDescription>
+          </DialogHeader>
+          <div className="space-y-3 overflow-y-auto px-6 py-4">
+            <p className="break-all text-xs text-muted-foreground">
+              {selection?.skill.source}
+            </p>
+            {selection && (
+              <p className="text-sm text-muted-foreground">
+                {new Set(
+                  selection.candidates.map(
+                    (candidate) => candidate.contentHash,
+                  ),
+                ).size === 1
+                  ? "这些目录的文件内容相同，但来源路径不同。"
+                  : "这些目录的文件内容不同，可能是针对不同 Agent 的版本。"}
+              </p>
+            )}
+            <fieldset disabled={install.isPending} className="space-y-2">
+              <legend className="sr-only">安装目录</legend>
+              {selection?.candidates.map((candidate) => (
+                <label
+                  key={candidate.repositoryPath}
+                  className="flex cursor-pointer items-start gap-3 rounded-lg border p-3"
+                >
+                  <input
+                    type="radio"
+                    name="catalog-path"
+                    className="mt-1"
+                    checked={selectedPath === candidate.repositoryPath}
+                    onChange={() => setSelectedPath(candidate.repositoryPath)}
+                  />
+                  <span className="min-w-0">
+                    <span className="block break-all font-mono text-sm">
+                      {candidate.repositoryPath || "仓库根目录"}
+                    </span>
+                    {candidate.description && (
+                      <span className="mt-1 block whitespace-pre-wrap break-words text-xs text-muted-foreground">
+                        {candidate.description}
+                      </span>
+                    )}
+                  </span>
+                </label>
+              ))}
+            </fieldset>
+            {installError && (
+              <p role="alert" className="text-sm text-destructive">
+                安装失败：{installError}
+              </p>
+            )}
+          </div>
+          <DialogFooter>
+            <Button
+              variant="outline"
+              disabled={install.isPending}
+              onClick={() => {
+                setSelection(null);
+                setInstallError(null);
+              }}
+            >
+              取消
+            </Button>
+            <Button
+              disabled={selectedPath === null || install.isPending}
+              onClick={() => {
+                if (selection && selectedPath !== null)
+                  install.mutate({
+                    ...selection.skill,
+                    repositoryPath: selectedPath,
+                  });
+              }}
+            >
+              {install.isPending ? "安装中…" : "安装所选版本"}
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
       {target.id !== "local" && (
         <p className="pt-3 text-sm text-muted-foreground">
           安装到 {target.name} 的 Skill Hub
@@ -133,7 +248,7 @@ export function InstallSkillsPage({ onBack }: { onBack?: () => void }) {
         <LocalSkillsPanel />
       ) : (
         <>
-          {installError && (
+          {installError && !selection && (
             <div
               role="alert"
               className="mb-4 rounded-xl border border-destructive/30 bg-destructive/5 px-4 py-3 text-sm text-destructive"
@@ -223,7 +338,9 @@ export function InstallSkillsPage({ onBack }: { onBack?: () => void }) {
                           </Button>
                           <Button
                             className="flex-1 bg-emerald-500 text-white hover:bg-emerald-600"
-                            disabled={done || install.isPending}
+                            disabled={
+                              done || install.isPending || selection !== null
+                            }
                             onClick={() => install.mutate(skill)}
                           >
                             {pending ? (
