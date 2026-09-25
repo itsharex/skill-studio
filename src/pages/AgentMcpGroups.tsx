@@ -256,7 +256,7 @@ function LocalGroups({ agent }: { agent: string }) {
               <p className="p-8 text-sm text-muted-foreground">正在扫描 MCP…</p>
             ) : (
               !groups.length && (
-                <p className="rounded-xl border border-dashed p-8 text-center text-sm text-muted-foreground">
+                <p className="p-8 text-center text-sm text-muted-foreground">
                   还没有分组。新建一个组合，从 MCP Hub 选择需要的 MCP。
                 </p>
               )

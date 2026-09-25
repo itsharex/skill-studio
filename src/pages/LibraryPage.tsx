@@ -279,12 +279,12 @@ export function LibraryPage({ onAdd }: { onAdd?: () => void } = {}) {
     return (
       <div className="space-y-3 py-6">
         {tools}
-        {[0, 1, 2].map((i) => (
-          <div
-            key={i}
-            className="h-16 rounded-xl border border-dashed border-muted-foreground/40 bg-muted/40"
-          />
-        ))}
+        <p
+          role="status"
+          className="py-8 text-center text-sm text-muted-foreground"
+        >
+          正在加载 skill…
+        </p>
       </div>
     );
   }

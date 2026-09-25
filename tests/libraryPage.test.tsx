@@ -26,6 +26,13 @@ function setup(skills = [makeSkill()]) {
 }
 
 describe("Skill Hub", () => {
+  it("uses a single loading message instead of dashed placeholder cards", () => {
+    handlers.set("scan_skills", () => new Promise(() => {}));
+    const { container } = renderWithProviders(<LibraryPage />);
+    expect(screen.getByRole("status")).toHaveTextContent("正在加载 skill");
+    expect(container.querySelector(".border-dashed")).toBeNull();
+  });
+
   it("按卡片汇总 tokens，多来源去重、不同内容分别计数且筛选不改变总量", async () => {
     setup([
       makeSkill({

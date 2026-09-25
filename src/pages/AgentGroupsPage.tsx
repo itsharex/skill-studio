@@ -324,7 +324,7 @@ export function AgentPage({ agentId }: { agentId: string }) {
           className="min-h-0 flex-1 overflow-y-auto pb-6"
         >
           {own.length === 0 && (
-            <div className="rounded-xl border border-dashed p-8 text-center text-sm text-muted-foreground">
+            <div className="p-8 text-center text-sm text-muted-foreground">
               还没有分组。新建一个组合，从 Skill Hub 选择需要的 skill。
             </div>
           )}
